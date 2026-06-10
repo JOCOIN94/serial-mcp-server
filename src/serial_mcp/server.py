@@ -348,20 +348,31 @@ def _viewer_buffer_info() -> dict:
 
 
 def _viewer_status_info() -> dict:
-    """웹 뷰어 /api/status 응답(헤더 표시) — get_serial_status의 경량판."""
-    if _reader is None:
-        return {
-            "connected": False,
-            "port": _config.get("port") or "",
-            "baud": _config.get("baud"),
-            "last_error": "리더 미시작(SERIAL_PORT 미설정)",
-        }
-    return {
-        "connected": _reader.connected,
-        "port": _reader.port,
-        "baud": _reader.baud,
-        "last_error": _reader.last_error,
+    """웹 뷰어 /api/status 응답(헤더 표시) — get_serial_status의 경량판.
+
+    버퍼 적재 현황을 함께 실어, 뷰어가 버퍼 전체를 받지 않고도
+    탭 카운터("버퍼 N/2000")를 5초 폴링으로 갱신할 수 있게 한다.
+    """
+    buf = _buffer.info() if _buffer is not None else {"entries": 0, "capacity": 0}
+    base = {
+        "buffer_entries": buf["entries"],
+        "buffer_capacity": buf["capacity"],
     }
+    if _reader is None:
+        base.update(
+            connected=False,
+            port=_config.get("port") or "",
+            baud=_config.get("baud"),
+            last_error="리더 미시작(SERIAL_PORT 미설정)",
+        )
+    else:
+        base.update(
+            connected=_reader.connected,
+            port=_reader.port,
+            baud=_reader.baud,
+            last_error=_reader.last_error,
+        )
+    return base
 
 
 def _parse_web(env: Mapping[str, str]) -> Optional[int]:

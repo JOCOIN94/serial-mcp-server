@@ -150,23 +150,48 @@ _HTML = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <title>serial-mcp 로그 뷰어</title>
 <style>
+  :root { --fs: 13px; }
   body { margin:0; background:#111418; color:#c9d1d9;
-         font:13px/1.45 Consolas,'D2Coding','Courier New',monospace; }
+         font:var(--fs)/1.5 Consolas,'D2Coding','Courier New',monospace; }
   header { position:sticky; top:0; z-index:1; display:flex; align-items:center;
-           gap:10px; padding:8px 12px; background:#1a1f26;
-           border-bottom:1px solid #2d333b; }
+           flex-wrap:wrap; gap:6px 10px; padding:8px 12px; background:#1a1f26;
+           border-bottom:1px solid #2d333b; font-size:13px; }
   header .dot { width:9px; height:9px; border-radius:50%; background:#f85149; }
   header .dot.on { background:#3fb950; }
   header button { background:#21262d; color:#c9d1d9; border:1px solid #2d333b;
                   border-radius:4px; padding:3px 10px; cursor:pointer; font:inherit; }
   header button.active { background:#2d4f7c; border-color:#3b6ea5; }
   header label { display:flex; align-items:center; gap:4px; cursor:pointer;
-                 color:#8b949e; }
+                 color:#8b949e; white-space:nowrap; flex:0 0 auto; }
+  #filter { background:#0d1117; border:1px solid #2d333b; color:#c9d1d9;
+            border-radius:4px; padding:3px 8px; font:inherit; width:14ch;
+            flex:0 1 auto; min-width:8ch; }
+  #filter:focus { outline:none; border-color:#3b6ea5; }
   #port { color:#8b949e; }
+  #fcount { color:#8b949e; }
+  #newpill { position:fixed; right:16px; bottom:14px; z-index:2; display:none;
+             background:#2d4f7c; border:1px solid #3b6ea5; color:#e6edf3;
+             border-radius:14px; padding:4px 12px; cursor:pointer; font-size:12px; }
   main { padding:6px 12px 24px; }
-  .ln { white-space:pre-wrap; word-break:break-all; }
-  .ln.err  { background:rgba(248,81,73,.13); color:#ffa198; }
-  .ln.warn { background:rgba(210,153,34,.12); color:#e3b341; }
+  /* 타임스탬프는 고정폭 거터 칼럼 — 래핑된 본문이 침범하지 못한다 */
+  .ln { display:grid; grid-template-columns:8ch 1fr; column-gap:10px;
+        padding:1px 0; border-radius:3px; }
+  .ln:not(.err):not(.warn):not(.boot):hover { background:rgba(255,255,255,.045); }
+  .ln .ts { color:#586069; user-select:none; }
+  .ln .ts.rep { opacity:.3; }   /* 같은 초 반복 — 초가 바뀌는 줄만 또렷하게 */
+  .ln .txt { white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere;
+             min-width:0; }
+  .ln.err  { background:rgba(248,81,73,.13); box-shadow:inset 3px 0 0 #f85149; }
+  .ln.err .txt { color:#ffa198; }
+  .ln.warn { background:rgba(210,153,34,.12); box-shadow:inset 3px 0 0 #d29922; }
+  .ln.warn .txt { color:#e3b341; }
+  .ln.boot { background:rgba(88,166,255,.10); box-shadow:inset 3px 0 0 #58a6ff; }
+  .ln.boot .txt { color:#79c0ff; }
+  .ln.blank { padding:0; line-height:.45em; }   /* 빈 줄은 얇은 스페이서로 압축 */
+  .ln.blank .ts { opacity:.18; font-size:.8em; }
+  .gap { display:flex; align-items:center; gap:8px; color:#6e7681;
+         font-size:.85em; padding:3px 0; }
+  .gap::before, .gap::after { content:""; height:1px; background:#262c33; flex:1; }
   .meta { color:#586069; }
   .ok   { color:#3fb950; }
   .jkey { color:#79c0ea; }
@@ -182,20 +207,80 @@ _HTML = r"""<!DOCTYPE html>
 <header>
   <span class="dot" id="dot"></span>
   <span id="port">…</span>
-  <button id="tabStream" class="active">스트림</button>
-  <button id="tabBuffer">버퍼</button>
+  <button id="tabStream" class="active"
+          title="이 화면을 연 뒤 수신한 원본 줄 수 — 새로고침하면 0부터">스트림</button>
+  <button id="tabBuffer"
+          title="서버가 보관 중인 가공 로그(접힘·필터 적용) — AI가 보는 것과 동일">버퍼</button>
   <button id="pause">⏸ 일시정지</button>
   <label><input type="checkbox" id="follow" checked> 자동스크롤</label>
   <button id="clear">화면 지우기</button>
+  <input id="filter" placeholder="필터(정규식)" spellcheck="false"
+         title="정규식 필터. 로그의 태그를 클릭해도 그 태그로 필터됩니다">
+  <span id="fcount"></span>
+  <button id="fsMinus" title="글자 작게">A−</button>
+  <button id="fsPlus" title="글자 크게">A+</button>
 </header>
 <main>
   <div id="stream"></div>
   <div id="buffer" style="display:none"></div>
 </main>
+<div id="newpill">↓ 새 로그 0건</div>
 <script>
 const MAX_STREAM = 5000;
+const GAP_SEC = 2;             // 이 이상 수신 공백이면 간격 구분선 표시
 const $ = id => document.getElementById(id);
-let paused = false, activeTab = "stream";
+let paused = false, activeTab = "stream", streamLastSec = null;
+let filterRe = null, newCount = 0, streamLines = 0;
+
+// 탭 버튼에 적재 현황 표시 — "지금 몇 줄 / 한도"가 항상 보이게
+function updateStreamTab() {
+  $("tabStream").textContent = "스트림 " + streamLines + "/" + MAX_STREAM;
+}
+function setBufferTab(n, cap) {
+  $("tabBuffer").textContent = "버퍼 " + n + "/" + cap;
+}
+
+// ---- 라이브 필터(정규식, 실패 시 리터럴) + 태그 클릭 필터 ----
+function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+function applyFilterTo(div) {
+  div.style.display = (!filterRe || filterRe.test(div.dataset.raw || "")) ? "" : "none";
+}
+
+function applyFilterAll() {
+  for (const pane of [$("stream"), $("buffer")]) {
+    for (const el of pane.children) {
+      if (el.classList.contains("gap")) el.style.display = filterRe ? "none" : "";
+      else applyFilterTo(el);
+    }
+  }
+  updateFcount();
+}
+
+function updateFcount() {
+  if (!filterRe) { $("fcount").textContent = ""; return; }
+  const pane = $(activeTab);
+  let vis = 0, tot = 0;
+  for (const el of pane.children) {
+    if (el.classList.contains("gap")) continue;
+    tot++;
+    if (el.style.display !== "none") vis++;
+  }
+  $("fcount").textContent = vis + "/" + tot;
+}
+
+function setFilter(v) {
+  v = v.trim();
+  if (v === "") filterRe = null;
+  else if (/^\[[A-Za-z][A-Za-z0-9_ .\-]*\]$/.test(v)) {
+    // "[IOc]" 같은 태그 리터럴 — 정규식 문자클래스로 오해되지 않게 이스케이프
+    filterRe = new RegExp(escapeRegExp(v), "i");
+  } else {
+    try { filterRe = new RegExp(v, "i"); }
+    catch (e) { filterRe = new RegExp(escapeRegExp(v), "i"); }
+  }
+  applyFilterAll();
+}
 
 function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -223,52 +308,162 @@ function ansiToHtml(s) {
   return out + "</span>".repeat(open);
 }
 
-// 휴리스틱 데코: JSON 키 시안, 괄호 dim, 성공 키워드 녹색 (값은 본문색 유지 — 무지개 금지)
-function decorate(text) {
-  let h = esc(text);   // esc는 &,<,>만 치환 — 따옴표는 그대로 남는다
+// 태그 자동 컬러: [Proc-WiFiRx] 같은 토큰을 해시 기반 고정색으로(같은 태그는 항상 같은 색)
+const TAG_RE = /(\[[A-Za-z][A-Za-z0-9_ .\-]{1,23}\])/;
+function tagColor(name) {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return "hsl(" + (h % 360) + ",45%,68%)";   // 채도 낮게 — 어지럽지 않게
+}
+
+// 휴리스틱 데코(태그 제외 구간): JSON 키 시안, 괄호 dim, 성공 키워드 녹색
+function plainDecorate(s) {
+  let h = esc(s);   // esc는 &,<,>만 치환 — 따옴표는 그대로 남는다
   h = h.replace(/"([^"]*)"(\s*):/g, '<span class="jkey">"$1"</span>$2:');
   h = h.replace(/([{}\[\]])/g, '<span class="dim">$1</span>');
   h = h.replace(/\b(OK|Success|Done)\b/g, '<span class="ok">$1</span>');
   return h;
 }
 
+function decorate(text) {
+  let out = "";
+  for (const p of text.split(TAG_RE)) {
+    const m = p.match(/^\[([A-Za-z][A-Za-z0-9_ .\-]{1,23})\]$/);
+    out += m ? '<span class="tag" data-tag="' + esc(m[1]) + '" style="color:' +
+               tagColor(m[1]) + '">' + esc(p) + "</span>"
+             : plainDecorate(p);
+  }
+  return out;
+}
+
 function lineClass(text) {
-  if (/error|fail|exception|rst:/i.test(text)) return " err";
-  if (/warn/i.test(text)) return " warn";
+  // 부팅/리셋 마커는 에러가 아니라 별도 신호(파랑) — POWERON 정상 부팅 오인 방지
+  if (/^(ESP-ROM:|rst:0x|entry 0x)/.test(text)) return " boot";
+  // ESP-IDF 표준 프리픽스 E (..)/W (..)도 인식 + 키워드 휴리스틱
+  if (/^E \(\d/.test(text) || /error|fail|exception/i.test(text)) return " err";
+  if (/^W \(\d/.test(text) || /warn/i.test(text)) return " warn";
   return "";
 }
 
-function renderLine(ts, text, metaSuffix) {
+function toSec(ts) {   // "HH:MM:SS(.mmm)" → 하루 내 초(간격 계산용)
+  return +ts.slice(0, 2) * 3600 + +ts.slice(3, 5) * 60 + +ts.slice(6, 8);
+}
+
+function gapDivider(sec) {
+  const g = document.createElement("div");
+  g.className = "gap";
+  g.textContent = "+" + sec + "s";
+  return g;
+}
+
+// 첫 태그 끝까지의 폭(ch) — 래핑된 줄이 태그 아래로 밀리지 않고 태그 뒤에 정렬되게
+// (타임스탬프 거터와 같은 원리의 내어쓰기. 태그가 너무 깊으면 미적용)
+function hangIndent(text) {
+  const m = text.match(TAG_RE);
+  if (!m) return 0;
+  const end = m.index + m[0].length + 1;
+  return end <= 32 ? end : 0;
+}
+
+function renderLine(ts, text, metaSuffix, dimTs) {
   const div = document.createElement("div");
+  div.dataset.raw = text;   // 필터 매칭용 원문 보관
+  if (text.trim() === "") {   // 빈 줄 — 얇은 스페이서(원본 존재는 유지)
+    div.className = "ln blank";
+    div.innerHTML = '<span class="ts" title="' + ts + '">' + ts.slice(0, 8) +
+      '</span><span class="txt"></span>';
+    applyFilterTo(div);
+    return div;
+  }
   const ansi = ansiToHtml(text);   // ANSI가 있으면 펌웨어 의도 우선, 휴리스틱 생략
   div.className = "ln" + (ansi === null ? lineClass(text) : "");
-  div.innerHTML = '<span class="meta">[' + ts + ']</span> ' +
-    (ansi !== null ? ansi : decorate(text)) +
-    (metaSuffix ? ' <span class="meta">' + esc(metaSuffix) + '</span>' : "");
+  const ind = ansi === null ? hangIndent(text) : 0;
+  const indStyle = ind
+    ? ' style="padding-left:' + ind + 'ch;text-indent:-' + ind + 'ch"' : "";
+  let html = '<span class="ts' + (dimTs ? " rep" : "") + '" title="' + ts + '">' +
+    ts.slice(0, 8) + '</span><span class="txt"' +
+    indStyle + ">" + (ansi !== null ? ansi : decorate(text));
+  if (metaSuffix) html += ' <span class="meta">' + esc(metaSuffix) + "</span>";
+  div.innerHTML = html + "</span>";
+  applyFilterTo(div);
   return div;
 }
 
 const es = new EventSource("/api/stream");
+es.onopen = () => {   // 스트림은 "지금부터" 생중계 — 시작 지점을 명시(이전 기록은 버퍼 탭)
+  const g = document.createElement("div");
+  g.className = "gap";
+  g.textContent = "실시간 수신 시작 — 이전 기록은 [버퍼] 탭";
+  $("stream").appendChild(g);
+};
 es.onmessage = ev => {
   if (paused) return;
   const d = JSON.parse(ev.data);
   const box = $("stream");
-  box.appendChild(renderLine(d.ts, d.text, ""));
-  while (box.childNodes.length > MAX_STREAM) box.removeChild(box.firstChild);
-  if ($("follow").checked && activeTab === "stream")
+  const sec = toSec(d.ts);
+  const dim = streamLastSec === sec;   // 같은 초 반복 → 거터 흐리게
+  if (streamLastSec !== null && sec - streamLastSec >= GAP_SEC) {
+    const g = gapDivider(sec - streamLastSec);
+    if (filterRe) g.style.display = "none";
+    box.appendChild(g);
+  }
+  streamLastSec = sec;
+  box.appendChild(renderLine(d.ts, d.text, "", dim));
+  streamLines++;
+  while (box.childNodes.length > MAX_STREAM) {   // 한도 초과분은 위에서 제거
+    const removed = box.firstChild;
+    if (removed.classList && removed.classList.contains("ln")) streamLines--;
+    box.removeChild(removed);
+  }
+  updateStreamTab();
+  if ($("follow").checked && activeTab === "stream") {
     window.scrollTo(0, document.body.scrollHeight);
+  } else if (!nearBottom()) {
+    newCount++;   // 바닥을 안 보고 있을 때만 새 로그 배지
+    $("newpill").textContent = "↓ 새 로그 " + newCount + "건";
+    $("newpill").style.display = "block";
+  }
 };
+
+function nearBottom() {
+  return window.innerHeight + window.scrollY >= document.body.scrollHeight - 60;
+}
+
+$("newpill").onclick = () => {
+  setTab("stream");
+  $("follow").checked = true;
+  window.scrollTo(0, document.body.scrollHeight);
+  newCount = 0;
+  $("newpill").style.display = "none";
+};
+window.addEventListener("scroll", () => {
+  if (nearBottom()) {
+    newCount = 0;
+    $("newpill").style.display = "none";
+  }
+});
 
 async function refreshBuffer() {
   if (activeTab !== "buffer" || paused) return;
   const d = await (await fetch("/api/buffer")).json();
   const box = $("buffer");
   box.innerHTML = "";
+  let prevSec = null, prevShownSec = null;
   for (const e of d.entries || []) {
+    const sec = toSec(e.first_ts);
+    if (prevSec !== null && sec - prevSec >= GAP_SEC) {
+      const g = gapDivider(sec - prevSec);
+      if (filterRe) g.style.display = "none";
+      box.appendChild(g);
+    }
+    prevSec = toSec(e.last_ts);   // 접힌 묶음은 끝 시각부터 간격 계산
     const suffix = e.count > 1
-      ? "(" + e.count + "회 반복, " + e.first_ts + "~" + e.last_ts + ")" : "";
-    box.appendChild(renderLine(e.first_ts, e.text, suffix));
+      ? "(" + e.count + "회 반복, " + e.first_ts.slice(0, 8) + "~" + e.last_ts.slice(0, 8) + ")" : "";
+    box.appendChild(renderLine(e.first_ts, e.text, suffix, sec === prevShownSec));
+    prevShownSec = sec;
   }
+  setBufferTab((d.entries || []).length, d.capacity ?? "?");
+  updateFcount();
   if ($("follow").checked) window.scrollTo(0, document.body.scrollHeight);
 }
 setInterval(refreshBuffer, 2000);
@@ -279,6 +474,7 @@ async function refreshStatus() {
     $("dot").className = "dot" + (d.connected ? " on" : "");
     $("port").textContent = (d.port || "(포트 미설정)") + " @ " + d.baud +
       (d.last_error ? " — " + d.last_error : "");
+    if (d.buffer_entries !== undefined) setBufferTab(d.buffer_entries, d.buffer_capacity);
   } catch (e) { $("dot").className = "dot"; }
 }
 setInterval(refreshStatus, 5000);
@@ -291,6 +487,7 @@ function setTab(name) {
   $("tabStream").className = name === "stream" ? "active" : "";
   $("tabBuffer").className = name === "buffer" ? "active" : "";
   if (name === "buffer") refreshBuffer();
+  updateFcount();
 }
 $("tabStream").onclick = () => setTab("stream");
 $("tabBuffer").onclick = () => setTab("buffer");
@@ -298,7 +495,34 @@ $("pause").onclick = () => {
   paused = !paused;
   $("pause").textContent = paused ? "▶ 재개" : "⏸ 일시정지";
 };
-$("clear").onclick = () => { $(activeTab).innerHTML = ""; };  // 화면만 — 서버 버퍼 무변경
+$("clear").onclick = () => {
+  $(activeTab).innerHTML = "";   // 화면만 — 서버 버퍼 무변경
+  if (activeTab === "stream") { streamLastSec = null; streamLines = 0; updateStreamTab(); }
+  updateFcount();
+};
+
+// 필터 입력 + 태그 클릭으로 필터 토글(같은 태그 다시 클릭하면 해제)
+$("filter").addEventListener("input", () => setFilter($("filter").value));
+document.addEventListener("click", ev => {
+  const t = ev.target.closest(".tag");
+  if (!t) return;
+  const lit = "[" + t.dataset.tag + "]";
+  const cur = $("filter").value.trim();
+  $("filter").value = cur === lit ? "" : lit;
+  setFilter($("filter").value);
+}, true);
+
+// 글자 크기 A−/A+ (11~18px, localStorage에 기억)
+let fs = +(localStorage.getItem("fs") || 13);
+function applyFs() {
+  fs = Math.min(18, Math.max(11, fs));
+  document.documentElement.style.setProperty("--fs", fs + "px");
+  localStorage.setItem("fs", fs);
+}
+applyFs();
+$("fsMinus").onclick = () => { fs--; applyFs(); };
+$("fsPlus").onclick = () => { fs++; applyFs(); };
+updateStreamTab();   // 초기 표시 "스트림 0/5000"
 </script>
 </body>
 </html>
