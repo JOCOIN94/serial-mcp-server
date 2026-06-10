@@ -111,6 +111,30 @@ def test_exclude_takes_precedence_over_include():
     assert buf.get_recent(10) == ["[14:00:00.000] public msg"]
 
 
+# ---- 빈 줄 저장 제외 (SPEC §4.3) ----
+
+def test_blank_lines_are_not_stored():
+    buf = LineBuffer(maxlen=10, dedup=True)
+    assert buf.add("", BASE) is False
+    assert buf.add("   ", BASE) is False   # 공백뿐인 줄도 제외
+    info = buf.info()
+    assert info["entries"] == 0
+    assert info["total_received"] == 2
+    assert info["total_stored"] == 0
+
+
+def test_dedup_folds_repeats_interleaved_with_blank_lines():
+    # 실장비 SSM 패턴: "" → 메시지 → "" → 메시지 … (SPEC §4.2 "실로그 확인 후 조정"의 근거)
+    buf = LineBuffer(maxlen=10, dedup=True)
+    buf.add("", BASE)
+    assert buf.add("[IOc] Disconnected!", BASE) is True
+    buf.add("", BASE)
+    assert buf.add("[IOc] Disconnected!", datetime(2026, 6, 9, 14, 0, 1, 0)) is False   # 접힘
+    lines = buf.get_recent(10)
+    assert len(lines) == 1
+    assert "(2회 반복" in lines[0]
+
+
 # ---- ring eviction (SPEC §3) ----
 
 def test_ring_buffer_evicts_oldest_beyond_maxlen():

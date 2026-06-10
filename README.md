@@ -7,7 +7,7 @@ ESP32·STM32 등 시리얼로 텍스트 로그를 출력하는 임베디드 보�
 
 - 읽기 전용 · stdio transport · 의존성은 `mcp[cli]` + `pyserial` 뿐
 - OS 무관(macOS / Windows / Linux, WSL 제외)
-- 백그라운드 스레드가 포트를 계속 읽어 ring buffer(기본 2000줄)에 적재 · 연속 중복 접기(dedup) · 정규식 수집 필터
+- 백그라운드 스레드가 포트를 계속 읽어 ring buffer(기본 2000줄)에 적재 · 연속 중복 접기(dedup) · 정규식 수집 필터 · 공백뿐인 줄 미저장(tee 파일에는 원본 그대로)
 
 ## 도구 (모두 읽기 전용)
 

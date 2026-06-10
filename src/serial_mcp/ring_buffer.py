@@ -1,7 +1,8 @@
 """시리얼 로그 라인 저장용 ring buffer.
 
 수신 라인을 타임스탬프와 함께 보관하고, 연속 중복을 접으며(dedup),
-exclude/include 정규식으로 저장 시점에 거른다. 스레드 안전(Lock).
+exclude/include 정규식으로 저장 시점에 거른다. 공백뿐인 줄은 저장하지
+않는다(dedup 연속성·버퍼 밀도 확보). 스레드 안전(Lock).
 
 이 모듈은 순수 로직만 담는다 — 시리얼 I/O나 MCP 의존성이 전혀 없어
 단위 테스트가 쉽다.
@@ -74,6 +75,10 @@ class LineBuffer:
         with self._lock:
             self.total_received += 1
             # 1) 수집 필터(저장 시점)
+            # 공백뿐인 줄은 저장하지 않는다(SPEC §4.3) — 임베디드 로그가 메시지 사이에
+            # 빈 줄을 끼워 보내 연속 중복 접기(§4.2)가 무력화되는 것을 막는다.
+            if not text.strip():
+                return False
             if self._exclude is not None and self._exclude.search(text):
                 return False
             if self._include is not None and not self._include.search(text):
