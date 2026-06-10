@@ -111,6 +111,44 @@ def test_exclude_takes_precedence_over_include():
     assert buf.get_recent(10) == ["[14:00:00.000] public msg"]
 
 
+# ---- dedup 룩백 윈도 (SPEC §4.2 개정: 교차 반복 압축) ----
+
+def test_lookback_folds_alternating_lines():
+    # 실장비 패턴: A → B → A → B 교차 — 직전-줄 접기로는 못 잡던 케이스
+    buf = LineBuffer(maxlen=10, dedup=5)
+    buf.add("A", BASE)
+    buf.add("B", BASE)
+    assert buf.add("A", datetime(2026, 6, 9, 14, 0, 1, 0)) is False   # 룩백 접힘
+    assert buf.add("B", datetime(2026, 6, 9, 14, 0, 2, 0)) is False
+    snap = buf.snapshot()
+    assert [e["text"] for e in snap] == ["A", "B"]          # 항목 위치 유지(first_ts 순서)
+    assert snap[0]["count"] == 2 and snap[0]["last_ts"] == "14:00:01.000"
+    assert snap[1]["count"] == 2 and snap[1]["last_ts"] == "14:00:02.000"
+
+
+def test_lookback_window_limit():
+    buf = LineBuffer(maxlen=20, dedup=2)
+    buf.add("A", BASE)
+    buf.add("B", BASE)
+    buf.add("C", BASE)        # 이제 A는 윈도(끝 2개: B,C) 밖
+    assert buf.add("A", BASE) is True    # 새 항목
+    assert len(buf.snapshot()) == 4
+
+
+def test_dedup_zero_disables_folding():
+    buf = LineBuffer(maxlen=10, dedup=0)
+    buf.add("x", BASE)
+    assert buf.add("x", BASE) is True
+
+
+def test_dedup_true_means_window_one():
+    # 하위호환: 구버전 dedup=True(불리언)는 '직전 1줄만'과 동일
+    buf = LineBuffer(maxlen=10, dedup=True)
+    buf.add("A", BASE)
+    buf.add("B", BASE)
+    assert buf.add("A", BASE) is True    # 직전(B)만 비교 → 안 접힘
+
+
 # ---- 빈 줄 저장 제외 (SPEC §4.3) ----
 
 def test_blank_lines_are_not_stored():
@@ -192,7 +230,7 @@ def test_info_reports_capacity_and_endpoints():
     assert info["capacity"] == 5
     assert info["oldest"].endswith("first")
     assert info["newest"].endswith("last")
-    assert info["dedup"] is True
+    assert info["dedup"] == 1
 
 
 def test_info_empty_buffer_has_none_endpoints():

@@ -1,6 +1,6 @@
 """시리얼 로그 라인 저장용 ring buffer.
 
-수신 라인을 타임스탬프와 함께 보관하고, 연속 중복을 접으며(dedup),
+수신 라인을 타임스탬프와 함께 보관하고, 근접 중복을 룩백 윈도로 접으며(dedup=N),
 exclude/include 정규식으로 저장 시점에 거른다. 공백뿐인 줄은 저장하지
 않는다(dedup 연속성·버퍼 밀도 확보). 스레드 안전(Lock).
 
@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import threading
 from collections import deque
+from itertools import islice
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -51,13 +52,15 @@ class LineBuffer:
     def __init__(
         self,
         maxlen: int = 2000,
-        dedup: bool = True,
+        dedup: int = 5,
         exclude: Optional[str] = None,
         include: Optional[str] = None,
     ) -> None:
         self._buf: deque[LogEntry] = deque(maxlen=maxlen)
         self._lock = threading.Lock()
-        self._dedup = dedup
+        # 룩백 윈도: 버퍼 끝 N개 안에 같은 줄이 있으면 접는다.
+        # 0=끔, 1=직전 줄만(구버전 동작), bool 입력도 int()로 자연 호환(True→1).
+        self._dedup_window = int(dedup)
         self._exclude = re.compile(exclude) if exclude else None
         self._include = re.compile(include) if include else None
         self.maxlen = maxlen
@@ -83,12 +86,14 @@ class LineBuffer:
                 return False
             if self._include is not None and not self._include.search(text):
                 return False
-            # 2) 연속 중복 접기: 직전 줄과 내용이 완전히 동일하면 마지막 항목 갱신
-            if self._dedup and self._buf and self._buf[-1].text == text:
-                last = self._buf[-1]
-                last.count += 1
-                last.last_ts = ts
-                return False
+            # 2) 룩백 접기: 버퍼 끝 N개 안에 같은 줄이 있으면 그 항목에 접는다
+            #    (항목 위치 유지 — first_ts 순서 보존. 교차 반복도 압축, SPEC §4.2)
+            if self._dedup_window:
+                for e in islice(reversed(self._buf), self._dedup_window):
+                    if e.text == text:
+                        e.count += 1
+                        e.last_ts = ts
+                        return False
             # 3) 신규 항목(가득 차면 deque가 가장 오래된 것을 자동으로 밀어냄)
             self._buf.append(LogEntry(text=text, first_ts=ts, last_ts=ts))
             self.total_stored += 1
@@ -133,7 +138,7 @@ class LineBuffer:
                 "newest": newest,
                 "total_received": self.total_received,
                 "total_stored": self.total_stored,
-                "dedup": self._dedup,
+                "dedup": self._dedup_window,
             }
 
     def clear(self) -> int:
