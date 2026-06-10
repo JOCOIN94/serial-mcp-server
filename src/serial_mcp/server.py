@@ -618,6 +618,33 @@ def _tee_path_for(base: Optional[str], tag: str) -> Optional[str]:
     return str(p.with_name(f"{p.stem}.{safe}{p.suffix}"))
 
 
+def _make_monitor(
+    port: str,
+    baud_override: Optional[int],
+    sn_map: Mapping[str, Optional[str]],
+    cfg: dict,
+) -> PortMonitor:
+    """포트 하나의 모니터 조립 — main() 기동과 핫플러그 추가가 공유하는 단일 규칙.
+
+    버퍼·피드 생성, 별칭 해석(SERIAL_NAMES — 포트명/시리얼넘버 키), 무명 포트의
+    autoname 훅 장착, tee 경로 산출까지. 리더 start()는 호출자가 등록을 끝낸 뒤
+    수행한다(등록 전 시작 금지 — _autoname_check의 _monitors 순회와 race 방지).
+    """
+    baud = baud_override or cfg["baud"]
+    name = name_for(port, sn_map.get(port.upper()), cfg["names"])
+    buf = LineBuffer(maxlen=cfg["maxlen"], dedup=cfg["dedup"],
+                     exclude=cfg["exclude"], include=cfg["include"])
+    feed = RawFeed()
+    mon = PortMonitor(port=port, name=name, buffer=buf, feed=feed, reader=None)
+    on_line = None
+    if _autoname_rules and name is None:   # 명시 별칭 없을 때만 자동 식별 후킹
+        on_line = (lambda ts, text, m=mon: _autoname_check(m, text))
+    mon.reader = SerialReader(port=port, baud=baud, buffer=buf,
+                              tee_path=_tee_path_for(cfg["tee"], name or port),
+                              feed=feed, on_line=on_line)
+    return mon
+
+
 def main() -> None:
     """엔트리포인트. USB 자동 스캔(또는 SERIAL_PORT 목록)으로 포트별 모니터를
     띄우고 stdio 로 MCP 서버 구동."""
@@ -640,19 +667,7 @@ def main() -> None:
         if port.upper() in _monitors:
             _log(f"중복 포트 무시: {port}")
             continue
-        baud = baud_override or cfg["baud"]
-        name = name_for(port, sn_map.get(port.upper()), cfg["names"])
-        buf = LineBuffer(maxlen=cfg["maxlen"], dedup=cfg["dedup"],
-                         exclude=cfg["exclude"], include=cfg["include"])
-        feed = RawFeed()
-        mon = PortMonitor(port=port, name=name, buffer=buf, feed=feed, reader=None)
-        on_line = None
-        if _autoname_rules and name is None:   # 명시 별칭 없을 때만 자동 식별 후킹
-            on_line = (lambda ts, text, m=mon: _autoname_check(m, text))
-        mon.reader = SerialReader(port=port, baud=baud, buffer=buf,
-                                  tee_path=_tee_path_for(cfg["tee"], name or port),
-                                  feed=feed, on_line=on_line)
-        _monitors[port.upper()] = mon
+        _monitors[port.upper()] = _make_monitor(port, baud_override, sn_map, cfg)
 
     # 2패스: 등록이 끝난 뒤 리더 일괄 시작
     for mon in _monitors.values():
