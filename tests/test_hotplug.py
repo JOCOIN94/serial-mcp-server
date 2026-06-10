@@ -75,3 +75,69 @@ def test_make_monitor_hooks_autoname_only_when_unnamed(stub_reader, monkeypatch)
     assert unnamed.reader.on_line is not None        # 무명 → autoname 훅 장착
     unnamed.reader.on_line(None, "***Send to the STM32")
     assert unnamed.name is None or unnamed.name == "SB1"   # 훅이 _autoname_check로 연결됨
+
+
+# ---- _hotplug_scan_once (재스캔 → 신규 USB 포트만 모니터 추가) ----
+
+def usb(device, sn=None):
+    return SimpleNamespace(device=device, vid=0x1A86, pid=0x55D3, serial_number=sn)
+
+
+def bt(device):
+    return SimpleNamespace(device=device, vid=None, pid=None, serial_number=None)
+
+
+@pytest.fixture
+def scan_env(monkeypatch, stub_reader):
+    """기존 모니터 1개(COM_A) + 설정 주입. comports 는 테스트별로 덮는다."""
+    existing = srv._make_monitor("COM_A", None, {}, BASE_CFG)
+    monkeypatch.setattr(srv, "_monitors", {"COM_A": existing})
+    monkeypatch.setattr(srv, "_config", dict(BASE_CFG))
+    return existing
+
+
+def test_scan_adds_new_usb_port_and_starts_reader(monkeypatch, scan_env):
+    monkeypatch.setattr(srv.list_ports, "comports",
+                        lambda: [usb("COM_A"), usb("COM_B")])
+    added = srv._hotplug_scan_once()
+    assert added == ["COM_B"]
+    assert "COM_B" in srv._monitors
+    assert srv._monitors["COM_B"].reader.started is True
+
+
+def test_scan_ignores_known_ports_case_insensitive(monkeypatch, scan_env):
+    monkeypatch.setattr(srv.list_ports, "comports", lambda: [usb("com_a")])
+    assert srv._hotplug_scan_once() == []
+    assert len(srv._monitors) == 1
+
+
+def test_scan_ignores_non_usb_ports(monkeypatch, scan_env):
+    monkeypatch.setattr(srv.list_ports, "comports",
+                        lambda: [usb("COM_A"), bt("COM_BT")])
+    assert srv._hotplug_scan_once() == []
+
+
+def test_scan_applies_serial_names_to_new_port(monkeypatch, scan_env):
+    srv._config["names"] = {"SN777": "SB2"}
+    monkeypatch.setattr(srv.list_ports, "comports",
+                        lambda: [usb("COM_A"), usb("COM_C", sn="SN777")])
+    srv._hotplug_scan_once()
+    assert srv._monitors["COM_C"].name == "SB2"
+
+
+def test_scan_replaces_dict_copy_on_write(monkeypatch, scan_env):
+    """리더 스레드가 순회 중인 옛 dict 객체는 불변 — 전역 참조만 교체돼야 한다."""
+    before = srv._monitors
+    monkeypatch.setattr(srv.list_ports, "comports",
+                        lambda: [usb("COM_A"), usb("COM_B")])
+    srv._hotplug_scan_once()
+    assert "COM_B" not in before                 # 옛 객체는 변형 금지
+    assert srv._monitors is not before           # 새 dict 로 교체
+    assert srv._monitors["COM_A"] is scan_env    # 기존 모니터는 동일 객체 유지(버퍼 보존)
+
+
+def test_scan_noop_when_nothing_new(monkeypatch, scan_env):
+    before = srv._monitors
+    monkeypatch.setattr(srv.list_ports, "comports", lambda: [usb("COM_A")])
+    assert srv._hotplug_scan_once() == []
+    assert srv._monitors is before               # 변화 없으면 dict 교체도 없음

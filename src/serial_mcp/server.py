@@ -645,6 +645,29 @@ def _make_monitor(
     return mon
 
 
+def _hotplug_scan_once() -> list[str]:
+    """핫플러그 1회 스캔 — 새 USB 시리얼 포트를 모니터에 추가하고 포트명 목록 반환.
+
+    _monitors 는 copy-on-write 로만 갱신한다(새 dict 생성 → 전역 참조 원자 교체).
+    리더 스레드(_autoname_check)·도구 호출이 옛 dict 를 순회 중이어도 안전하다.
+    사라진 포트의 모니터는 제거하지 않는다 — 버퍼·tee 를 보존하고, 재연결은
+    SerialReader 의 재시도 루프가 담당한다.
+    """
+    global _monitors
+    com = list(list_ports.comports())
+    fresh = [d for d in auto_usb_ports(com) if d.upper() not in _monitors]
+    if not fresh:
+        return []
+    sn_map = {p.device.upper(): getattr(p, "serial_number", None) for p in com}
+    added = [_make_monitor(d, None, sn_map, _config) for d in fresh]
+    # 등록을 먼저 끝낸 뒤 리더 시작(main 의 1·2패스와 동일한 순서 보장)
+    _monitors = {**_monitors, **{m.port.upper(): m for m in added}}
+    for m in added:
+        m.reader.start()
+        _log(f"핫플러그: 모니터 추가 {m.label} @ {m.reader.baud}")
+    return [m.port for m in added]
+
+
 def main() -> None:
     """엔트리포인트. USB 자동 스캔(또는 SERIAL_PORT 목록)으로 포트별 모니터를
     띄우고 stdio 로 MCP 서버 구동."""

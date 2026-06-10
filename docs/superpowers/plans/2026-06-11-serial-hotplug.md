@@ -294,7 +294,7 @@ git commit -m "refactor: 모니터 조립을 _make_monitor()로 추출 — 기�
 - Modify: `src/serial_mcp/server.py` (`_make_monitor` 뒤)
 - Test: `tests/test_hotplug.py`
 
-- [ ] **Step 1: 실패 테스트 작성** — `tests/test_hotplug.py` 끝에 추가:
+- [x] **Step 1: 실패 테스트 작성** — `tests/test_hotplug.py` 끝에 추가:
 
 ```python
 # ---- _hotplug_scan_once (재스캔 → 신규 USB 포트만 모니터 추가) ----
@@ -363,12 +363,12 @@ def test_scan_noop_when_nothing_new(monkeypatch, scan_env):
     assert srv._monitors is before               # 변화 없으면 dict 교체도 없음
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [x] **Step 2: 실패 확인**
 
 Run: `uv run pytest tests/test_hotplug.py -q`
 Expected: FAIL — `AttributeError: ... no attribute '_hotplug_scan_once'`
 
-- [ ] **Step 3: 구현** — `src/serial_mcp/server.py`의 `_make_monitor` 뒤에 추가:
+- [x] **Step 3: 구현** — `src/serial_mcp/server.py`의 `_make_monitor` 뒤에 추가:
 
 ```python
 def _hotplug_scan_once() -> list[str]:
@@ -394,12 +394,12 @@ def _hotplug_scan_once() -> list[str]:
     return [m.port for m in added]
 ```
 
-- [ ] **Step 4: 통과 확인**
+- [x] **Step 4: 통과 확인**
 
 Run: `uv run pytest tests/test_hotplug.py -q`
 Expected: PASS (전건)
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add tests/test_hotplug.py src/serial_mcp/server.py
