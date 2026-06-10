@@ -90,3 +90,22 @@ def test_ingest_without_feed_still_works():
     r._tee = None
     r._ingest(b"x\n", BASE)
     assert buf.info()["entries"] == 1
+
+
+def test_ingest_calls_on_line_hook():
+    # 자동 식별 등 서버측 후킹용 — (ts, text)로 호출
+    buf = LineBuffer(maxlen=10, dedup=0)
+    seen = []
+    r = SerialReader(port="COM_TEST", baud=115200, buffer=buf,
+                     on_line=lambda ts, text: seen.append((ts, text)))
+    r._tee = None
+    r._ingest(b"hello\r\n", BASE)
+    assert seen == [(BASE, "hello")]
+
+
+def test_ingest_without_on_line_still_works():
+    buf = LineBuffer(maxlen=10, dedup=0)
+    r = SerialReader(port="COM_TEST", baud=115200, buffer=buf)   # on_line 기본 None
+    r._tee = None
+    r._ingest(b"x\n", BASE)
+    assert buf.info()["entries"] == 1

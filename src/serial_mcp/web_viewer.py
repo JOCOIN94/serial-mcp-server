@@ -497,6 +497,10 @@ setInterval(refreshBuffer, 2000);
 async function refreshStatus() {
   try {
     const d = await (await fetch("/api/status")).json();
+    for (const o of $("psel").options) {   // 자동 식별(SERIAL_AUTONAME)로 별칭이 늦게 확정되면 라벨 동기화
+      const m = (d.ports || []).find(x => x.port === o.value);
+      if (m && o.textContent !== m.label) o.textContent = m.label;
+    }
     const p = (d.ports || []).find(x => x.port === currentPort) || (d.ports || [])[0];
     if (!p) { $("dot").className = "dot"; $("port").textContent = "(모니터링 포트 없음)"; return; }
     $("dot").className = "dot" + (p.connected ? " on" : "");

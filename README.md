@@ -44,6 +44,7 @@ claude mcp add --scope user serial-mcp \
 |---|---|---|
 | `SERIAL_PORT` | (없음=자동) | 미설정이면 USB 시리얼 전부 자동 모니터링(시작 시 1회 스캔). 지정 시 그 목록만: `COM4` 또는 `COM4,COM13@9600`. COM10 이상은 `\\.\COM10` 형식 |
 | `SERIAL_NAMES` | (없음) | 포트→보드 별칭. `COM4=SSM,COM13=SB1` 또는 USB 시리얼넘버 키 `5909024173=SSM`(포트 번호가 바뀌어도 유지). 표기·도구 port 인자에 별칭 사용 가능 |
+| `SERIAL_AUTONAME` | (없음) | **로그 내용으로 보드 자동 식별**: `이름=정규식;…`(세미콜론 구분, 순서=우선순위). 첫 매칭에서 1회 확정, `SERIAL_NAMES`가 우선. 예: `SSM=\[Proc-;SB1=Send to the STM32` |
 | `SERIAL_BAUD` | `115200` | 보드레이트 |
 | `SERIAL_TEE` | (없음) | 로그 영구 기록 경로 — 포트별 파일로 분리(`log.txt`→`log.SSM.txt`). 버퍼에서 밀려난 줄도 보존 |
 | `SERIAL_EXCLUDE` | (없음) | 이 정규식에 매칭되는 줄은 저장하지 않음 |
@@ -59,6 +60,7 @@ claude mcp add --scope user serial-mcp \
 - **Windows** (PowerShell): `setx SERIAL_NAMES "COM4=SSM,COM13=SB1"`  (새 터미널부터 적용)
 - **macOS / Linux**: `export SERIAL_NAMES="COM4=SSM"`
 - 특정 포트만 보려면: `setx SERIAL_PORT "COM4,COM13@9600"` (`@N`=포트별 보드레이트)
+- **포트 번호가 자주 바뀌는 어댑터**(시리얼넘버 없는 클론 등)는 로그 내용 기반 자동 식별이 편하다: `setx SERIAL_AUTONAME "SSM=\[Proc-;SB1=Send to the STM32"`. 단 **그 보드 로그에서만 나오는 패턴**이어야 한다 — 상대 보드 이름이 로그에 인용되는 경우(예: SSM 로그 속 "SB1") 오인 주의.
 
 AI 도구는 보드가 여러 개면 `port` 인자(별칭/포트명)를 지정해 호출한다. `clear_log_buffer`만 미지정 시 전체를 비운다.
 

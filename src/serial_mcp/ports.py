@@ -6,7 +6,8 @@ comports() 결과 같은 외부 입력은 인자로 주입받아, 시리얼 I/O 
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+import re
+from typing import Callable, Iterable, Optional
 
 
 def parse_port_list(raw: str) -> list[tuple[str, Optional[int]]]:
@@ -66,3 +67,42 @@ def name_for(port: str, serial_number: Optional[str], names: dict[str, str]) -> 
 def label(port: str, name: Optional[str]) -> str:
     """표기 문자열 — 별칭 있으면 'SSM (COM4)', 없으면 'COM4'."""
     return f"{name} ({port})" if name else port
+
+
+def parse_autoname(raw: str) -> list[tuple[str, str]]:
+    """SERIAL_AUTONAME 파싱: "SSM=\\[Proc-;SB1=STM32" → [("SSM", r"\\[Proc-"), …].
+
+    로그 내용 기반 보드 자동 식별 규칙(이름=정규식). 구분자는 세미콜론 —
+    정규식 안에 쉼표({1,3} 등)가 올 수 있어 쉼표를 못 쓴다. 순서 보존(앞 규칙 우선).
+    '='가 없거나 이름/패턴이 비면 그 항목은 무시.
+    """
+    rules: list[tuple[str, str]] = []
+    for item in raw.split(";"):
+        name, sep, pattern = item.partition("=")
+        name, pattern = name.strip(), pattern.strip()
+        if sep and name and pattern:
+            rules.append((name, pattern))
+    return rules
+
+
+def compile_autoname(
+    rules: list[tuple[str, str]],
+    log: Optional[Callable[[str], None]] = None,
+) -> list[tuple[str, re.Pattern]]:
+    """자동 식별 규칙 컴파일 — 잘못된 정규식은 건너뛰고 log로 알린다(서버 생존 우선)."""
+    out: list[tuple[str, re.Pattern]] = []
+    for name, pattern in rules:
+        try:
+            out.append((name, re.compile(pattern)))
+        except re.error as e:
+            if log is not None:
+                log(f"SERIAL_AUTONAME 패턴 무시({name}={pattern!r}): {e}")
+    return out
+
+
+def first_autoname_match(text: str, rules: list[tuple[str, re.Pattern]]) -> Optional[str]:
+    """수신 줄 하나를 규칙들과 대조 — 첫 매칭 규칙의 이름, 없으면 None."""
+    for name, rx in rules:
+        if rx.search(text):
+            return name
+    return None

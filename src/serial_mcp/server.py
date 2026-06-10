@@ -20,13 +20,22 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
-from typing import Mapping, Optional
+from typing import Callable, Mapping, Optional
 
 import serial
 from serial.tools import list_ports
 from mcp.server.fastmcp import FastMCP
 
-from .ports import auto_usb_ports, label, name_for, parse_names, parse_port_list
+from .ports import (
+    auto_usb_ports,
+    compile_autoname,
+    first_autoname_match,
+    label,
+    name_for,
+    parse_autoname,
+    parse_names,
+    parse_port_list,
+)
 from .ring_buffer import LineBuffer
 from .viewer_feed import RawFeed
 from .web_viewer import ViewerServer
@@ -52,6 +61,7 @@ class SerialReader:
         tee_path: Optional[str] = None,
         reconnect_interval: float = 3.0,
         feed: Optional[RawFeed] = None,
+        on_line: Optional[Callable[[datetime, str], None]] = None,
     ) -> None:
         self.port = port
         self.baud = baud
@@ -59,6 +69,7 @@ class SerialReader:
         self.tee_path = tee_path
         self.reconnect_interval = reconnect_interval
         self.feed = feed   # 웹 뷰어 생중계 허브(없으면 발행 생략)
+        self.on_line = on_line   # 서버측 라인 후킹(보드 자동 식별 등, 없으면 생략)
 
         self._thread = threading.Thread(target=self._run, name="serial-reader", daemon=True)
         self._stop = threading.Event()
@@ -146,6 +157,8 @@ class SerialReader:
         self.buffer.add(text, ts)
         if self.feed is not None:
             self.feed.publish(ts, text)   # 수신 원본 생중계(빈 줄 포함 — tee와 동일 충실도)
+        if self.on_line is not None:
+            self.on_line(ts, text)
         if self._tee is not None:
             try:
                 stamp = ts.strftime("%Y-%m-%d %H:%M:%S.") + f"{ts.microsecond // 1000:03d}"
@@ -159,6 +172,7 @@ mcp = FastMCP("serial-mcp")
 _monitors: dict[str, "PortMonitor"] = {}   # key = 포트명 대문자
 _config: dict = {}
 _viewer: Optional[ViewerServer] = None
+_autoname_rules: list = []   # SERIAL_AUTONAME 컴파일 결과 [(이름, re.Pattern)]
 
 
 @dataclass
@@ -179,6 +193,23 @@ class PortMonitor:
 def _viewer_url() -> Optional[str]:
     """웹 뷰어 URL — 비활성/기동 실패 시 None."""
     return _viewer.url if _viewer is not None else None
+
+
+def _autoname_check(mon: PortMonitor, text: str) -> None:
+    """로그 내용으로 보드 자동 식별(SERIAL_AUTONAME) — 이름 없는 모니터만, 첫 매칭에서 1회 확정.
+
+    명시 별칭(SERIAL_NAMES)이 항상 우선이고, 이미 다른 포트가 가진 이름은
+    부여하지 않는다(오인 방지). 확정 후엔 더 이상 검사하지 않는다(mon.name 세팅).
+    """
+    if mon.name is not None or not _autoname_rules:
+        return
+    name = first_autoname_match(text, _autoname_rules)
+    if name is None:
+        return
+    if any(m.name == name for m in _monitors.values()):
+        return   # 같은 이름이 이미 존재 — 중복 부여 금지
+    mon.name = name
+    _log(f"자동 식별: {mon.port} → {name} (SERIAL_AUTONAME 패턴 매칭)")
 
 
 def _resolve_port(port: str) -> tuple[Optional[PortMonitor], Optional[dict]]:
@@ -518,6 +549,7 @@ def _load_config(env: Mapping[str, str]) -> dict:
     return {
         "ports": parse_port_list(env.get("SERIAL_PORT", "")),   # [] = USB 자동 스캔
         "names": parse_names(env.get("SERIAL_NAMES", "")),
+        "autoname": parse_autoname(env.get("SERIAL_AUTONAME", "")),
         "baud": _env_int(env, "SERIAL_BAUD", 115200),
         "tee": env.get("SERIAL_TEE", "").strip() or None,
         "exclude": env.get("SERIAL_EXCLUDE", "").strip() or None,
@@ -540,10 +572,11 @@ def _tee_path_for(base: Optional[str], tag: str) -> Optional[str]:
 def main() -> None:
     """엔트리포인트. USB 자동 스캔(또는 SERIAL_PORT 목록)으로 포트별 모니터를
     띄우고 stdio 로 MCP 서버 구동."""
-    global _config, _viewer
+    global _config, _viewer, _autoname_rules
 
     cfg = _load_config(os.environ)
     _config = cfg
+    _autoname_rules = compile_autoname(cfg["autoname"], log=_log)
 
     com = list(list_ports.comports())
     specs = cfg["ports"]
@@ -558,9 +591,14 @@ def main() -> None:
         buf = LineBuffer(maxlen=cfg["maxlen"], dedup=cfg["dedup"],
                          exclude=cfg["exclude"], include=cfg["include"])
         feed = RawFeed()
+        mon = PortMonitor(port=port, name=name, buffer=buf, feed=feed, reader=None)
+        on_line = None
+        if _autoname_rules and name is None:   # 명시 별칭 없을 때만 자동 식별 후킹
+            on_line = (lambda ts, text, m=mon: _autoname_check(m, text))
         reader = SerialReader(port=port, baud=baud, buffer=buf,
-                              tee_path=_tee_path_for(cfg["tee"], name or port), feed=feed)
-        mon = PortMonitor(port=port, name=name, buffer=buf, feed=feed, reader=reader)
+                              tee_path=_tee_path_for(cfg["tee"], name or port),
+                              feed=feed, on_line=on_line)
+        mon.reader = reader
         _monitors[port.upper()] = mon
         reader.start()
         _log(f"모니터 시작: {mon.label} @ {baud}")

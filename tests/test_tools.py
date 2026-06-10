@@ -175,3 +175,34 @@ def test_list_serial_ports_marks_monitored(monkeypatch, dual):
     assert by_dev["COM_A"]["monitored"] is True
     assert by_dev["COM_A"]["name"] == "SSM"
     assert by_dev["COM_Z"]["monitored"] is False
+
+
+# ---- SERIAL_AUTONAME (로그 내용 기반 자동 식별, 서버측 1회 확정) ----
+
+def test_autoname_assigns_on_first_match(monkeypatch, dual):
+    a, b = dual            # a=SSM(이미 명명), b=COM_B(무명)
+    monkeypatch.setattr(srv, "_autoname_rules", srv.compile_autoname([("SB1", r"STM32")]))
+    srv._autoname_check(b, "***Send to the STM32 to request the FWVer.")
+    assert b.name == "SB1"
+    assert b.label == "SB1 (COM_B)"
+
+
+def test_autoname_respects_existing_name(monkeypatch, dual):
+    a, _ = dual
+    monkeypatch.setattr(srv, "_autoname_rules", srv.compile_autoname([("WRONG", r".")]))
+    srv._autoname_check(a, "anything")
+    assert a.name == "SSM"          # 명시 SERIAL_NAMES 우선 — 덮어쓰지 않음
+
+
+def test_autoname_skips_duplicate_name(monkeypatch, dual):
+    a, b = dual
+    monkeypatch.setattr(srv, "_autoname_rules", srv.compile_autoname([("SSM", r".")]))
+    srv._autoname_check(b, "would match anything")
+    assert b.name is None           # 'SSM'은 이미 a의 이름 — 오인 방지 위해 미부여
+
+
+def test_autoname_noop_without_rules(monkeypatch, dual):
+    _, b = dual
+    monkeypatch.setattr(srv, "_autoname_rules", [])
+    srv._autoname_check(b, "***Send to the STM32")
+    assert b.name is None
