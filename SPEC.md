@@ -20,7 +20,7 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 
 ## 2. 제약
 
-- 헤드리스로만 동작한다. GUI를 포함하지 않으며, PyQt6 등 GUI 라이브러리를 사용하지 않는다.
+- 헤드리스로만 동작한다. GUI를 포함하지 않으며, PyQt6 등 GUI 라이브러리를 사용하지 않는다. (localhost 웹 뷰어(§10)는 GUI 라이브러리가 아니라 사용자의 브라우저를 화면으로 쓰므로 이 제약에 위배되지 않는다.)
 - 의존성은 두 가지로 한정한다: 최신 공식 MCP Python SDK(`mcp[cli]`, FastMCP 사용)와 `pyserial`.
 - 운영체제에 독립적으로 동작한다(macOS, Windows, Linux). WSL은 대상이 아니다. 전송 방식(transport)은 stdio로 한다.
 - 읽기 전용으로 구현한다. 포트에 데이터를 쓰는 기능(명령 전송)은 현 단계에서 구현하지 않는다. 다만 향후 해당 기능을 용이하게 추가할 수 있도록 구조를 확장 가능하게 설계한다.
@@ -60,7 +60,7 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 각 도구는 `status`와 `message`를 포함한 dict를 반환한다. docstring은 사람을 위한 설명이 아니라 AI를 위한 사용 지침으로 작성하며, AI가 해당 도구를 언제·어떤 목적으로 호출하는지 명확히 기술한다. 반환 dict는 AI가 파싱·추론하기 좋은 구조로 구성한다.
 
 - `list_serial_ports` : 사용 가능한 포트 목록 + VID/PID·description(예: CP210x, STLink).
-- `get_serial_status` : 현재 연결 상태, 포트, 보드레이트.
+- `get_serial_status` : 현재 연결 상태, 포트, 보드레이트. (웹 뷰어 활성 시 `viewer_url` 포함 — `get_log_buffer_info`도 동일. 사람이 로그를 직접 보고 싶어 하면 AI가 이 링크를 안내한다.)
 - `get_recent_logs(lines=200)` : 최근 N줄(접힌 묶음 반복 횟수 표기 포함).
 - `query_serial_logs(pattern, max_results=100)` : 정규식으로 버퍼 검색.
 - `get_log_buffer_info` : 버퍼 크기 / 최신·최오래 항목.
@@ -127,6 +127,16 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - 실행 코드(전부 MCP 서버 담당).
 - 각 도구의 상세 시그니처·반환 구조(도구 docstring의 몫).
 
+## 10. 웹 로그 뷰어 (localhost 전용 보조 기능)
+
+서버가 포트를 점유하면 테라텀 등으로 사람이 로그를 볼 수 없으므로, stdlib `http.server` 기반 웹 뷰어를 내장한다(새 의존성 0). 상세 설계: `docs/superpowers/specs/2026-06-10-web-log-viewer-design.md`.
+
+- `SERIAL_WEB` 환경변수: 기본 `8743`(켜짐). `0`/`false`/`no`/`off` → 비활성. 포트 점유 시 임시 포트로 자동 폴백, 실제 URL은 도구 응답 `viewer_url`로 보고.
+- `127.0.0.1` 바인딩만(외부 접속 불가). 전 라우트 GET 읽기 전용 — 서버 상태를 바꾸는 엔드포인트 없음.
+- 탭 2개: 실시간 스트림(수신 원본 — 빈 줄·필터 제외 줄 포함, tee와 동일 충실도) / 링버퍼(접힘·필터 적용 가공 뷰).
+- 컬러: ANSI 해석 > 에러·경고 라인 틴트 > 성공 키워드 > JSON 절제 > 메타 dim ("색은 신호" 원칙).
+- 불변식: 뷰어 실패는 MCP 서버에 영향 없음 / 느린 브라우저가 시리얼 경로를 막지 않음(drop-oldest).
+
 ---
 
 ### 부록: 구현 상태 (2026-06-10)
@@ -134,5 +144,6 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - 단위 테스트 완료(2026-06-10): pytest 56개 — `ring_buffer`(dedup·필터·ring·query·동시성, 21) + 도구 6종 계약(11) + 리더 라인처리·tee(6) + 설정 로딩(16) + 스모크(2). 코드 리뷰 보강 4개 포함(tee×필터/dedup 상호작용, query 원문 검색, status 미연결 분기). 테스트 가능성 확보를 위해 `SerialReader._ingest()`(I/O 루프에서 라인처리 분리)와 `_load_config()`/`_env_int(env,…)`(환경변수 계약)를 **동작 보존** 추출. 계획서: `docs/superpowers/plans/2026-06-09-serial-mcp-test-suite.md`.
 - 실장비 검증 완료(2026-06-10): MCP stdio 클라이언트로 서버를 스폰해 6개 도구 전부 엔드투엔드 확인. 블랙박스 루프 검증 — `clear_log_buffer` → 사람이 리셋 → 부트 ROM 배너(`ESP-ROM:esp32s3-20210327`, `rst:0x1 (POWERON)`, `entry 0x403c88b8`)부터 부팅 시퀀스 전체 회수, `query_serial_logs`로 부팅 마커 17줄 매칭. 부팅 버스트(2초에 50줄+) 손실 없음, stdout 오염 없음.
 - 실로그 관찰 → 조정 완료(2026-06-10): SSM 펌웨어가 메시지마다 빈 줄을 교대로 출력(`"" → [IOc] Disconnected! → "" → …`)해 dedup이 실전에서 한 번도 접지 못하던 문제를 **공백뿐인 줄 저장 제외(§4.3)**로 해결. TDD로 구현, 테스트 58개.
+- 웹 로그 뷰어 구현(2026-06-10, §10): RawFeed 허브 + ViewerServer(stdlib HTTP/SSE) + 단일 페이지. 도구 응답 viewer_url 포함.
 - 미완: silotek-tools 측 플러그인(plugin.json + SKILL.md), GitHub push.
 - 테스트 장비: ESP32-S3(SSM 펌웨어), COM4(CH343), 115200.
