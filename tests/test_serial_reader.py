@@ -109,3 +109,16 @@ def test_ingest_without_on_line_still_works():
     r._tee = None
     r._ingest(b"x\n", BASE)
     assert buf.info()["entries"] == 1
+
+
+def test_ingest_isolates_on_line_exception():
+    # 훅(자동 식별 등) 오류가 리더 스레드를 죽이면 안 된다(무음 수집 중단 방지)
+    buf = LineBuffer(maxlen=10, dedup=0)
+
+    def boom(ts, text):
+        raise RuntimeError("훅 폭발")
+
+    r = SerialReader(port="COM_TEST", baud=115200, buffer=buf, on_line=boom)
+    r._tee = None
+    r._ingest(b"x\n", BASE)          # 예외가 새어 나오면 테스트 실패
+    assert buf.info()["entries"] == 1

@@ -206,3 +206,27 @@ def test_autoname_noop_without_rules(monkeypatch, dual):
     monkeypatch.setattr(srv, "_autoname_rules", [])
     srv._autoname_check(b, "***Send to the STM32")
     assert b.name is None
+
+
+# ---- 코드리뷰 보강: 라벨 해석·clear 계약 타입·tee 경로 ----
+
+def test_resolve_accepts_label_form(dual):
+    # 에러 응답의 ports 목록("SSM (COM_A)")을 그대로 되돌려도 해석돼야 복구 루프가 닫힌다
+    a, _ = dual
+    a.buffer.add("hello", BASE)
+    assert srv.get_recent_logs(port="SSM (COM_A)")["count"] == 1
+
+
+def test_clear_error_keeps_ports_dict_type(dual):
+    # 한 도구 안에서 ports 키 타입은 항상 dict — 후보 목록은 available_ports로
+    out = srv.clear_log_buffer(port="NOPE")
+    assert out["status"] == "error"
+    assert out["ports"] == {}
+    assert any("COM_B" in s for s in out["available_ports"])
+
+
+def test_tee_path_for_inserts_tag_and_sanitizes():
+    assert srv._tee_path_for("log.txt", "SSM") == "log.SSM.txt"
+    assert srv._tee_path_for("log.txt", "SB1 (COM13)") == "log.SB1__COM13_.txt"
+    assert srv._tee_path_for("noext", "A") == "noext.A"
+    assert srv._tee_path_for(None, "SSM") is None

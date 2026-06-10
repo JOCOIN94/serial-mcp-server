@@ -131,11 +131,11 @@ class ViewerServer:
         self.url: Optional[str] = None   # 기동 성공 시 http://127.0.0.1:{port}, 실패 시 None
 
     def start(self) -> None:
-        for port in (self._preferred_port, 0):   # 선호 포트 점유 시 임시 포트로 폴백
+        for port in (self._preferred_port, 0):   # 선호 포트 점유/이상 시 임시 포트로 폴백
             try:
                 self._httpd = _ViewerHTTPServer(("127.0.0.1", port), _Handler)
                 break
-            except OSError as e:
+            except (OSError, OverflowError) as e:   # OverflowError: 0~65535 범위 밖 포트
                 _log(f"웹 뷰어 포트 {port} 바인딩 실패: {e}")
         if self._httpd is None:
             _log("웹 뷰어 비활성 — 포트 바인딩 전부 실패")
@@ -411,6 +411,7 @@ function connectStream(port) {   // 포트 전환 = 스트림 화면 리셋 + �
   if (es) es.close();
   currentPort = port;
   $("stream").innerHTML = "";
+  $("buffer").innerHTML = "";   // 이전 포트의 버퍼 잔류 방지(다음 폴링까지 빈 화면)
   streamLines = 0; streamLastSec = null; newCount = 0;
   $("newpill").style.display = "none";
   updateStreamTab();
@@ -566,7 +567,7 @@ async function initPorts() {   // 포트 목록 → 셀렉터 구성 → 첫 포
       sel.appendChild(o);
     }
     if ((d.ports || []).length <= 1) sel.style.display = "none";   // 1개면 셀렉터 불필요
-    sel.onchange = () => { connectStream(sel.value); refreshStatus(); };
+    sel.onchange = () => { connectStream(sel.value); refreshStatus(); refreshBuffer(); };
     if ((d.ports || []).length) connectStream(d.ports[0].port);
     refreshStatus();
   } catch (e) { $("port").textContent = "(포트 목록 조회 실패)"; }

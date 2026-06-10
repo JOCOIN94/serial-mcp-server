@@ -113,3 +113,15 @@ def test_port_fallback_when_preferred_busy():
             v.stop()
     finally:
         blocker.close()
+
+
+def test_start_with_out_of_range_port_falls_back_not_crash():
+    # SERIAL_WEB 오타(99999)가 OverflowError로 본체를 죽이면 안 된다 — 임시 포트 폴백
+    v = ViewerServer(ports_info=lambda: [], feed_for=lambda p: None,
+                     buffer_info=lambda p: {}, status_info=lambda: {"ports": []},
+                     port=99999)
+    v.start()
+    try:
+        assert v.url is not None
+    finally:
+        v.stop()

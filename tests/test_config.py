@@ -92,3 +92,14 @@ def test_load_config_web_custom_port():
 
 def test_load_config_web_invalid_falls_back_to_default():
     assert _load_config({"SERIAL_WEB": "abc"})["web"] == 8743
+
+
+@pytest.mark.parametrize("val", ["99999", "65536", "-1"])
+def test_load_config_web_out_of_range_falls_back(val):
+    # 범위 밖 포트가 그대로 흘러가면 socket.bind에서 OverflowError로 서버가 죽는다
+    assert _load_config({"SERIAL_WEB": val})["web"] == 8743
+
+
+def test_load_config_bufferlines_nonpositive_falls_back():
+    assert _load_config({"SERIAL_BUFFER_LINES": "-5"})["maxlen"] == 2000
+    assert _load_config({"SERIAL_BUFFER_LINES": "0"})["maxlen"] == 2000

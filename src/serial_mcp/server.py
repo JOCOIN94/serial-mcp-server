@@ -158,7 +158,10 @@ class SerialReader:
         if self.feed is not None:
             self.feed.publish(ts, text)   # 수신 원본 생중계(빈 줄 포함 — tee와 동일 충실도)
         if self.on_line is not None:
-            self.on_line(ts, text)
+            try:
+                self.on_line(ts, text)
+            except Exception as e:  # noqa: BLE001 - 훅 오류가 리더 스레드를 죽이면 안 됨
+                _log(f"on_line 훅 오류({self.port}): {e!r}")
         if self._tee is not None:
             try:
                 stamp = ts.strftime("%Y-%m-%d %H:%M:%S.") + f"{ts.microsecond // 1000:03d}"
@@ -173,6 +176,7 @@ _monitors: dict[str, "PortMonitor"] = {}   # key = 포트명 대문자
 _config: dict = {}
 _viewer: Optional[ViewerServer] = None
 _autoname_rules: list = []   # SERIAL_AUTONAME 컴파일 결과 [(이름, re.Pattern)]
+_autoname_lock = threading.Lock()   # 검사-부여 원자화(동시 리셋 시 중복 이름 방지)
 
 
 @dataclass
@@ -206,9 +210,12 @@ def _autoname_check(mon: PortMonitor, text: str) -> None:
     name = first_autoname_match(text, _autoname_rules)
     if name is None:
         return
-    if any(m.name == name for m in _monitors.values()):
-        return   # 같은 이름이 이미 존재 — 중복 부여 금지
-    mon.name = name
+    with _autoname_lock:   # 리더 스레드 N개의 동시 첫-매칭(동시 리셋) TOCTOU 방지
+        if mon.name is not None:
+            return
+        if any(m.name == name for m in _monitors.values()):
+            return   # 같은 이름이 이미 존재 — 중복 부여 금지
+        mon.name = name
     _log(f"자동 식별: {mon.port} → {name} (SERIAL_AUTONAME 패턴 매칭)")
 
 
@@ -234,7 +241,8 @@ def _resolve_port(port: str) -> tuple[Optional[PortMonitor], Optional[dict]]:
             "ports": [m.label for m in _monitors.values()],
         }
     for m in _monitors.values():
-        if m.port.upper() == key or (m.name and m.name.upper() == key):
+        # 라벨 형태("SSM (COM4)")도 허용 — 에러 응답의 ports 목록을 그대로 되돌려도 해석
+        if m.port.upper() == key or (m.name and m.name.upper() == key) or m.label.upper() == key:
             return m, None
     return None, {
         "status": "error",
@@ -439,7 +447,10 @@ def clear_log_buffer(port: str = "") -> dict:
     if (port or "").strip():
         mon, err = _resolve_port(port)
         if err:
-            return {**err, "cleared": 0}
+            # 이 도구의 ports 키는 항상 dict(포트별 내역) — 후보 목록은 available_ports로
+            e = dict(err)
+            e["available_ports"] = e.pop("ports", [])
+            return {**e, "cleared": 0, "ports": {}}
         n = mon.buffer.clear()
         return {"status": "ok", "message": f"{mon.label}: {n}개 항목 비움",
                 "cleared": n, "ports": {mon.port: n}}
@@ -526,18 +537,34 @@ def _parse_dedup(env: Mapping[str, str]) -> int:
     return 5
 
 
+def _parse_maxlen(env: Mapping[str, str]) -> int:
+    """SERIAL_BUFFER_LINES 파싱 — 0 이하면 기본 2000(deque(maxlen<0)은 기동 실패)."""
+    n = _env_int(env, "SERIAL_BUFFER_LINES", 2000)
+    if n <= 0:
+        _log(f"환경변수 SERIAL_BUFFER_LINES={n} 은 1 이상이어야 함 → 기본 2000 사용")
+        return 2000
+    return n
+
+
 def _parse_web(env: Mapping[str, str]) -> Optional[int]:
-    """SERIAL_WEB 파싱 — 기본 8743(켜짐). 0/false/no/off → 비활성(None), 정수 → 포트."""
+    """SERIAL_WEB 파싱 — 기본 8743(켜짐). 0/false/no/off → 비활성(None), 정수 → 포트.
+
+    1~65535 밖이면 기본값으로 — 범위 밖 포트는 socket.bind에서 OverflowError로
+    서버 기동 자체를 죽일 수 있다(뷰어 실패는 본체에 영향 없어야 한다는 불변식).
+    """
     raw = env.get("SERIAL_WEB", "").strip()
     if raw == "":
         return 8743
     if raw.lower() in ("0", "false", "no", "off"):
         return None
     try:
-        return int(raw)
+        n = int(raw)
+        if 1 <= n <= 65535:
+            return n
     except ValueError:
-        _log(f"환경변수 SERIAL_WEB={raw!r} 해석 실패 → 기본 포트 8743 사용")
-        return 8743
+        pass
+    _log(f"환경변수 SERIAL_WEB={raw!r} 해석 실패(1~65535 필요) → 기본 포트 8743 사용")
+    return 8743
 
 
 def _load_config(env: Mapping[str, str]) -> dict:
@@ -554,7 +581,7 @@ def _load_config(env: Mapping[str, str]) -> dict:
         "tee": env.get("SERIAL_TEE", "").strip() or None,
         "exclude": env.get("SERIAL_EXCLUDE", "").strip() or None,
         "include": env.get("SERIAL_INCLUDE", "").strip() or None,
-        "maxlen": _env_int(env, "SERIAL_BUFFER_LINES", 2000),
+        "maxlen": _parse_maxlen(env),
         "dedup": _parse_dedup(env),
         "web": _parse_web(env),
     }
@@ -585,7 +612,12 @@ def main() -> None:
         _log(f"자동 스캔: USB 시리얼 {len(specs)}개 발견")
     sn_map = {p.device.upper(): getattr(p, "serial_number", None) for p in com}
 
+    # 1패스: 모니터 전부 생성·등록 (리더 시작 전 — 리더 스레드의 _autoname_check가
+    # _monitors를 순회하므로, 순회 중 dict 변경이 없도록 등록을 먼저 끝낸다)
     for port, baud_override in specs:
+        if port.upper() in _monitors:
+            _log(f"중복 포트 무시: {port}")
+            continue
         baud = baud_override or cfg["baud"]
         name = name_for(port, sn_map.get(port.upper()), cfg["names"])
         buf = LineBuffer(maxlen=cfg["maxlen"], dedup=cfg["dedup"],
@@ -595,13 +627,15 @@ def main() -> None:
         on_line = None
         if _autoname_rules and name is None:   # 명시 별칭 없을 때만 자동 식별 후킹
             on_line = (lambda ts, text, m=mon: _autoname_check(m, text))
-        reader = SerialReader(port=port, baud=baud, buffer=buf,
-                              tee_path=_tee_path_for(cfg["tee"], name or port),
-                              feed=feed, on_line=on_line)
-        mon.reader = reader
+        mon.reader = SerialReader(port=port, baud=baud, buffer=buf,
+                                  tee_path=_tee_path_for(cfg["tee"], name or port),
+                                  feed=feed, on_line=on_line)
         _monitors[port.upper()] = mon
-        reader.start()
-        _log(f"모니터 시작: {mon.label} @ {baud}")
+
+    # 2패스: 등록이 끝난 뒤 리더 일괄 시작
+    for mon in _monitors.values():
+        mon.reader.start()
+        _log(f"모니터 시작: {mon.label} @ {mon.reader.baud}")
 
     if not _monitors:
         _log("경고: 모니터링할 포트 없음 — USB 시리얼이 안 보이고 SERIAL_PORT 도 "
