@@ -567,6 +567,27 @@ def _parse_web(env: Mapping[str, str]) -> Optional[int]:
     return 8743
 
 
+def _parse_hotplug(env: Mapping[str, str]) -> Optional[float]:
+    """SERIAL_HOTPLUG 파싱 — 핫플러그 스캔 간격(초). 기본 5(켜짐).
+
+    0/false/no/off → 끔(None), 양수(소수 허용) → 간격. 자동 스캔 모드에서만
+    의미가 있다(SERIAL_PORT 고정 목록 모드는 main()이 스캔 스레드를 띄우지 않음).
+    """
+    raw = env.get("SERIAL_HOTPLUG", "").strip().lower()
+    if raw == "":
+        return 5.0
+    if raw in ("0", "false", "no", "off"):
+        return None
+    try:
+        n = float(raw)
+        if n > 0:
+            return n
+    except ValueError:
+        pass
+    _log(f"환경변수 SERIAL_HOTPLUG={raw!r} 해석 실패(양수 초 필요) → 기본 5초 사용")
+    return 5.0
+
+
 def _load_config(env: Mapping[str, str]) -> dict:
     """환경변수 매핑에서 서버 설정을 파싱해 dict로 반환(부작용 없음, 순수 함수).
 
@@ -584,6 +605,7 @@ def _load_config(env: Mapping[str, str]) -> dict:
         "maxlen": _parse_maxlen(env),
         "dedup": _parse_dedup(env),
         "web": _parse_web(env),
+        "hotplug": _parse_hotplug(env),
     }
 
 

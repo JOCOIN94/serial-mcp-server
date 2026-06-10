@@ -32,6 +32,7 @@ def test_load_config_defaults_when_empty():
     assert _load_config({}) == {
         "ports": [], "names": {}, "autoname": [], "baud": 115200, "tee": None,
         "exclude": None, "include": None, "maxlen": 2000, "dedup": 5, "web": 8743,
+        "hotplug": 5.0,
     }
 
 
@@ -42,12 +43,13 @@ def test_load_config_reads_all_vars():
         "SERIAL_BAUD": "57600", "SERIAL_TEE": "log.txt",
         "SERIAL_EXCLUDE": "DEBUG", "SERIAL_INCLUDE": "ERROR",
         "SERIAL_BUFFER_LINES": "500", "SERIAL_DEDUP": "0", "SERIAL_WEB": "9000",
+        "SERIAL_HOTPLUG": "10",
     })
     assert cfg == {
         "ports": [("COM4", None), ("COM13", 9600)], "names": {"COM4": "SSM"},
         "autoname": [("SB1", "STM32")],
         "baud": 57600, "tee": "log.txt", "exclude": "DEBUG", "include": "ERROR",
-        "maxlen": 500, "dedup": 0, "web": 9000,
+        "maxlen": 500, "dedup": 0, "web": 9000, "hotplug": 10.0,
     }
 
 
@@ -103,3 +105,24 @@ def test_load_config_web_out_of_range_falls_back(val):
 def test_load_config_bufferlines_nonpositive_falls_back():
     assert _load_config({"SERIAL_BUFFER_LINES": "-5"})["maxlen"] == 2000
     assert _load_config({"SERIAL_BUFFER_LINES": "0"})["maxlen"] == 2000
+
+
+# ---- SERIAL_HOTPLUG (핫플러그 스캔 간격) ----
+
+def test_load_config_hotplug_default_on():
+    assert _load_config({})["hotplug"] == 5.0
+
+
+@pytest.mark.parametrize("val", ["0", "false", "no", "off", "OFF"])
+def test_load_config_hotplug_disabled(val):
+    assert _load_config({"SERIAL_HOTPLUG": val})["hotplug"] is None
+
+
+def test_load_config_hotplug_custom_interval():
+    assert _load_config({"SERIAL_HOTPLUG": "10"})["hotplug"] == 10.0
+    assert _load_config({"SERIAL_HOTPLUG": "2.5"})["hotplug"] == 2.5
+
+
+@pytest.mark.parametrize("val", ["abc", "-3"])
+def test_load_config_hotplug_invalid_falls_back(val):
+    assert _load_config({"SERIAL_HOTPLUG": val})["hotplug"] == 5.0
