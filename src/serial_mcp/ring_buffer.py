@@ -142,3 +142,21 @@ class LineBuffer:
             n = len(self._buf)
             self._buf.clear()
             return n
+
+    def snapshot(self) -> list[dict]:
+        """웹 뷰어 버퍼 탭용 구조화 뷰(시간 오름차순).
+
+        render() 문자열 대신 본문/시각/반복수를 분리해 반환한다 — 클라이언트가
+        메타(타임스탬프·반복 표기)를 본문과 다른 색으로 칠할 수 있게.
+        """
+        with self._lock:
+            items = list(self._buf)
+        return [
+            {
+                "text": e.text,
+                "first_ts": _fmt_ts(e.first_ts),
+                "last_ts": _fmt_ts(e.last_ts),
+                "count": e.count,
+            }
+            for e in items
+        ]

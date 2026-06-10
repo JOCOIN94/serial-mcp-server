@@ -229,3 +229,25 @@ def test_concurrent_adds_are_thread_safe():
     assert info["total_received"] == 8000   # Lock 하에 손실 없음
     assert info["total_stored"] == 8000
     assert info["entries"] == 8000
+
+
+# ---- snapshot (웹 뷰어 버퍼 탭용 구조화 뷰) ----
+
+def test_snapshot_empty_buffer():
+    assert LineBuffer(maxlen=5).snapshot() == []
+
+
+def test_snapshot_returns_structured_entries_with_fold():
+    buf = LineBuffer(maxlen=10, dedup=True)
+    buf.add("tick", BASE)
+    buf.add("tick", datetime(2026, 6, 9, 14, 0, 5, 0))
+    assert buf.snapshot() == [
+        {"text": "tick", "first_ts": "14:00:00.000", "last_ts": "14:00:05.000", "count": 2}
+    ]
+
+
+def test_snapshot_chronological_order():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    buf.add("first", BASE)
+    buf.add("second", BASE)
+    assert [e["text"] for e in buf.snapshot()] == ["first", "second"]
