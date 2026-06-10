@@ -13,6 +13,7 @@ AI(Claude Code)는 6개의 읽기 전용 도구로 그 버퍼를 조회한다.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import sys
@@ -172,7 +173,11 @@ class SerialReader:
 
 # ---- 전역 상태 (main 에서 초기화) ----
 mcp = FastMCP("serial-mcp")
-_monitors: dict[str, "PortMonitor"] = {}   # key = 포트명 대문자
+# key = 포트명 대문자. ⚠️ 불변식: 핫플러그 스레드 기동 후엔 in-place 변경 금지 —
+# 갱신은 _hotplug_scan_once 의 copy-on-write(새 dict 원자 교체)만(단일 작성자 가정.
+# 작성자를 추가하려면 — 예: 수동 재스캔 도구 — 교체 구간에 락이 필요해진다).
+# 리더 스레드(_autoname_check)·도구가 순회 중인 옛 dict 는 불변이라야 안전하다.
+_monitors: dict[str, "PortMonitor"] = {}
 _config: dict = {}
 _viewer: Optional[ViewerServer] = None
 _autoname_rules: list = []   # SERIAL_AUTONAME 컴파일 결과 [(이름, re.Pattern)]
@@ -571,18 +576,20 @@ def _parse_web(env: Mapping[str, str]) -> Optional[int]:
 def _parse_hotplug(env: Mapping[str, str]) -> Optional[float]:
     """SERIAL_HOTPLUG 파싱 — 핫플러그 스캔 간격(초). 기본 5(켜짐).
 
-    0/false/no/off → 끔(None), 양수(소수 허용) → 간격. 자동 스캔 모드에서만
-    의미가 있다(SERIAL_PORT 고정 목록 모드는 main()이 스캔 스레드를 띄우지 않음).
+    0(0.0 포함)/false/no/off → 끔(None), 유한 양수(소수 허용) → 간격. 자동 스캔
+    모드에서만 의미가 있다(SERIAL_PORT 고정 목록 모드는 스캔 스레드를 띄우지 않음).
     """
     raw = env.get("SERIAL_HOTPLUG", "").strip().lower()
     if raw == "":
         return 5.0
-    if raw in ("0", "false", "no", "off"):
+    if raw in ("false", "no", "off"):
         return None
     try:
         n = float(raw)
-        if n > 0:
-            return n
+        if n == 0:
+            return None   # "0"·"0.0" 모두 끔 — 표기 차이로 켜짐/꺼짐이 갈리면 안 됨
+        if n > 0 and math.isfinite(n):
+            return n      # inf 는 사실상 무음 비활성이라 해석 실패로 취급
     except ValueError:
         pass
     _log(f"환경변수 SERIAL_HOTPLUG={raw!r} 해석 실패(양수 초 필요) → 기본 5초 사용")

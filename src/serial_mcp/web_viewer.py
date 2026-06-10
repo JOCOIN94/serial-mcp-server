@@ -498,10 +498,22 @@ setInterval(refreshBuffer, 2000);
 async function refreshStatus() {
   try {
     const d = await (await fetch("/api/status")).json();
-    for (const o of $("psel").options) {   // 자동 식별(SERIAL_AUTONAME)로 별칭이 늦게 확정되면 라벨 동기화
+    const sel = $("psel");
+    for (const o of sel.options) {   // 자동 식별(SERIAL_AUTONAME)로 별칭이 늦게 확정되면 라벨 동기화
       const m = (d.ports || []).find(x => x.port === o.value);
       if (m && o.textContent !== m.label) o.textContent = m.label;
     }
+    for (const m of d.ports || []) {   // 핫플러그로 늘어난 포트를 셀렉터에 추가(서버는 런타임에 모니터를 늘린다)
+      if (![...sel.options].some(o => o.value === m.port)) {
+        const o = document.createElement("option");
+        o.value = m.port;
+        o.textContent = m.label;
+        sel.appendChild(o);
+      }
+    }
+    if (sel.options.length > 1) sel.style.display = "";   // 2개째부터 셀렉터 노출(initPorts가 숨겼어도)
+    if (!currentPort && (d.ports || []).length)
+      connectStream(d.ports[0].port);   // 포트 0개로 기동 후 첫 보드가 꽂힌 경우 — 스트림 자동 연결
     const p = (d.ports || []).find(x => x.port === currentPort) || (d.ports || [])[0];
     if (!p) { $("dot").className = "dot"; $("port").textContent = "(모니터링 포트 없음)"; return; }
     $("dot").className = "dot" + (p.connected ? " on" : "");

@@ -573,12 +573,12 @@ git -C C:\Users\User\projects\silotek-tools commit -m "feat: serial-mcp 0.1.1 �
 
 ### Task 6: 최종 검증
 
-- [ ] **Step 1: 전체 테스트 + 문법**
+- [x] **Step 1: 전체 테스트 + 문법**
 
 Run: `uv run pytest -q && py -m compileall -q src`
 Expected: 전건 PASS, compileall 무출력
 
-- [ ] **Step 2: 순수 로직 스모크** (PowerShell)
+- [x] **Step 2: 순수 로직 스모크** (PowerShell)
 
 ```powershell
 $env:PYTHONPATH="src"

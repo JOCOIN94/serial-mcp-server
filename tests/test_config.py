@@ -113,8 +113,9 @@ def test_load_config_hotplug_default_on():
     assert _load_config({})["hotplug"] == 5.0
 
 
-@pytest.mark.parametrize("val", ["0", "false", "no", "off", "OFF"])
+@pytest.mark.parametrize("val", ["0", "0.0", "false", "no", "off", "OFF"])
 def test_load_config_hotplug_disabled(val):
+    # "0.0"도 끔 — 정수 0만 끄고 0.0은 켜지는 비일관 방지(코드리뷰 반영)
     assert _load_config({"SERIAL_HOTPLUG": val})["hotplug"] is None
 
 
@@ -123,6 +124,7 @@ def test_load_config_hotplug_custom_interval():
     assert _load_config({"SERIAL_HOTPLUG": "2.5"})["hotplug"] == 2.5
 
 
-@pytest.mark.parametrize("val", ["abc", "-3"])
+@pytest.mark.parametrize("val", ["abc", "-3", "inf", "nan"])
 def test_load_config_hotplug_invalid_falls_back(val):
+    # inf/nan은 양수로 통과하면 사실상 무음 비활성 — 해석 실패로 취급(코드리뷰 반영)
     assert _load_config({"SERIAL_HOTPLUG": val})["hotplug"] == 5.0

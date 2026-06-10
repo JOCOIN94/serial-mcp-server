@@ -143,6 +143,15 @@ def test_scan_noop_when_nothing_new(monkeypatch, scan_env):
     assert srv._monitors is before               # 변화 없으면 dict 교체도 없음
 
 
+def test_scan_hooks_autoname_on_new_unnamed_port(monkeypatch, scan_env):
+    """핫플러그로 추가된 무명 포트도 기동 경로와 동일하게 autoname 훅을 단다."""
+    monkeypatch.setattr(srv, "_autoname_rules", srv.compile_autoname([("SB1", r"STM32")]))
+    monkeypatch.setattr(srv.list_ports, "comports",
+                        lambda: [usb("COM_A"), usb("COM_B")])
+    srv._hotplug_scan_once()
+    assert srv._monitors["COM_B"].reader.on_line is not None
+
+
 # ---- _hotplug_loop (주기 호출·예외 생존) ----
 
 def test_hotplug_loop_survives_scan_exceptions(monkeypatch):
