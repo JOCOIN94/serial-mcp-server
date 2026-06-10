@@ -42,7 +42,7 @@ claude mcp add --scope user serial-mcp \
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `SERIAL_PORT` | (없음=자동) | 미설정이면 USB 시리얼 전부 자동 모니터링(시작 시 1회 스캔). 지정 시 그 목록만: `COM4` 또는 `COM4,COM13@9600`. COM10 이상은 `\\.\COM10` 형식 |
+| `SERIAL_PORT` | (없음=자동) | 미설정이면 USB 시리얼 전부 자동 모니터링(실행 중 꽂은 포트도 핫플러그로 자동 추가). 지정 시 그 목록만: `COM4` 또는 `COM4,COM13@9600`. COM10 이상은 `\\.\COM10` 형식 |
 | `SERIAL_NAMES` | (없음) | 포트→보드 별칭. `COM4=SSM,COM13=SB1` 또는 USB 시리얼넘버 키 `5909024173=SSM`(포트 번호가 바뀌어도 유지). 표기·도구 port 인자에 별칭 사용 가능 |
 | `SERIAL_AUTONAME` | (없음) | **로그 내용으로 보드 자동 식별**: `이름=정규식;…`(세미콜론 구분, 순서=우선순위). 첫 매칭에서 1회 확정, `SERIAL_NAMES`가 우선. 예: `SSM=\[Proc-;SB1=Send to the STM32` |
 | `SERIAL_BAUD` | `115200` | 보드레이트 |
@@ -52,10 +52,11 @@ claude mcp add --scope user serial-mcp \
 | `SERIAL_BUFFER_LINES` | `2000` | ring buffer 크기 |
 | `SERIAL_DEDUP` | `5` | 중복 접기 룩백 윈도 — 최근 N줄 안의 같은 줄을 접음. `1`=직전 줄만, `0`으로 끔 |
 | `SERIAL_WEB` | `8743` | 웹 뷰어 포트. `0`으로 끔. 점유 시 임시 포트 폴백(실제 URL은 `viewer_url`) |
+| `SERIAL_HOTPLUG` | `5` | 자동 스캔 모드에서 새 USB 포트 감지 간격(초) — 서버 실행 중 꽂은 보드를 자동 추가. `0`으로 끄면 시작 시 1회 스캔만. `SERIAL_PORT` 지정 시 스캔 없음 |
 
 ### 다중 포트 · 별칭
 
-기본값(미설정)이면 USB 시리얼을 전부 자동 모니터링한다 — 보드 2개면 2개, 10개면 10개. 사람이 보는 모든 표기는 별칭을 설정하면 `SSM (COM4)` 형태가 된다:
+기본값(미설정)이면 USB 시리얼을 전부 자동 모니터링한다 — 보드 2개면 2개, 10개면 10개. 사람이 보는 모든 표기는 별칭을 설정하면 `SSM (COM4)` 형태가 된다. 서버 실행 중에 보드를 새로 꽂아도 몇 초 안에 자동으로 모니터링이 시작된다(핫플러그, `SERIAL_HOTPLUG`):
 
 - **Windows** (PowerShell): `setx SERIAL_NAMES "COM4=SSM,COM13=SB1"`  (새 터미널부터 적용)
 - **macOS / Linux**: `export SERIAL_NAMES="COM4=SSM"`

@@ -512,7 +512,7 @@ CLAUDE.md "문서–코드 일치" 규칙의 (B) — 새 결정이 정답이므�
 - Modify: `C:\Users\User\projects\silotek-tools\plugins\serial-mcp\.claude-plugin\plugin.json` (env, version)
 - Modify: `C:\Users\User\projects\silotek-tools\plugins\serial-mcp\skills\serial-debugging\SKILL.md` (함정·해석 절)
 
-- [ ] **Step 1: SPEC.md §3 첫 불릿 교체** — 기존:
+- [x] **Step 1: SPEC.md §3 첫 불릿 교체** — 기존:
 
 > `- 포트 결정: `SERIAL_PORT` 미설정이면 시작 시 1회 USB 시리얼(VID 보유)을 자동 스캔해 전부 모니터링한다(블루투스 가상 포트 제외, 핫플러그 없음 — 장비 추가는 서버 재시작). 설정 시 그 목록만(...)`
 
@@ -522,13 +522,13 @@ CLAUDE.md "문서–코드 일치" 규칙의 (B) — 새 결정이 정답이므�
 - 포트 결정: `SERIAL_PORT` 미설정이면 시작 시 USB 시리얼(VID 보유)을 자동 스캔해 전부 모니터링하고, 이후에도 `SERIAL_HOTPLUG` 간격(기본 5초, `0`/`false`로 끔)으로 재스캔해 **새로 꽂힌 USB 포트를 런타임에 자동 추가**한다(핫플러그 — 블루투스 가상 포트 제외). 사라진 포트의 모니터는 제거하지 않는다(버퍼·tee 보존, 재연결은 리더의 재시도 루프 담당). `SERIAL_PORT` 설정 시 그 목록만 고정 모니터링하며 핫플러그 스캔은 돌지 않는다(`COM4` 또는 `COM4,COM13@9600` — `@N`은 포트별 보드레이트, 늦게 꽂힌 포트는 재연결 루프가 잡음). 포트마다 독립 버퍼·리더·tee(`log.txt`→`log.SSM.txt`)를 갖는다.
 ```
 
-- [ ] **Step 2: SPEC.md 부록에 항목 추가** (구현 상태 목록 끝):
+- [x] **Step 2: SPEC.md 부록에 항목 추가** (구현 상태 목록 끝):
 
 ```markdown
 - 핫플러그 구현(2026-06-11): 자동 스캔 모드에서 `SERIAL_HOTPLUG` 간격(기본 5초)으로 comports() 재스캔, 신규 USB 포트를 런타임 모니터 추가. `_monitors`는 copy-on-write로 원자 교체(리더 스레드 순회와 무충돌). 모니터 조립 규칙은 `_make_monitor()`로 추출해 기동·핫플러그가 공유. 계획서: `docs/superpowers/plans/2026-06-11-serial-hotplug.md`.
 ```
 
-- [ ] **Step 3: README.md 환경변수 표에 행 추가** (`SERIAL_WEB` 행 아래):
+- [x] **Step 3: README.md 환경변수 표에 행 추가** (`SERIAL_WEB` 행 아래):
 
 ```markdown
 | `SERIAL_HOTPLUG` | `5` | 자동 스캔 모드에서 새 USB 포트 감지 간격(초) — 서버 실행 중 꽂은 보드를 자동 추가. `0`으로 끄면 시작 시 1회 스캔만. `SERIAL_PORT` 지정 시 스캔 없음 |
@@ -540,7 +540,7 @@ CLAUDE.md "문서–코드 일치" 규칙의 (B) — 새 결정이 정답이므�
 서버 실행 중에 보드를 새로 꽂아도 몇 초 안에 자동으로 모니터링이 시작된다(핫플러그, `SERIAL_HOTPLUG`).
 ```
 
-- [ ] **Step 4: silotek-tools plugin.json 갱신** — `env`에 패스스루 추가(`SERIAL_WEB` 줄 아래) + 버전 패치 범프:
+- [x] **Step 4: silotek-tools plugin.json 갱신** — `env`에 패스스루 추가(`SERIAL_WEB` 줄 아래) + 버전 패치 범프:
 
 ```json
         "SERIAL_WEB": "${SERIAL_WEB:-}",
@@ -549,13 +549,13 @@ CLAUDE.md "문서–코드 일치" 규칙의 (B) — 새 결정이 정답이므�
 
 `"version": "0.1.0"` → `"version": "0.1.1"`
 
-- [ ] **Step 5: SKILL.md 함정·해석 절에 한 줄 추가** (포트 점유 에러 불릿 아래):
+- [x] **Step 5: SKILL.md 함정·해석 절에 한 줄 추가** (포트 점유 에러 불릿 아래):
 
 ```markdown
 - **서버 기동 후에 꽂은 보드**도 핫플러그 스캔(기본 5초 간격)이 자동 추가한다 — 새 보드가 `list_serial_ports`에 monitored=false로 나오면 몇 초 뒤 재조회하고, 그래도 안 붙으면 `SERIAL_PORT` 고정 모드인지(고정 모드는 스캔 없음) 확인하라.
 ```
 
-- [ ] **Step 6: 두 레포 각각 커밋**
+- [x] **Step 6: 두 레포 각각 커밋**
 
 ```bash
 # silotek-serial-mcp 레포
