@@ -42,19 +42,25 @@ claude mcp add --scope user serial-mcp \
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `SERIAL_PORT` | (필수) | 대상 포트. Windows 의 COM10 이상은 `\\.\COM10` 형식 |
+| `SERIAL_PORT` | (없음=자동) | 미설정이면 USB 시리얼 전부 자동 모니터링(시작 시 1회 스캔). 지정 시 그 목록만: `COM4` 또는 `COM4,COM13@9600`. COM10 이상은 `\\.\COM10` 형식 |
+| `SERIAL_NAMES` | (없음) | 포트→보드 별칭. `COM4=SSM,COM13=SB1` 또는 USB 시리얼넘버 키 `5909024173=SSM`(포트 번호가 바뀌어도 유지). 표기·도구 port 인자에 별칭 사용 가능 |
 | `SERIAL_BAUD` | `115200` | 보드레이트 |
-| `SERIAL_TEE` | (없음) | 로그를 파일에도 영구 기록할 경로(버퍼에서 밀려난 줄도 보존) |
+| `SERIAL_TEE` | (없음) | 로그 영구 기록 경로 — 포트별 파일로 분리(`log.txt`→`log.SSM.txt`). 버퍼에서 밀려난 줄도 보존 |
 | `SERIAL_EXCLUDE` | (없음) | 이 정규식에 매칭되는 줄은 저장하지 않음 |
 | `SERIAL_INCLUDE` | (없음) | 지정 시 매칭되는 줄만 저장 |
 | `SERIAL_BUFFER_LINES` | `2000` | ring buffer 크기 |
-| `SERIAL_DEDUP` | `1` | 연속 중복 접기 (`0`/`false` 로 끔) |
+| `SERIAL_DEDUP` | `5` | 중복 접기 룩백 윈도 — 최근 N줄 안의 같은 줄을 접음. `1`=직전 줄만, `0`으로 끔 |
 | `SERIAL_WEB` | `8743` | 웹 뷰어 포트. `0`으로 끔. 점유 시 임시 포트 폴백(실제 URL은 `viewer_url`) |
 
-### 자기 포트 설정
+### 다중 포트 · 별칭
 
-- **Windows** (PowerShell): `setx SERIAL_PORT COM4`  (새 터미널부터 적용)
-- **macOS / Linux**: `export SERIAL_PORT=/dev/cu.usbserial-XXXX`
+기본값(미설정)이면 USB 시리얼을 전부 자동 모니터링한다 — 보드 2개면 2개, 10개면 10개. 사람이 보는 모든 표기는 별칭을 설정하면 `SSM (COM4)` 형태가 된다:
+
+- **Windows** (PowerShell): `setx SERIAL_NAMES "COM4=SSM,COM13=SB1"`  (새 터미널부터 적용)
+- **macOS / Linux**: `export SERIAL_NAMES="COM4=SSM"`
+- 특정 포트만 보려면: `setx SERIAL_PORT "COM4,COM13@9600"` (`@N`=포트별 보드레이트)
+
+AI 도구는 보드가 여러 개면 `port` 인자(별칭/포트명)를 지정해 호출한다. `clear_log_buffer`만 미지정 시 전체를 비운다.
 
 ### 자기 포트 찾기
 
@@ -69,6 +75,7 @@ claude mcp add --scope user serial-mcp \
 
 서버가 떠 있는 동안 브라우저로 `http://127.0.0.1:8743` (기본)을 열면:
 
+- **포트 셀렉터** — 보드가 여러 개면 헤더에서 `SSM (COM4)` 식으로 전환(1개면 숨김).
 - **스트림 탭** — 수신 원본 실시간 표시(테라텀 대체). 일시정지·자동스크롤·화면 지우기 지원.
 - **버퍼 탭** — AI가 보는 것과 같은 가공 뷰(중복 접힘 `(N회 반복…)` 표기 포함).
 - 에러/경고 라인 틴트, ANSI 색 해석, JSON 키 하이라이트.
