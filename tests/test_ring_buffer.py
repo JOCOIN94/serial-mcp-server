@@ -146,6 +146,17 @@ def test_query_invalid_regex_raises_re_error():
         buf.query("[")
 
 
+def test_query_searches_raw_text_not_rendered_form():
+    buf = LineBuffer(maxlen=10, dedup=True)
+    buf.add("tick", BASE)
+    buf.add("tick", BASE)   # 접힘 → render에는 '(2회 반복…)'이 붙지만
+    assert buf.query(r"반복") == []        # 검색 대상은 원문 text(접힘 표기 아님)
+    assert buf.query(r"14:00:00") == []    # 타임스탬프도 검색 대상 아님
+    got = buf.query(r"tick")
+    assert len(got) == 1
+    assert "(2회 반복" in got[0]           # 반환은 render된 형태
+
+
 # ---- info / clear ----
 
 def test_info_reports_capacity_and_endpoints():

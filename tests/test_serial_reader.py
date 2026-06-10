@@ -41,3 +41,21 @@ def test_ingest_without_tee_only_buffers():
     buf = LineBuffer(maxlen=10, dedup=False)
     _make_reader(buf, tee=None)._ingest(b"x\n", BASE)   # _tee is None → 크래시 없음
     assert buf.info()["entries"] == 1
+
+
+def test_ingest_tees_lines_dropped_by_filter():
+    buf = LineBuffer(maxlen=10, dedup=False, exclude=r"DEBUG")
+    tee = io.StringIO()
+    _make_reader(buf, tee=tee)._ingest(b"DEBUG noise\n", BASE)
+    assert buf.info()["entries"] == 0           # 버퍼에서는 걸러지지만
+    assert "DEBUG noise" in tee.getvalue()      # tee에는 수신 원본 보존(SPEC §3)
+
+
+def test_ingest_tees_every_repeat_even_when_deduped():
+    buf = LineBuffer(maxlen=10, dedup=True)
+    tee = io.StringIO()
+    r = _make_reader(buf, tee=tee)
+    r._ingest(b"tick\n", BASE)
+    r._ingest(b"tick\n", BASE)
+    assert buf.info()["entries"] == 1           # 버퍼는 접히지만
+    assert tee.getvalue().count("tick") == 2    # tee는 반복 줄도 전부 기록

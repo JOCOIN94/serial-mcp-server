@@ -65,6 +65,21 @@ def test_get_serial_status_with_connected_reader(monkeypatch):
     assert out["opened_at"] == "2026-06-09T14:00:00"
 
 
+def test_get_serial_status_with_disconnected_reader(monkeypatch):
+    fake_reader = SimpleNamespace(
+        connected=False, port="COM4", baud=115200,
+        last_error="포트 열기 실패(COM4): Access is denied", opened_at=None,
+    )
+    monkeypatch.setattr(srv, "_reader", fake_reader)
+    monkeypatch.setattr(srv, "_config", {"tee": None})
+    out = srv.get_serial_status()
+    assert out["status"] == "ok"            # 리더가 존재하므로 error 아님
+    assert out["connected"] is False
+    assert out["message"] == "연결 안 됨"
+    assert "포트 열기 실패" in out["last_error"]   # 점유/권한 진단 근거 전달
+    assert out["opened_at"] is None
+
+
 # ---- get_recent_logs ----
 
 def test_get_recent_logs_returns_buffer_lines(buffer):

@@ -126,6 +126,6 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 
 ### 부록: 구현 상태 (2026-06-10)
 - 코어 서버 스캐폴딩 완료: `ring_buffer.py`(순수 로직), `server.py`(FastMCP + 리더 스레드 + 6개 도구), `pyproject.toml`, README.
-- 단위 테스트 완료(2026-06-10): pytest 52개 — `ring_buffer`(dedup·필터·ring·query·동시성, 20) + 도구 6종 계약(10) + 리더 라인처리(4) + 설정 로딩(16) + 스모크(2). 테스트 가능성 확보를 위해 `SerialReader._ingest()`(I/O 루프에서 라인처리 분리)와 `_load_config()`/`_env_int(env,…)`(환경변수 계약)를 **동작 보존** 추출. 계획서: `docs/superpowers/plans/2026-06-09-serial-mcp-test-suite.md`.
+- 단위 테스트 완료(2026-06-10): pytest 56개 — `ring_buffer`(dedup·필터·ring·query·동시성, 21) + 도구 6종 계약(11) + 리더 라인처리·tee(6) + 설정 로딩(16) + 스모크(2). 코드 리뷰 보강 4개 포함(tee×필터/dedup 상호작용, query 원문 검색, status 미연결 분기). 테스트 가능성 확보를 위해 `SerialReader._ingest()`(I/O 루프에서 라인처리 분리)와 `_load_config()`/`_env_int(env,…)`(환경변수 계약)를 **동작 보존** 추출. 계획서: `docs/superpowers/plans/2026-06-09-serial-mcp-test-suite.md`.
 - 미완: 실장비 검증(ESP32-S3/COM4), silotek-tools 측 플러그인(plugin.json + SKILL.md), GitHub push.
 - 테스트 장비: ESP32-S3(SSM 펌웨어), COM4(CH343), 115200.
