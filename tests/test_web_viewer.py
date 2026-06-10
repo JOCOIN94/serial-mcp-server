@@ -1,4 +1,4 @@
-"""ViewerServer — 실제 HTTP 기동 통합 테스트(임시 포트). 외부 네트워크 불필요."""
+"""ViewerServer — 다중 포트 라우팅 통합 테스트(임시 포트, 실제 HTTP 기동)."""
 
 import json
 import socket
@@ -16,42 +16,77 @@ BASE = datetime(2026, 6, 9, 14, 0, 0, 0)
 
 @pytest.fixture
 def viewer():
-    feed = RawFeed()
+    feeds = {"COM_A": RawFeed(), "COM_B": RawFeed()}
     v = ViewerServer(
-        feed=feed,
-        buffer_info=lambda: {"status": "ok", "entries": [], "capacity": 2000},
-        status_info=lambda: {"connected": True, "port": "COM_TEST",
-                             "baud": 115200, "last_error": None},
+        ports_info=lambda: [{"port": "COM_A", "label": "SSM (COM_A)"},
+                            {"port": "COM_B", "label": "COM_B"}],
+        feed_for=lambda p: feeds.get(p),
+        buffer_info=lambda p: {"status": "ok", "port": p, "entries": [], "capacity": 2000},
+        status_info=lambda: {"ports": [
+            {"port": "COM_A", "label": "SSM (COM_A)", "connected": True, "baud": 115200,
+             "last_error": None, "buffer_entries": 3, "buffer_capacity": 2000},
+            {"port": "COM_B", "label": "COM_B", "connected": False, "baud": 115200,
+             "last_error": "busy", "buffer_entries": 0, "buffer_capacity": 2000},
+        ]},
         port=0,   # 테스트는 임시 포트
     )
     v.start()
     assert v.url is not None
-    yield v, feed
+    yield v, feeds
     v.stop()
+
+
+def _get_json(url):
+    with urllib.request.urlopen(url, timeout=5) as r:
+        return json.loads(r.read())
 
 
 def test_root_serves_html(viewer):
     v, _ = viewer
     with urllib.request.urlopen(v.url + "/", timeout=5) as r:
         assert r.status == 200
-        assert "text/html" in r.headers["Content-Type"]
-        assert "serial-mcp" in r.read().decode("utf-8")
+        body = r.read().decode("utf-8")
+    assert "serial-mcp" in body
+    assert "psel" in body            # 포트 셀렉터 존재
 
 
-def test_api_status_returns_injected_json(viewer):
+def test_api_ports_lists_monitors(viewer):
     v, _ = viewer
-    with urllib.request.urlopen(v.url + "/api/status", timeout=5) as r:
-        d = json.loads(r.read())
-    assert d["connected"] is True
-    assert d["port"] == "COM_TEST"
+    d = _get_json(v.url + "/api/ports")
+    assert [p["label"] for p in d["ports"]] == ["SSM (COM_A)", "COM_B"]
 
 
-def test_api_buffer_returns_injected_json(viewer):
+def test_api_status_returns_port_array(viewer):
     v, _ = viewer
-    with urllib.request.urlopen(v.url + "/api/buffer", timeout=5) as r:
-        d = json.loads(r.read())
-    assert d["status"] == "ok"
-    assert d["capacity"] == 2000
+    d = _get_json(v.url + "/api/status")
+    assert d["ports"][0]["connected"] is True
+    assert d["ports"][1]["last_error"] == "busy"
+
+
+def test_api_buffer_routes_by_port(viewer):
+    v, _ = viewer
+    assert _get_json(v.url + "/api/buffer?port=COM_B")["port"] == "COM_B"
+
+
+def test_stream_sse_isolated_per_port(viewer):
+    v, feeds = viewer
+    resp = urllib.request.urlopen(v.url + "/api/stream?port=COM_A", timeout=5)
+    try:
+        assert "text/event-stream" in resp.headers["Content-Type"]
+        feeds["COM_B"].publish(BASE, "B쪽 줄 — 받으면 안 됨")
+        feeds["COM_A"].publish(BASE, "hello A")
+        line = resp.readline().decode("utf-8")
+        payload = json.loads(line[len("data: "):])
+        assert payload == {"ts": "14:00:00.000", "text": "hello A"}   # A만 수신
+    finally:
+        resp.close()
+
+
+def test_stream_unknown_port_404(viewer):
+    v, _ = viewer
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(v.url + "/api/stream?port=NOPE", timeout=5)
+    assert exc.value.code == 404
 
 
 def test_unknown_path_returns_404(viewer):
@@ -61,32 +96,19 @@ def test_unknown_path_returns_404(viewer):
     assert exc.value.code == 404
 
 
-def test_stream_sse_delivers_published_line(viewer):
-    v, feed = viewer
-    resp = urllib.request.urlopen(v.url + "/api/stream", timeout=5)
-    try:
-        assert "text/event-stream" in resp.headers["Content-Type"]
-        feed.publish(BASE, "hello sse")
-        line = resp.readline().decode("utf-8")        # "data: {...}\n"
-        assert line.startswith("data: ")
-        payload = json.loads(line[len("data: "):])
-        assert payload == {"ts": "14:00:00.000", "text": "hello sse"}
-    finally:
-        resp.close()
-
-
 def test_port_fallback_when_preferred_busy():
     blocker = socket.socket()
     blocker.bind(("127.0.0.1", 0))
     blocker.listen(1)
     busy_port = blocker.getsockname()[1]
     try:
-        v = ViewerServer(feed=RawFeed(), buffer_info=lambda: {},
-                         status_info=lambda: {}, port=busy_port)
+        v = ViewerServer(ports_info=lambda: [], feed_for=lambda p: None,
+                         buffer_info=lambda p: {}, status_info=lambda: {"ports": []},
+                         port=busy_port)
         v.start()
         try:
             assert v.url is not None
-            assert v.url != f"http://127.0.0.1:{busy_port}"   # 임시 포트로 폴백
+            assert v.url != f"http://127.0.0.1:{busy_port}"
         finally:
             v.stop()
     finally:

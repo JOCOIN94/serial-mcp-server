@@ -18,6 +18,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Optional
+from urllib.parse import parse_qs, urlparse
 
 from .ring_buffer import _fmt_ts
 from .viewer_feed import RawFeed
@@ -33,8 +34,9 @@ class _ViewerHTTPServer(ThreadingHTTPServer):
     block_on_close = False       # server_close()가 장수 SSE 핸들러를 기다리지 않게
     allow_reuse_address = False  # Windows에서 점유 포트 중복 바인딩 방지(점유 감지가 정확해야 폴백이 동작)
 
-    feed: RawFeed
-    buffer_info: Callable[[], dict]
+    ports_info: Callable[[], list]
+    feed_for: Callable[[str], Optional[RawFeed]]
+    buffer_info: Callable[[str], dict]
     status_info: Callable[[], dict]
 
 
@@ -45,18 +47,23 @@ class _Handler(BaseHTTPRequestHandler):
         _log("HTTP " + (fmt % args))   # stdout 금지 — 접근 로그를 stderr로
 
     def do_GET(self) -> None:  # noqa: N802 - http.server 규약
-        if self.path == "/":
+        parsed = urlparse(self.path)
+        path = parsed.path
+        port = (parse_qs(parsed.query).get("port") or [""])[0]
+        if path == "/":
             body = _HTML.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-        elif self.path == "/api/stream":
-            self._serve_stream()
-        elif self.path == "/api/buffer":
-            self._send_json(self.server.buffer_info())
-        elif self.path == "/api/status":
+        elif path == "/api/stream":
+            self._serve_stream(port)
+        elif path == "/api/ports":
+            self._send_json({"ports": self.server.ports_info()})
+        elif path == "/api/buffer":
+            self._send_json(self.server.buffer_info(port))
+        elif path == "/api/status":
             self._send_json(self.server.status_info())
         else:
             self.send_error(404)
@@ -69,11 +76,15 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _serve_stream(self) -> None:
-        """SSE — RawFeed를 구독해 한 줄당 한 이벤트로 흘려보낸다."""
+    def _serve_stream(self, port: str) -> None:
+        """SSE — 지정 포트의 RawFeed를 구독해 한 줄당 한 이벤트로 흘려보낸다."""
+        feed = self.server.feed_for(port)
+        if feed is None:
+            self.send_error(404, "unknown port")
+            return
         # 구독을 헤더 전송보다 먼저: 클라이언트가 응답 헤더를 받은 시점에는
         # 이미 구독이 살아 있어야 발행 누락이 없다(테스트·실사용 레이스 방지).
-        sub = self.server.feed.subscribe()
+        sub = feed.subscribe()
         try:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -97,7 +108,7 @@ class _Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionError, OSError):
             pass   # 클라이언트 끊김 — 정상 종료
         finally:
-            self.server.feed.unsubscribe(sub)
+            feed.unsubscribe(sub)
 
 
 class ViewerServer:
@@ -105,12 +116,14 @@ class ViewerServer:
 
     def __init__(
         self,
-        feed: RawFeed,
-        buffer_info: Callable[[], dict],
+        ports_info: Callable[[], list],
+        feed_for: Callable[[str], Optional[RawFeed]],
+        buffer_info: Callable[[str], dict],
         status_info: Callable[[], dict],
         port: int = 8743,
     ) -> None:
-        self._feed = feed
+        self._ports_info = ports_info
+        self._feed_for = feed_for
         self._buffer_info = buffer_info
         self._status_info = status_info
         self._preferred_port = port
@@ -127,7 +140,8 @@ class ViewerServer:
         if self._httpd is None:
             _log("웹 뷰어 비활성 — 포트 바인딩 전부 실패")
             return
-        self._httpd.feed = self._feed
+        self._httpd.ports_info = self._ports_info
+        self._httpd.feed_for = self._feed_for
         self._httpd.buffer_info = self._buffer_info
         self._httpd.status_info = self._status_info
         self.url = f"http://127.0.0.1:{self._httpd.server_address[1]}"
@@ -168,6 +182,8 @@ _HTML = r"""<!DOCTYPE html>
             flex:0 1 auto; min-width:8ch; }
   #filter:focus { outline:none; border-color:#3b6ea5; }
   #port { color:#8b949e; }
+  #psel { background:#21262d; color:#c9d1d9; border:1px solid #2d333b;
+          border-radius:4px; padding:3px 6px; font:inherit; }
   #fcount { color:#8b949e; }
   #newpill { position:fixed; right:16px; bottom:14px; z-index:2; display:none;
              background:#2d4f7c; border:1px solid #3b6ea5; color:#e6edf3;
@@ -207,6 +223,7 @@ _HTML = r"""<!DOCTYPE html>
 <header>
   <span class="dot" id="dot"></span>
   <span id="port">…</span>
+  <select id="psel" title="보드 선택"></select>
   <button id="tabStream" class="active"
           title="이 화면을 연 뒤 수신한 원본 줄 수 — 새로고침하면 0부터">스트림</button>
   <button id="tabBuffer"
@@ -389,41 +406,50 @@ function renderLine(ts, text, metaSuffix, dimTs) {
   return div;
 }
 
-const es = new EventSource("/api/stream");
-es.onopen = () => {   // 스트림은 "지금부터" 생중계 — 시작 지점을 명시(이전 기록은 버퍼 탭)
-  const g = document.createElement("div");
-  g.className = "gap";
-  g.textContent = "실시간 수신 시작 — 이전 기록은 [버퍼] 탭";
-  $("stream").appendChild(g);
-};
-es.onmessage = ev => {
-  if (paused) return;
-  const d = JSON.parse(ev.data);
-  const box = $("stream");
-  const sec = toSec(d.ts);
-  const dim = streamLastSec === sec;   // 같은 초 반복 → 거터 흐리게
-  if (streamLastSec !== null && sec - streamLastSec >= GAP_SEC) {
-    const g = gapDivider(sec - streamLastSec);
-    if (filterRe) g.style.display = "none";
-    box.appendChild(g);
-  }
-  streamLastSec = sec;
-  box.appendChild(renderLine(d.ts, d.text, "", dim));
-  streamLines++;
-  while (box.childNodes.length > MAX_STREAM) {   // 한도 초과분은 위에서 제거
-    const removed = box.firstChild;
-    if (removed.classList && removed.classList.contains("ln")) streamLines--;
-    box.removeChild(removed);
-  }
+let es = null, currentPort = null;
+function connectStream(port) {   // 포트 전환 = 스트림 화면 리셋 + 새 SSE 구독
+  if (es) es.close();
+  currentPort = port;
+  $("stream").innerHTML = "";
+  streamLines = 0; streamLastSec = null; newCount = 0;
+  $("newpill").style.display = "none";
   updateStreamTab();
-  if ($("follow").checked && activeTab === "stream") {
-    window.scrollTo(0, document.body.scrollHeight);
-  } else if (!nearBottom()) {
-    newCount++;   // 바닥을 안 보고 있을 때만 새 로그 배지
-    $("newpill").textContent = "↓ 새 로그 " + newCount + "건";
-    $("newpill").style.display = "block";
-  }
-};
+  es = new EventSource("/api/stream?port=" + encodeURIComponent(port));
+  es.onopen = () => {   // 스트림은 "지금부터" 생중계 — 시작 지점 명시(이전 기록은 버퍼 탭)
+    const g = document.createElement("div");
+    g.className = "gap";
+    g.textContent = "실시간 수신 시작 — 이전 기록은 [버퍼] 탭";
+    $("stream").appendChild(g);
+  };
+  es.onmessage = ev => {
+    if (paused) return;
+    const d = JSON.parse(ev.data);
+    const box = $("stream");
+    const sec = toSec(d.ts);
+    const dim = streamLastSec === sec;   // 같은 초 반복 → 거터 흐리게
+    if (streamLastSec !== null && sec - streamLastSec >= GAP_SEC) {
+      const g = gapDivider(sec - streamLastSec);
+      if (filterRe) g.style.display = "none";
+      box.appendChild(g);
+    }
+    streamLastSec = sec;
+    box.appendChild(renderLine(d.ts, d.text, "", dim));
+    streamLines++;
+    while (box.childNodes.length > MAX_STREAM) {   // 한도 초과분은 위에서 제거
+      const removed = box.firstChild;
+      if (removed.classList && removed.classList.contains("ln")) streamLines--;
+      box.removeChild(removed);
+    }
+    updateStreamTab();
+    if ($("follow").checked && activeTab === "stream") {
+      window.scrollTo(0, document.body.scrollHeight);
+    } else if (!nearBottom()) {
+      newCount++;   // 바닥을 안 보고 있을 때만 새 로그 배지
+      $("newpill").textContent = "↓ 새 로그 " + newCount + "건";
+      $("newpill").style.display = "block";
+    }
+  };
+}
 
 function nearBottom() {
   return window.innerHeight + window.scrollY >= document.body.scrollHeight - 60;
@@ -444,8 +470,8 @@ window.addEventListener("scroll", () => {
 });
 
 async function refreshBuffer() {
-  if (activeTab !== "buffer" || paused) return;
-  const d = await (await fetch("/api/buffer")).json();
+  if (activeTab !== "buffer" || paused || !currentPort) return;
+  const d = await (await fetch("/api/buffer?port=" + encodeURIComponent(currentPort))).json();
   const box = $("buffer");
   box.innerHTML = "";
   let prevSec = null, prevShownSec = null;
@@ -471,10 +497,12 @@ setInterval(refreshBuffer, 2000);
 async function refreshStatus() {
   try {
     const d = await (await fetch("/api/status")).json();
-    $("dot").className = "dot" + (d.connected ? " on" : "");
-    $("port").textContent = (d.port || "(포트 미설정)") + " @ " + d.baud +
-      (d.last_error ? " — " + d.last_error : "");
-    if (d.buffer_entries !== undefined) setBufferTab(d.buffer_entries, d.buffer_capacity);
+    const p = (d.ports || []).find(x => x.port === currentPort) || (d.ports || [])[0];
+    if (!p) { $("dot").className = "dot"; $("port").textContent = "(모니터링 포트 없음)"; return; }
+    $("dot").className = "dot" + (p.connected ? " on" : "");
+    $("port").textContent = p.label + " @ " + p.baud +
+      (p.last_error ? " — " + p.last_error : "");
+    setBufferTab(p.buffer_entries, p.buffer_capacity);
   } catch (e) { $("dot").className = "dot"; }
 }
 setInterval(refreshStatus, 5000);
@@ -523,6 +551,23 @@ applyFs();
 $("fsMinus").onclick = () => { fs--; applyFs(); };
 $("fsPlus").onclick = () => { fs++; applyFs(); };
 updateStreamTab();   // 초기 표시 "스트림 0/5000"
+async function initPorts() {   // 포트 목록 → 셀렉터 구성 → 첫 포트 스트림 연결
+  try {
+    const d = await (await fetch("/api/ports")).json();
+    const sel = $("psel");
+    for (const p of d.ports || []) {
+      const o = document.createElement("option");
+      o.value = p.port;
+      o.textContent = p.label;
+      sel.appendChild(o);
+    }
+    if ((d.ports || []).length <= 1) sel.style.display = "none";   // 1개면 셀렉터 불필요
+    sel.onchange = () => { connectStream(sel.value); refreshStatus(); };
+    if ((d.ports || []).length) connectStream(d.ports[0].port);
+    refreshStatus();
+  } catch (e) { $("port").textContent = "(포트 목록 조회 실패)"; }
+}
+initPorts();
 </script>
 </body>
 </html>
