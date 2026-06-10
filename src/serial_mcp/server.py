@@ -18,7 +18,7 @@ import re
 import sys
 import threading
 from datetime import datetime
-from typing import Optional
+from typing import Mapping, Optional
 
 import serial
 from serial.tools import list_ports
@@ -126,15 +126,23 @@ class SerialReader:
 
             if not raw:
                 continue  # timeout — 수신 데이터 없음
-            ts = datetime.now()
-            text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-            self.buffer.add(text, ts)
-            if self._tee is not None:
-                try:
-                    stamp = ts.strftime("%Y-%m-%d %H:%M:%S.") + f"{ts.microsecond // 1000:03d}"
-                    self._tee.write(f"[{stamp}] {text}\n")
-                except Exception as e:  # noqa: BLE001
-                    _log(f"tee 기록 실패: {e}")
+            self._ingest(raw, datetime.now())
+
+    def _ingest(self, raw: bytes, ts: datetime) -> None:
+        """수신 바이트 한 줄을 디코드·정리해 버퍼에 적재하고, tee가 열렸으면 함께 기록.
+
+        무한 I/O 루프(_run)에서 분리한 '한 줄 처리' 단위 — 실제 시리얼 없이 단위
+        테스트할 수 있다. 디코드(utf-8/replace)·개행 제거·tee 타임스탬프 형식을
+        여기에 고정한다(SPEC §3).
+        """
+        text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+        self.buffer.add(text, ts)
+        if self._tee is not None:
+            try:
+                stamp = ts.strftime("%Y-%m-%d %H:%M:%S.") + f"{ts.microsecond // 1000:03d}"
+                self._tee.write(f"[{stamp}] {text}\n")
+            except Exception as e:  # noqa: BLE001
+                _log(f"tee 기록 실패: {e}")
 
 
 # ---- 전역 상태 (main 에서 초기화) ----
@@ -295,9 +303,9 @@ def clear_log_buffer() -> dict:
     return {"status": "ok", "message": f"{n}개 항목 비움", "cleared": n}
 
 
-def _env_int(name: str, default: int) -> int:
-    """정수 환경변수 파싱 — 미설정/빈값/오류 시 기본값."""
-    v = os.environ.get(name)
+def _env_int(env: Mapping[str, str], name: str, default: int) -> int:
+    """정수 환경변수 파싱 — 미설정/빈값/오류 시 기본값. env 주입형(테스트 용이)."""
+    v = env.get(name)
     if v is None or v.strip() == "":
         return default
     try:
@@ -307,30 +315,50 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _load_config(env: Mapping[str, str]) -> dict:
+    """환경변수 매핑에서 서버 설정을 파싱해 dict로 반환(부작용 없음, 순수 함수).
+
+    main()이 이 결과로 LineBuffer/SerialReader를 구성한다. I/O·스레드 시작과
+    분리돼 있어 환경변수 계약(SPEC §3/§4)을 단독 테스트할 수 있다.
+    """
+    port = env.get("SERIAL_PORT", "").strip()
+    baud = _env_int(env, "SERIAL_BAUD", 115200)
+    tee = env.get("SERIAL_TEE", "").strip() or None
+    exclude = env.get("SERIAL_EXCLUDE", "").strip() or None
+    include = env.get("SERIAL_INCLUDE", "").strip() or None
+    maxlen = _env_int(env, "SERIAL_BUFFER_LINES", 2000)
+    dedup = env.get("SERIAL_DEDUP", "1").strip().lower() not in ("0", "false", "no", "off")
+    return {
+        "port": port, "baud": baud, "tee": tee, "exclude": exclude,
+        "include": include, "maxlen": maxlen, "dedup": dedup,
+    }
+
+
 def main() -> None:
     """엔트리포인트. 환경변수로 설정을 읽고 리더를 띄운 뒤 stdio 로 MCP 서버 구동."""
     global _buffer, _reader, _config
 
-    port = os.environ.get("SERIAL_PORT", "").strip()
-    baud = _env_int("SERIAL_BAUD", 115200)
-    tee = os.environ.get("SERIAL_TEE", "").strip() or None
-    exclude = os.environ.get("SERIAL_EXCLUDE", "").strip() or None
-    include = os.environ.get("SERIAL_INCLUDE", "").strip() or None
-    maxlen = _env_int("SERIAL_BUFFER_LINES", 2000)
-    dedup = os.environ.get("SERIAL_DEDUP", "1").strip().lower() not in ("0", "false", "no", "off")
+    cfg = _load_config(os.environ)
+    _config = {
+        "port": cfg["port"], "baud": cfg["baud"], "tee": cfg["tee"],
+        "exclude": cfg["exclude"], "include": cfg["include"],
+    }
+    _buffer = LineBuffer(
+        maxlen=cfg["maxlen"], dedup=cfg["dedup"],
+        exclude=cfg["exclude"], include=cfg["include"],
+    )
 
-    _config = {"port": port, "baud": baud, "tee": tee, "exclude": exclude, "include": include}
-    _buffer = LineBuffer(maxlen=maxlen, dedup=dedup, exclude=exclude, include=include)
-
-    if not port:
+    if not cfg["port"]:
         _log("경고: SERIAL_PORT 미설정 — 서버는 뜨지만 리더는 시작하지 않는다. "
              "list_serial_ports 로 포트를 확인하고 환경변수를 설정하라.")
     else:
-        _reader = SerialReader(port=port, baud=baud, buffer=_buffer, tee_path=tee)
+        _reader = SerialReader(
+            port=cfg["port"], baud=cfg["baud"], buffer=_buffer, tee_path=cfg["tee"],
+        )
         _reader.start()
 
-    _log(f"시작 (port={port or '(미설정)'}, baud={baud}, dedup={dedup}, "
-         f"buffer={maxlen}, tee={tee or '없음'})")
+    _log(f"시작 (port={cfg['port'] or '(미설정)'}, baud={cfg['baud']}, dedup={cfg['dedup']}, "
+         f"buffer={cfg['maxlen']}, tee={cfg['tee'] or '없음'})")
     mcp.run()  # stdio transport(기본)
 
 
