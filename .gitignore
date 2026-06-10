@@ -8,11 +8,10 @@ dist/
 build/
 .pytest_cache/
 
-# 가상환경 / uv
+# 가상환경 / uv (uv.lock은 앱이므로 추적 — 검증된 의존성 조합 기록)
 .venv/
 venv/
 .uv/
-uv.lock
 
 # 시리얼 tee 로그(런타임 산출물 — 사용자가 경로 지정)
 *.log
