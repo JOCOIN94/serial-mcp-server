@@ -8,6 +8,7 @@ from datetime import datetime
 
 from serial_mcp.ring_buffer import LineBuffer
 from serial_mcp.server import SerialReader
+from serial_mcp.viewer_feed import RawFeed
 
 BASE = datetime(2026, 6, 9, 14, 0, 0, 0)
 
@@ -59,3 +60,33 @@ def test_ingest_tees_every_repeat_even_when_deduped():
     r._ingest(b"tick\n", BASE)
     assert buf.info()["entries"] == 1           # 버퍼는 접히지만
     assert tee.getvalue().count("tick") == 2    # tee는 반복 줄도 전부 기록
+
+
+def test_ingest_publishes_raw_line_to_feed():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    feed = RawFeed()
+    sub = feed.subscribe()
+    r = SerialReader(port="COM_TEST", baud=115200, buffer=buf, feed=feed)
+    r._tee = None
+    r._ingest(b"boot ok\r\n", BASE)
+    assert sub.get(timeout=1.0) == (BASE, "boot ok")
+
+
+def test_ingest_publishes_blank_lines_to_feed_even_though_buffer_drops():
+    # 스트림은 수신 원본 충실도(tee와 동일) — 빈 줄도 발행, 버퍼만 §4.3으로 제외
+    buf = LineBuffer(maxlen=10, dedup=True)
+    feed = RawFeed()
+    sub = feed.subscribe()
+    r = SerialReader(port="COM_TEST", baud=115200, buffer=buf, feed=feed)
+    r._tee = None
+    r._ingest(b"\r\n", BASE)
+    assert buf.info()["entries"] == 0
+    assert sub.get(timeout=1.0) == (BASE, "")
+
+
+def test_ingest_without_feed_still_works():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    r = SerialReader(port="COM_TEST", baud=115200, buffer=buf)   # feed 기본 None
+    r._tee = None
+    r._ingest(b"x\n", BASE)
+    assert buf.info()["entries"] == 1

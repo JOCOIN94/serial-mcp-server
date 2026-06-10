@@ -25,6 +25,8 @@ from serial.tools import list_ports
 from mcp.server.fastmcp import FastMCP
 
 from .ring_buffer import LineBuffer
+from .viewer_feed import RawFeed
+from .web_viewer import ViewerServer
 
 
 def _log(msg: str) -> None:
@@ -46,12 +48,14 @@ class SerialReader:
         buffer: LineBuffer,
         tee_path: Optional[str] = None,
         reconnect_interval: float = 3.0,
+        feed: Optional[RawFeed] = None,
     ) -> None:
         self.port = port
         self.baud = baud
         self.buffer = buffer
         self.tee_path = tee_path
         self.reconnect_interval = reconnect_interval
+        self.feed = feed   # 웹 뷰어 생중계 허브(없으면 발행 생략)
 
         self._thread = threading.Thread(target=self._run, name="serial-reader", daemon=True)
         self._stop = threading.Event()
@@ -137,6 +141,8 @@ class SerialReader:
         """
         text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
         self.buffer.add(text, ts)
+        if self.feed is not None:
+            self.feed.publish(ts, text)   # 수신 원본 생중계(빈 줄 포함 — tee와 동일 충실도)
         if self._tee is not None:
             try:
                 stamp = ts.strftime("%Y-%m-%d %H:%M:%S.") + f"{ts.microsecond // 1000:03d}"
@@ -150,6 +156,13 @@ mcp = FastMCP("serial-mcp")
 _buffer: Optional[LineBuffer] = None
 _reader: Optional[SerialReader] = None
 _config: dict = {}
+_feed: Optional[RawFeed] = None
+_viewer: Optional[ViewerServer] = None
+
+
+def _viewer_url() -> Optional[str]:
+    """웹 뷰어 URL — 비활성/기동 실패 시 None."""
+    return _viewer.url if _viewer is not None else None
 
 
 @mcp.tool()
@@ -195,6 +208,7 @@ def get_serial_status() -> dict:
     쓰는 다른 프로그램(테라텀 등) 종료를 요청하라. 리더가 아예 없으면(SERIAL_PORT
     미설정) 그 사실을 message 로 알린다.
 
+    사람이 로그를 직접 눈으로 보고 싶어 하면 viewer_url 링크를 안내하라(웹 뷰어).
     [루프 단계] 문제 진단.
     """
     if _reader is None:
@@ -203,6 +217,7 @@ def get_serial_status() -> dict:
             "message": "리더 미시작 — SERIAL_PORT 가 설정되지 않았다. list_serial_ports 로 포트를 찾아 환경변수를 설정하라.",
             "connected": False,
             "configured_port": _config.get("port") or None,
+            "viewer_url": _viewer_url(),
         }
     return {
         "status": "ok",
@@ -213,6 +228,7 @@ def get_serial_status() -> dict:
         "last_error": _reader.last_error,
         "opened_at": _reader.opened_at.isoformat() if _reader.opened_at else None,
         "tee": _config.get("tee") or None,
+        "viewer_url": _viewer_url(),
     }
 
 
@@ -284,6 +300,7 @@ def get_log_buffer_info() -> dict:
     info = _buffer.info()
     info["status"] = "ok"
     info["message"] = f"{info['entries']}/{info['capacity']} 항목"
+    info["viewer_url"] = _viewer_url()
     return info
 
 
@@ -315,6 +332,52 @@ def _env_int(env: Mapping[str, str], name: str, default: int) -> int:
         return default
 
 
+def _viewer_buffer_info() -> dict:
+    """웹 뷰어 /api/buffer 응답(버퍼 탭) — 구조화 스냅샷 + 카운터."""
+    if _buffer is None:
+        return {"status": "error", "entries": []}
+    info = _buffer.info()
+    return {
+        "status": "ok",
+        "entries": _buffer.snapshot(),
+        "capacity": info["capacity"],
+        "total_received": info["total_received"],
+        "total_stored": info["total_stored"],
+        "dedup": info["dedup"],
+    }
+
+
+def _viewer_status_info() -> dict:
+    """웹 뷰어 /api/status 응답(헤더 표시) — get_serial_status의 경량판."""
+    if _reader is None:
+        return {
+            "connected": False,
+            "port": _config.get("port") or "",
+            "baud": _config.get("baud"),
+            "last_error": "리더 미시작(SERIAL_PORT 미설정)",
+        }
+    return {
+        "connected": _reader.connected,
+        "port": _reader.port,
+        "baud": _reader.baud,
+        "last_error": _reader.last_error,
+    }
+
+
+def _parse_web(env: Mapping[str, str]) -> Optional[int]:
+    """SERIAL_WEB 파싱 — 기본 8743(켜짐). 0/false/no/off → 비활성(None), 정수 → 포트."""
+    raw = env.get("SERIAL_WEB", "").strip()
+    if raw == "":
+        return 8743
+    if raw.lower() in ("0", "false", "no", "off"):
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        _log(f"환경변수 SERIAL_WEB={raw!r} 해석 실패 → 기본 포트 8743 사용")
+        return 8743
+
+
 def _load_config(env: Mapping[str, str]) -> dict:
     """환경변수 매핑에서 서버 설정을 파싱해 dict로 반환(부작용 없음, 순수 함수).
 
@@ -331,12 +394,13 @@ def _load_config(env: Mapping[str, str]) -> dict:
     return {
         "port": port, "baud": baud, "tee": tee, "exclude": exclude,
         "include": include, "maxlen": maxlen, "dedup": dedup,
+        "web": _parse_web(env),
     }
 
 
 def main() -> None:
     """엔트리포인트. 환경변수로 설정을 읽고 리더를 띄운 뒤 stdio 로 MCP 서버 구동."""
-    global _buffer, _reader, _config
+    global _buffer, _reader, _config, _feed, _viewer
 
     cfg = _load_config(os.environ)
     _config = {
@@ -347,15 +411,29 @@ def main() -> None:
         maxlen=cfg["maxlen"], dedup=cfg["dedup"],
         exclude=cfg["exclude"], include=cfg["include"],
     )
+    _feed = RawFeed()
 
     if not cfg["port"]:
         _log("경고: SERIAL_PORT 미설정 — 서버는 뜨지만 리더는 시작하지 않는다. "
              "list_serial_ports 로 포트를 확인하고 환경변수를 설정하라.")
     else:
         _reader = SerialReader(
-            port=cfg["port"], baud=cfg["baud"], buffer=_buffer, tee_path=cfg["tee"],
+            port=cfg["port"], baud=cfg["baud"], buffer=_buffer,
+            tee_path=cfg["tee"], feed=_feed,
         )
         _reader.start()
+
+    if cfg["web"] is not None:
+        _viewer = ViewerServer(
+            feed=_feed,
+            buffer_info=_viewer_buffer_info,
+            status_info=_viewer_status_info,
+            port=cfg["web"],
+        )
+        _viewer.start()   # 실패해도 예외 없음 — url이 None으로 남을 뿐
+        _log(f"웹 뷰어: {_viewer.url or '기동 실패'}")
+    else:
+        _log("웹 뷰어 꺼짐 (SERIAL_WEB=0)")
 
     _log(f"시작 (port={cfg['port'] or '(미설정)'}, baud={cfg['baud']}, dedup={cfg['dedup']}, "
          f"buffer={cfg['maxlen']}, tee={cfg['tee'] or '없음'})")

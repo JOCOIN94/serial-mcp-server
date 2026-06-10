@@ -141,3 +141,22 @@ def test_clear_log_buffer_without_buffer_errors(monkeypatch):
     out = srv.clear_log_buffer()
     assert out["status"] == "error"
     assert out["cleared"] == 0
+
+
+# ---- viewer_url (웹 뷰어 링크 자동 제공) ----
+
+def test_get_serial_status_includes_viewer_url(monkeypatch):
+    monkeypatch.setattr(srv, "_reader", None)
+    monkeypatch.setattr(srv, "_config", {"port": ""})
+    monkeypatch.setattr(srv, "_viewer", SimpleNamespace(url="http://127.0.0.1:8743"))
+    assert srv.get_serial_status()["viewer_url"] == "http://127.0.0.1:8743"
+
+
+def test_viewer_url_is_none_when_viewer_off(monkeypatch, buffer):
+    monkeypatch.setattr(srv, "_viewer", None)
+    assert srv.get_log_buffer_info()["viewer_url"] is None
+
+
+def test_get_log_buffer_info_includes_viewer_url(monkeypatch, buffer):
+    monkeypatch.setattr(srv, "_viewer", SimpleNamespace(url="http://127.0.0.1:9000"))
+    assert srv.get_log_buffer_info()["viewer_url"] == "http://127.0.0.1:9000"

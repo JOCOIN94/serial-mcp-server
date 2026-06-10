@@ -31,7 +31,7 @@ def test_env_int_invalid_returns_default():
 def test_load_config_defaults_when_empty():
     assert _load_config({}) == {
         "port": "", "baud": 115200, "tee": None, "exclude": None,
-        "include": None, "maxlen": 2000, "dedup": True,
+        "include": None, "maxlen": 2000, "dedup": True, "web": 8743,
     }
 
 
@@ -39,11 +39,11 @@ def test_load_config_reads_all_vars():
     cfg = _load_config({
         "SERIAL_PORT": "COM4", "SERIAL_BAUD": "9600", "SERIAL_TEE": "log.txt",
         "SERIAL_EXCLUDE": "DEBUG", "SERIAL_INCLUDE": "ERROR",
-        "SERIAL_BUFFER_LINES": "500", "SERIAL_DEDUP": "0",
+        "SERIAL_BUFFER_LINES": "500", "SERIAL_DEDUP": "0", "SERIAL_WEB": "9000",
     })
     assert cfg == {
         "port": "COM4", "baud": 9600, "tee": "log.txt", "exclude": "DEBUG",
-        "include": "ERROR", "maxlen": 500, "dedup": False,
+        "include": "ERROR", "maxlen": 500, "dedup": False, "web": 9000,
     }
 
 
@@ -60,3 +60,22 @@ def test_load_config_strips_port_whitespace():
 )
 def test_load_config_dedup_truthiness(val, expected):
     assert _load_config({"SERIAL_DEDUP": val})["dedup"] is expected
+
+
+# ---- SERIAL_WEB (웹 뷰어 포트) ----
+
+def test_load_config_web_default_on():
+    assert _load_config({})["web"] == 8743
+
+
+@pytest.mark.parametrize("val", ["0", "false", "no", "off", "OFF"])
+def test_load_config_web_disabled(val):
+    assert _load_config({"SERIAL_WEB": val})["web"] is None
+
+
+def test_load_config_web_custom_port():
+    assert _load_config({"SERIAL_WEB": "9000"})["web"] == 9000
+
+
+def test_load_config_web_invalid_falls_back_to_default():
+    assert _load_config({"SERIAL_WEB": "abc"})["web"] == 8743
