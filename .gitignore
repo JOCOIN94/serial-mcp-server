@@ -6,6 +6,7 @@ __pycache__/
 .eggs/
 dist/
 build/
+.pytest_cache/
 
 # 가상환경 / uv
 .venv/
