@@ -149,5 +149,5 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - 실로그 관찰 → 조정 완료(2026-06-10): SSM 펌웨어가 메시지마다 빈 줄을 교대로 출력(`"" → [IOc] Disconnected! → "" → …`)해 dedup이 실전에서 한 번도 접지 못하던 문제를 **공백뿐인 줄 저장 제외(§4.3)**로 해결. TDD로 구현, 테스트 58개.
 - 웹 로그 뷰어 구현(2026-06-10, §10): RawFeed 허브 + ViewerServer(stdlib HTTP/SSE) + 단일 페이지. 도구 응답 viewer_url 포함.
 - 다중 포트 자동 모니터링 구현(2026-06-10): USB 자동 스캔·PortMonitor×N·별칭(SERIAL_NAMES)·도구 port 라우팅·뷰어 포트 셀렉터·dedup 룩백(기본 5). 설계: `docs/superpowers/specs/2026-06-10-multi-port-design.md`.
-- 미완: silotek-tools 측 플러그인(plugin.json + SKILL.md), GitHub push.
+- 배포 완료(2026-06-10): GitHub 공개 push(`JOCOIN94/silotek-serial-mcp`, uvx 원격 실행 검증), silotek-tools 마켓에 serial-mcp 플러그인 등록(plugin.json — env 10종 패스스루, SKILL.md — 베이스라인 대조 검증 거침, 0.1.0). **§부록 미완 항목 전부 해소** — 이후 변경은 main push가 곧 배포.
 - 테스트 장비: ESP32-S3(SSM 펌웨어), COM4(CH343), 115200.
