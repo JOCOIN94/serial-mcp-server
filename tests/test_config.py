@@ -30,36 +30,47 @@ def test_env_int_invalid_returns_default():
 
 def test_load_config_defaults_when_empty():
     assert _load_config({}) == {
-        "port": "", "baud": 115200, "tee": None, "exclude": None,
-        "include": None, "maxlen": 2000, "dedup": True, "web": 8743,
+        "ports": [], "names": {}, "baud": 115200, "tee": None, "exclude": None,
+        "include": None, "maxlen": 2000, "dedup": 5, "web": 8743,
     }
 
 
 def test_load_config_reads_all_vars():
     cfg = _load_config({
-        "SERIAL_PORT": "COM4", "SERIAL_BAUD": "9600", "SERIAL_TEE": "log.txt",
+        "SERIAL_PORT": "COM4,COM13@9600", "SERIAL_NAMES": "COM4=SSM",
+        "SERIAL_BAUD": "57600", "SERIAL_TEE": "log.txt",
         "SERIAL_EXCLUDE": "DEBUG", "SERIAL_INCLUDE": "ERROR",
         "SERIAL_BUFFER_LINES": "500", "SERIAL_DEDUP": "0", "SERIAL_WEB": "9000",
     })
     assert cfg == {
-        "port": "COM4", "baud": 9600, "tee": "log.txt", "exclude": "DEBUG",
-        "include": "ERROR", "maxlen": 500, "dedup": False, "web": 9000,
+        "ports": [("COM4", None), ("COM13", 9600)], "names": {"COM4": "SSM"},
+        "baud": 57600, "tee": "log.txt", "exclude": "DEBUG", "include": "ERROR",
+        "maxlen": 500, "dedup": 0, "web": 9000,
     }
 
 
 def test_load_config_strips_port_whitespace():
-    assert _load_config({"SERIAL_PORT": "  COM4  "})["port"] == "COM4"
+    assert _load_config({"SERIAL_PORT": "  COM4  "})["ports"] == [("COM4", None)]
 
 
 @pytest.mark.parametrize(
-    "val,expected",
+    "env,expected",
     [
-        ("0", False), ("false", False), ("FALSE", False), ("no", False),
-        ("off", False), ("1", True), ("true", True), ("yes", True), ("", True),
+        ({}, 5),                              # 미설정 → 기본 룩백 5
+        ({"SERIAL_DEDUP": "0"}, 0),
+        ({"SERIAL_DEDUP": "false"}, 0),
+        ({"SERIAL_DEDUP": "no"}, 0),
+        ({"SERIAL_DEDUP": "off"}, 0),
+        ({"SERIAL_DEDUP": "1"}, 1),           # 구버전: 직전 줄만
+        ({"SERIAL_DEDUP": "true"}, 1),
+        ({"SERIAL_DEDUP": "yes"}, 1),
+        ({"SERIAL_DEDUP": "12"}, 12),
+        ({"SERIAL_DEDUP": "abc"}, 5),         # 해석 실패 → 기본
+        ({"SERIAL_DEDUP": "-3"}, 5),          # 음수 → 기본
     ],
 )
-def test_load_config_dedup_truthiness(val, expected):
-    assert _load_config({"SERIAL_DEDUP": val})["dedup"] is expected
+def test_load_config_dedup_window(env, expected):
+    assert _load_config(env)["dedup"] == expected
 
 
 # ---- SERIAL_WEB (웹 뷰어 포트) ----

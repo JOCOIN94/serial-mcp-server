@@ -1,6 +1,7 @@
-"""MCP 도구 6종 계약 테스트(SPEC §5). @mcp.tool()은 원본 함수를 반환하므로 직접 호출.
+"""MCP 도구 6종 계약 테스트(다중 포트, SPEC §5 개정).
 
-도구는 모듈 전역 _buffer/_reader/_config를 읽는다 → monkeypatch로 주입한다.
+도구는 모듈 전역 _monitors(dict[str, PortMonitor])를 읽는다 → monkeypatch 주입.
+@mcp.tool()은 원본 함수를 반환하므로 직접 호출.
 """
 
 from datetime import datetime
@@ -10,153 +11,167 @@ import pytest
 
 import serial_mcp.server as srv
 from serial_mcp.ring_buffer import LineBuffer
+from serial_mcp.viewer_feed import RawFeed
 
 BASE = datetime(2026, 6, 9, 14, 0, 0, 0)
 
 
+def make_monitor(port="COM_T", name=None, connected=True, last_error=None, opened_at=None):
+    """실제 LineBuffer/RawFeed + 가짜 reader로 PortMonitor 구성."""
+    reader = SimpleNamespace(connected=connected, port=port, baud=115200,
+                             last_error=last_error, opened_at=opened_at)
+    return srv.PortMonitor(port=port, name=name,
+                           buffer=LineBuffer(maxlen=100, dedup=1),
+                           feed=RawFeed(), reader=reader)
+
+
 @pytest.fixture
-def buffer(monkeypatch):
-    """전역 _buffer에 빈 LineBuffer를 주입하고 그 핸들을 돌려준다(테스트 후 자동 복원)."""
-    buf = LineBuffer(maxlen=100, dedup=True)
-    monkeypatch.setattr(srv, "_buffer", buf)
-    monkeypatch.setattr(srv, "_config", {"port": "COM_TEST", "baud": 115200, "tee": None})
-    return buf
+def single(monkeypatch):
+    """포트 1개(COM_A) 주입 — 미지정 호환 경로 검증용."""
+    mon = make_monitor("COM_A")
+    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
+    monkeypatch.setattr(srv, "_viewer", None)
+    return mon
 
 
-# ---- list_serial_ports ----
+@pytest.fixture
+def dual(monkeypatch):
+    """포트 2개(SSM=COM_A, COM_B) 주입 — 라우팅·별칭·미지정 에러 검증용."""
+    a = make_monitor("COM_A", name="SSM")
+    b = make_monitor("COM_B", connected=False, last_error="포트 열기 실패(COM_B): busy")
+    monkeypatch.setattr(srv, "_monitors", {"COM_A": a, "COM_B": b})
+    monkeypatch.setattr(srv, "_viewer", None)
+    return a, b
 
-def test_list_serial_ports_maps_fields(monkeypatch):
-    fake = SimpleNamespace(
-        device="COM4", description="USB-SERIAL CH343",
-        hwid="USB VID:PID=1A86:55D3", vid=0x1A86, pid=0x55D3,
-        manufacturer="wch.cn", serial_number=None,
-    )
-    monkeypatch.setattr(srv.list_ports, "comports", lambda: [fake])
-    monkeypatch.setattr(srv, "_config", {"port": "COM4"})
-    out = srv.list_serial_ports()
+
+# ---- _resolve_port / port 라우팅 공통 계약 ----
+
+def test_single_port_allows_omitted_port(single):
+    single.buffer.add("boot ok", BASE)
+    out = srv.get_recent_logs(lines=5)
     assert out["status"] == "ok"
-    assert out["configured_port"] == "COM4"
-    assert out["ports"][0]["device"] == "COM4"
-    assert out["ports"][0]["vid"] == 0x1A86
+    assert out["port"] == "COM_A"
+    assert out["lines"] == ["[14:00:00.000] boot ok"]
+
+
+def test_multi_port_requires_port(dual):
+    out = srv.get_recent_logs()
+    assert out["status"] == "error"
+    assert "지정" in out["message"]
+    assert out["ports"] == ["SSM (COM_A)", "COM_B"]   # AI가 바로 재호출할 목록
+    assert out["lines"] == []
+
+
+def test_port_resolves_alias_case_insensitive(dual):
+    a, _ = dual
+    a.buffer.add("hello", BASE)
+    assert srv.get_recent_logs(port="ssm")["count"] == 1
+    assert srv.get_recent_logs(port="com_a")["count"] == 1
+
+
+def test_unknown_port_lists_available(dual):
+    out = srv.get_recent_logs(port="COM_X")
+    assert out["status"] == "error"
+    assert "COM_X" in out["message"]
+    assert "SSM (COM_A)" in out["ports"]
+
+
+def test_no_monitors_reports_error(monkeypatch):
+    monkeypatch.setattr(srv, "_monitors", {})
+    out = srv.get_recent_logs()
+    assert out["status"] == "error"
+    assert out["ports"] == []
 
 
 # ---- get_serial_status ----
 
-def test_get_serial_status_without_reader_reports_error(monkeypatch):
-    monkeypatch.setattr(srv, "_reader", None)
-    monkeypatch.setattr(srv, "_config", {"port": ""})
+def test_status_without_port_returns_all_ports(dual):
     out = srv.get_serial_status()
-    assert out["status"] == "error"
-    assert out["connected"] is False
+    assert out["status"] == "ok"
+    assert out["message"] == "1/2 포트 연결됨"
+    labels = [p["label"] for p in out["ports"]]
+    assert labels == ["SSM (COM_A)", "COM_B"]
+    assert out["ports"][1]["connected"] is False
+    assert "busy" in out["ports"][1]["last_error"]
 
 
-def test_get_serial_status_with_connected_reader(monkeypatch):
-    fake_reader = SimpleNamespace(
-        connected=True, port="COM4", baud=115200, last_error=None,
-        opened_at=datetime(2026, 6, 9, 14, 0, 0, 0),
-    )
-    monkeypatch.setattr(srv, "_reader", fake_reader)
-    monkeypatch.setattr(srv, "_config", {"tee": None})
-    out = srv.get_serial_status()
+def test_status_with_port_returns_single(dual):
+    out = srv.get_serial_status(port="SSM")
     assert out["status"] == "ok"
     assert out["connected"] is True
-    assert out["port"] == "COM4"
-    assert out["baud"] == 115200
-    assert out["opened_at"] == "2026-06-09T14:00:00"
+    assert out["port"] == "COM_A"
+    assert out["message"] == "연결됨"
 
 
-def test_get_serial_status_with_disconnected_reader(monkeypatch):
-    fake_reader = SimpleNamespace(
-        connected=False, port="COM4", baud=115200,
-        last_error="포트 열기 실패(COM4): Access is denied", opened_at=None,
-    )
-    monkeypatch.setattr(srv, "_reader", fake_reader)
-    monkeypatch.setattr(srv, "_config", {"tee": None})
-    out = srv.get_serial_status()
-    assert out["status"] == "ok"            # 리더가 존재하므로 error 아님
-    assert out["connected"] is False
-    assert out["message"] == "연결 안 됨"
-    assert "포트 열기 실패" in out["last_error"]   # 점유/권한 진단 근거 전달
-    assert out["opened_at"] is None
-
-
-# ---- get_recent_logs ----
-
-def test_get_recent_logs_returns_buffer_lines(buffer):
-    buffer.add("boot ok", BASE)
-    out = srv.get_recent_logs(lines=5)
-    assert out["status"] == "ok"
-    assert out["count"] == 1
-    assert out["lines"] == ["[14:00:00.000] boot ok"]
-
-
-def test_get_recent_logs_without_buffer_errors(monkeypatch):
-    monkeypatch.setattr(srv, "_buffer", None)
-    out = srv.get_recent_logs()
-    assert out["status"] == "error"
-    assert out["count"] == 0
-
-
-# ---- query_serial_logs ----
-
-def test_query_serial_logs_matches(buffer):
-    buffer.add("ERROR boom", BASE)
-    buffer.add("info", BASE)
-    out = srv.query_serial_logs(r"ERROR")
-    assert out["status"] == "ok"
-    assert out["count"] == 1
-    assert out["pattern"] == "ERROR"
-    assert out["lines"][0].endswith("ERROR boom")
-
-
-def test_query_serial_logs_invalid_regex_returns_error(buffer):
-    out = srv.query_serial_logs("[")
-    assert out["status"] == "error"
-    assert "정규식" in out["message"]
-    assert out["count"] == 0
-
-
-# ---- get_log_buffer_info ----
-
-def test_get_log_buffer_info_reports_status_and_counts(buffer):
-    buffer.add("x", BASE)
-    out = srv.get_log_buffer_info()
-    assert out["status"] == "ok"
-    assert out["entries"] == 1
-    assert out["capacity"] == 100
-
-
-# ---- clear_log_buffer ----
-
-def test_clear_log_buffer_empties_and_reports(buffer):
-    buffer.add("a", BASE)
-    out = srv.clear_log_buffer()
-    assert out["status"] == "ok"
-    assert out["cleared"] == 1
-    assert srv.get_recent_logs()["count"] == 0
-
-
-def test_clear_log_buffer_without_buffer_errors(monkeypatch):
-    monkeypatch.setattr(srv, "_buffer", None)
-    out = srv.clear_log_buffer()
-    assert out["status"] == "error"
-    assert out["cleared"] == 0
-
-
-# ---- viewer_url (웹 뷰어 링크 자동 제공) ----
-
-def test_get_serial_status_includes_viewer_url(monkeypatch):
-    monkeypatch.setattr(srv, "_reader", None)
-    monkeypatch.setattr(srv, "_config", {"port": ""})
+def test_status_includes_viewer_url(monkeypatch, single):
     monkeypatch.setattr(srv, "_viewer", SimpleNamespace(url="http://127.0.0.1:8743"))
     assert srv.get_serial_status()["viewer_url"] == "http://127.0.0.1:8743"
 
 
-def test_viewer_url_is_none_when_viewer_off(monkeypatch, buffer):
-    monkeypatch.setattr(srv, "_viewer", None)
-    assert srv.get_log_buffer_info()["viewer_url"] is None
+# ---- get_recent_logs / query_serial_logs / get_log_buffer_info ----
+
+def test_query_routes_by_port(dual):
+    a, b = dual
+    a.buffer.add("ERROR boom", BASE)
+    b.buffer.add("ERROR other", BASE)
+    out = srv.query_serial_logs(r"ERROR", port="COM_B")
+    assert out["count"] == 1
+    assert out["lines"][0].endswith("ERROR other")
 
 
-def test_get_log_buffer_info_includes_viewer_url(monkeypatch, buffer):
-    monkeypatch.setattr(srv, "_viewer", SimpleNamespace(url="http://127.0.0.1:9000"))
-    assert srv.get_log_buffer_info()["viewer_url"] == "http://127.0.0.1:9000"
+def test_query_invalid_regex_still_reports(single):
+    out = srv.query_serial_logs("[")
+    assert out["status"] == "error"
+    assert "정규식" in out["message"]
+
+
+def test_buffer_info_routes_and_includes_label(dual):
+    a, _ = dual
+    a.buffer.add("x", BASE)
+    out = srv.get_log_buffer_info(port="COM_A")
+    assert out["status"] == "ok"
+    assert out["entries"] == 1
+    assert out["port"] == "COM_A"
+
+
+# ---- clear_log_buffer ----
+
+def test_clear_without_port_clears_all(dual):
+    a, b = dual
+    a.buffer.add("a", BASE)
+    b.buffer.add("b1", BASE)
+    b.buffer.add("b2", BASE)
+    out = srv.clear_log_buffer()
+    assert out["status"] == "ok"
+    assert out["cleared"] == 3
+    assert out["ports"] == {"COM_A": 1, "COM_B": 2}
+    assert a.buffer.info()["entries"] == 0
+
+
+def test_clear_with_port_clears_only_that(dual):
+    a, b = dual
+    a.buffer.add("a", BASE)
+    b.buffer.add("b", BASE)
+    out = srv.clear_log_buffer(port="SSM")
+    assert out["cleared"] == 1
+    assert b.buffer.info()["entries"] == 1
+
+
+# ---- list_serial_ports ----
+
+def test_list_serial_ports_marks_monitored(monkeypatch, dual):
+    fake = [
+        SimpleNamespace(device="COM_A", description="USB-SERIAL CH343",
+                        hwid="USB VID:PID=1A86:55D3", vid=0x1A86, pid=0x55D3,
+                        manufacturer="wch.cn", serial_number="5909024173"),
+        SimpleNamespace(device="COM_Z", description="기타", hwid="X", vid=None,
+                        pid=None, manufacturer=None, serial_number=None),
+    ]
+    monkeypatch.setattr(srv.list_ports, "comports", lambda: fake)
+    out = srv.list_serial_ports()
+    assert out["status"] == "ok"
+    assert out["monitored_ports"] == ["SSM (COM_A)", "COM_B"]
+    by_dev = {p["device"]: p for p in out["ports"]}
+    assert by_dev["COM_A"]["monitored"] is True
+    assert by_dev["COM_A"]["name"] == "SSM"
+    assert by_dev["COM_Z"]["monitored"] is False

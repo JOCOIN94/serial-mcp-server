@@ -17,6 +17,8 @@ import os
 import re
 import sys
 import threading
+from dataclasses import dataclass
+from pathlib import Path
 from datetime import datetime
 from typing import Mapping, Optional
 
@@ -24,6 +26,7 @@ import serial
 from serial.tools import list_ports
 from mcp.server.fastmcp import FastMCP
 
+from .ports import auto_usb_ports, label, name_for, parse_names, parse_port_list
 from .ring_buffer import LineBuffer
 from .viewer_feed import RawFeed
 from .web_viewer import ViewerServer
@@ -153,11 +156,24 @@ class SerialReader:
 
 # ---- 전역 상태 (main 에서 초기화) ----
 mcp = FastMCP("serial-mcp")
-_buffer: Optional[LineBuffer] = None
-_reader: Optional[SerialReader] = None
+_monitors: dict[str, "PortMonitor"] = {}   # key = 포트명 대문자
 _config: dict = {}
-_feed: Optional[RawFeed] = None
 _viewer: Optional[ViewerServer] = None
+
+
+@dataclass
+class PortMonitor:
+    """포트 하나의 모니터링 묶음 — 리더·버퍼·생중계 허브(설계 §4)."""
+
+    port: str
+    name: Optional[str]               # SERIAL_NAMES 별칭(없으면 None)
+    buffer: LineBuffer
+    feed: RawFeed
+    reader: Optional[SerialReader]    # 테스트에선 SimpleNamespace 주입 가능
+
+    @property
+    def label(self) -> str:
+        return label(self.port, self.name)
 
 
 def _viewer_url() -> Optional[str]:
@@ -165,20 +181,52 @@ def _viewer_url() -> Optional[str]:
     return _viewer.url if _viewer is not None else None
 
 
+def _resolve_port(port: str) -> tuple[Optional[PortMonitor], Optional[dict]]:
+    """도구의 port 인자(별칭/포트명/빈값)를 PortMonitor로 해석.
+
+    반환: (monitor, None) 또는 (None, 에러 dict — 도구가 그대로 반환).
+    미지정: 포트 1개면 그 포트(단일 장비 호환), 복수면 목록과 함께 지정 요구.
+    """
+    if not _monitors:
+        return None, {
+            "status": "error",
+            "message": "모니터링 중인 포트 없음 — USB 연결 또는 SERIAL_PORT 를 확인하라.",
+            "ports": [],
+        }
+    key = (port or "").strip().upper()
+    if not key:
+        if len(_monitors) == 1:
+            return next(iter(_monitors.values())), None
+        return None, {
+            "status": "error",
+            "message": "포트가 여러 개다 — port 인자로 지정하라(별칭/포트명 모두 가능).",
+            "ports": [m.label for m in _monitors.values()],
+        }
+    for m in _monitors.values():
+        if m.port.upper() == key or (m.name and m.name.upper() == key):
+            return m, None
+    return None, {
+        "status": "error",
+        "message": f"포트 '{port}' 를 모르겠다 — ports 목록에서 골라 다시 호출하라.",
+        "ports": [m.label for m in _monitors.values()],
+    }
+
+
 @mcp.tool()
 def list_serial_ports() -> dict:
-    """[언제 호출] 어느 포트가 대상 보드인지 모를 때, 또는 SERIAL_PORT 설정이
-    맞는지 확인할 때 호출한다.
+    """[언제 호출] 어느 포트가 어느 보드인지 확인할 때, 모니터링 대상을 점검할 때.
 
-    [무엇을 반환] 현재 PC의 시리얼 포트 목록. 각 포트의 device(예: COM4,
-    /dev/ttyUSB0), description, vid/pid, manufacturer 를 포함한다. VID/PID 와
-    description 으로 어떤 칩(CP210x, CH343, STLink 등)인지 추론하라. 응답의
-    configured_port 는 이 서버가 현재 가리키는 포트다.
+    [무엇을 반환] 현재 PC의 시리얼 포트 목록. 각 포트의 device/description/vid/pid/
+    manufacturer/serial_number 에 더해, 이 서버가 모니터링 중이면 monitored=true 와
+    별칭 name 이 붙는다. monitored_ports 는 현재 모니터링 목록(별칭 표기).
+    VID/PID·description 으로 칩(CH343, CP210x 등)을 추론하라.
 
     [루프 단계] 사전 점검 — 보통 한 번만.
     """
+    monitored = {m.port.upper(): m for m in _monitors.values()}
     ports = []
     for p in list_ports.comports():
+        mon = monitored.get(p.device.upper())
         ports.append(
             {
                 "device": p.device,
@@ -188,97 +236,130 @@ def list_serial_ports() -> dict:
                 "pid": p.pid,
                 "manufacturer": p.manufacturer,
                 "serial_number": p.serial_number,
+                "monitored": mon is not None,
+                "name": mon.name if mon else None,
             }
         )
     return {
         "status": "ok",
-        "message": f"{len(ports)}개 포트 발견",
-        "configured_port": _config.get("port") or None,
+        "message": f"{len(ports)}개 포트 발견, {len(_monitors)}개 모니터링 중",
+        "monitored_ports": [m.label for m in _monitors.values()],
         "ports": ports,
     }
 
 
 @mcp.tool()
-def get_serial_status() -> dict:
-    """[언제 호출] 로그가 안 들어올 때 '서버가 포트에 연결돼 있는지'부터 확인할
-    때. 포트 점유/미연결/미설정 같은 원인을 구분한다.
+def get_serial_status(port: str = "") -> dict:
+    """[언제 호출] 로그가 안 들어올 때 '어느 보드가 연결돼 있는지'부터 확인할 때.
+    포트 점유/미연결/미인식 원인을 구분한다.
 
-    [무엇을 반환] connected, 대상 port/baud, last_error, opened_at. connected
-    가 false 이고 last_error 에 점유/권한 류 에러가 있으면 사람에게 같은 포트를
-    쓰는 다른 프로그램(테라텀 등) 종료를 요청하라. 리더가 아예 없으면(SERIAL_PORT
-    미설정) 그 사실을 message 로 알린다.
+    [무엇을 반환] port 미지정 시 모니터링 중인 전 포트의 상태 배열(ports).
+    port(별칭 "SSM" 또는 포트명 "COM4") 지정 시 그 포트의 단일 상태.
+    connected 가 false 이고 last_error 에 점유/권한 에러가 있으면 사람에게 같은
+    포트를 쓰는 다른 프로그램(테라텀 등) 종료를 요청하라.
 
     사람이 로그를 직접 눈으로 보고 싶어 하면 viewer_url 링크를 안내하라(웹 뷰어).
     [루프 단계] 문제 진단.
     """
-    if _reader is None:
+
+    def one(m: PortMonitor) -> dict:
+        r = m.reader
+        return {
+            "name": m.name,
+            "label": m.label,
+            "port": m.port,
+            "connected": bool(r and r.connected),
+            "baud": r.baud if r else None,
+            "last_error": r.last_error if r else None,
+            "opened_at": r.opened_at.isoformat() if r and r.opened_at else None,
+        }
+
+    if (port or "").strip():
+        mon, err = _resolve_port(port)
+        if err:
+            return {**err, "connected": False, "viewer_url": _viewer_url()}
+        d = one(mon)
+        d["status"] = "ok"
+        d["message"] = "연결됨" if d["connected"] else "연결 안 됨"
+        d["viewer_url"] = _viewer_url()
+        return d
+    if not _monitors:
         return {
             "status": "error",
-            "message": "리더 미시작 — SERIAL_PORT 가 설정되지 않았다. list_serial_ports 로 포트를 찾아 환경변수를 설정하라.",
+            "message": "모니터링 중인 포트 없음 — USB 연결 또는 SERIAL_PORT 를 확인하라.",
             "connected": False,
-            "configured_port": _config.get("port") or None,
+            "ports": [],
             "viewer_url": _viewer_url(),
         }
+    plist = [one(m) for m in _monitors.values()]
+    n_on = sum(1 for x in plist if x["connected"])
     return {
         "status": "ok",
-        "message": "연결됨" if _reader.connected else "연결 안 됨",
-        "connected": _reader.connected,
-        "port": _reader.port,
-        "baud": _reader.baud,
-        "last_error": _reader.last_error,
-        "opened_at": _reader.opened_at.isoformat() if _reader.opened_at else None,
-        "tee": _config.get("tee") or None,
+        "message": f"{n_on}/{len(plist)} 포트 연결됨",
+        "ports": plist,
         "viewer_url": _viewer_url(),
     }
 
 
 @mcp.tool()
-def get_recent_logs(lines: int = 200) -> dict:
-    """[언제 호출] 블랙박스 루프의 '결과 확인' 단계 — 사람이 장비를 동작시킨 뒤,
-    그동안 쌓인 로그를 확인할 때. 가장 자주 쓰는 도구.
+def get_recent_logs(lines: int = 200, port: str = "") -> dict:
+    """[언제 호출] 블랙박스 루프의 '결과 확인' 단계 — 사람이 장비를 동작시킨 뒤
+    쌓인 로그를 확인할 때. 가장 자주 쓰는 도구.
 
-    [무엇을 반환] 최근 N개 라인(시간 오름차순). 연속 중복은 접혀서 한 줄에
-    '(N회 반복, HH:MM:SS~HH:MM:SS)'로 표기된다. 각 줄 앞에 수신 시각이 붙는다.
+    [port 규약] 보드가 여러 개면 port 를 지정하라(별칭 "SSM" 또는 "COM4", 대소문자
+    무관). 미지정: 포트 1개면 그 포트, 복수면 에러와 함께 ports 목록을 돌려준다 —
+    목록에서 골라 즉시 재호출하면 된다.
+
+    [무엇을 반환] 최근 N개 라인(시간 오름차순). 근접 중복은 룩백으로 접혀
+    '(N회 반복, HH:MM:SS~HH:MM:SS)' 표기 — 접힘은 요약이라 반복 줄들의 정밀한
+    교차 순서는 뭉개진다. 정밀 순서가 필요하면 SERIAL_DEDUP=1 또는 0 으로 낮춰
+    재시험하라(tee 파일엔 원본 보존).
 
     [팁] 결과가 많으면 query_serial_logs 로 좁혀라. 비어 있으면 get_serial_status
-    로 연결을 확인하고, 그래도 비면 사람에게 장비 동작/리셋을 요청하라 — 이 서버는
-    읽기 전용이라 AI가 직접 리셋할 수 없다.
+    로 연결을 확인하고, 그래도 비면 사람에게 장비 동작/리셋을 요청하라.
 
     [루프 단계] 결과 확인.
     """
-    if _buffer is None:
-        return {"status": "error", "message": "버퍼 미초기화", "count": 0, "lines": []}
-    got = _buffer.get_recent(lines)
+    mon, err = _resolve_port(port)
+    if err:
+        return {**err, "count": 0, "lines": []}
+    got = mon.buffer.get_recent(lines)
     return {
         "status": "ok",
-        "message": f"{len(got)}줄 반환",
+        "message": f"{mon.label}: {len(got)}줄 반환",
+        "port": mon.port,
+        "name": mon.name,
         "count": len(got),
         "lines": got,
     }
 
 
 @mcp.tool()
-def query_serial_logs(pattern: str, max_results: int = 100) -> dict:
+def query_serial_logs(pattern: str, max_results: int = 100, port: str = "") -> dict:
     """[언제 호출] 특정 키워드/에러/마커를 버퍼에서 찾을 때. 예: 부팅 완료 문구,
-    'ERROR', 특정 상태 출력의 등장 여부 확인.
+    'ERROR', 특정 상태 출력의 등장 여부.
 
-    [무엇을 반환] 정규식 pattern 에 매칭되는 라인들(최신 우선 max_results개,
-    반환은 시간 오름차순). 접힌 묶음 표기 포함.
+    [port 규약] get_recent_logs 와 동일 — 복수 포트면 지정, 미지정 에러 시 ports
+    목록에서 골라 재호출.
 
-    [주의] pattern 은 파이썬 정규식이다. 매칭이 0이면 그 문구가 아직 안 나온 것 —
-    사람에게 해당 동작을 요청하거나 더 기다린 뒤 다시 조회하라.
+    [무엇을 반환] 정규식 pattern 매칭 라인들(최신 우선 max_results개, 반환은 시간
+    오름차순, 접힌 묶음 표기 포함). 매칭 0이면 그 문구가 아직 안 나온 것 — 사람에게
+    해당 동작을 요청하거나 더 기다린 뒤 재조회하라.
 
     [루프 단계] 결과 확인(표적 검색).
     """
-    if _buffer is None:
-        return {"status": "error", "message": "버퍼 미초기화", "count": 0, "lines": []}
+    mon, err = _resolve_port(port)
+    if err:
+        return {**err, "count": 0, "lines": []}
     try:
-        got = _buffer.query(pattern, max_results)
+        got = mon.buffer.query(pattern, max_results)
     except re.error as e:
         return {"status": "error", "message": f"정규식 오류: {e}", "count": 0, "lines": []}
     return {
         "status": "ok",
-        "message": f"{len(got)}줄 매칭",
+        "message": f"{mon.label}: {len(got)}줄 매칭",
+        "port": mon.port,
+        "name": mon.name,
         "pattern": pattern,
         "count": len(got),
         "lines": got,
@@ -286,38 +367,55 @@ def query_serial_logs(pattern: str, max_results: int = 100) -> dict:
 
 
 @mcp.tool()
-def get_log_buffer_info() -> dict:
-    """[언제 호출] 버퍼가 얼마나 찼는지, 가장 최근/오래된 줄이 무엇인지 빠르게 볼
-    때. clear_log_buffer 직후 새 로그가 들어오기 시작했는지 폴링할 때 특히 유용.
+def get_log_buffer_info(port: str = "") -> dict:
+    """[언제 호출] 버퍼가 얼마나 찼는지, 최근/최오래 항목이 무엇인지 빠르게 볼 때.
+    clear_log_buffer 직후 새 로그 유입을 폴링할 때 특히 유용.
+
+    [port 규약] get_recent_logs 와 동일.
 
     [무엇을 반환] entries/capacity, oldest/newest, 누적 total_received/total_stored,
-    dedup 여부.
+    dedup(룩백 윈도 — 0이면 끔).
 
     [루프 단계] 진행 점검(폴링).
     """
-    if _buffer is None:
-        return {"status": "error", "message": "버퍼 미초기화"}
-    info = _buffer.info()
+    mon, err = _resolve_port(port)
+    if err:
+        return err
+    info = mon.buffer.info()
     info["status"] = "ok"
-    info["message"] = f"{info['entries']}/{info['capacity']} 항목"
+    info["message"] = f"{mon.label}: {info['entries']}/{info['capacity']} 항목"
+    info["port"] = mon.port
+    info["name"] = mon.name
     info["viewer_url"] = _viewer_url()
     return info
 
 
 @mcp.tool()
-def clear_log_buffer() -> dict:
+def clear_log_buffer(port: str = "") -> dict:
     """[언제 호출] 블랙박스 시험의 '시작' 단계 — 새 시험을 깨끗한 상태에서
-    관측하려고 직전 로그를 비울 때. 표준 절차: 이 도구로 비우고 → 사람에게 장비
-    동작/리셋을 요청하고 → 잠시 후 get_recent_logs 로 결과를 회수한다.
+    관측하려고 직전 로그를 비울 때. 표준 절차: 비우고 → 사람에게 장비 동작/리셋
+    요청 → 잠시 후 get_recent_logs 로 회수.
 
-    [무엇을 반환] 비우기 직전의 항목 수(cleared).
+    [port 규약] 다른 도구와 달리 **미지정 = 전체 포트 비우기**(시험 시작 시 모든
+    보드를 함께 리셋 관측하는 게 보통이므로). 특정 보드만 비우려면 port 지정.
+
+    [무엇을 반환] cleared(총 비운 항목 수)와 ports(포트별 내역).
 
     [루프 단계] 시험 시작.
     """
-    if _buffer is None:
-        return {"status": "error", "message": "버퍼 미초기화", "cleared": 0}
-    n = _buffer.clear()
-    return {"status": "ok", "message": f"{n}개 항목 비움", "cleared": n}
+    if not _monitors:
+        return {"status": "error", "message": "모니터링 중인 포트 없음", "cleared": 0, "ports": {}}
+    if (port or "").strip():
+        mon, err = _resolve_port(port)
+        if err:
+            return {**err, "cleared": 0}
+        n = mon.buffer.clear()
+        return {"status": "ok", "message": f"{mon.label}: {n}개 항목 비움",
+                "cleared": n, "ports": {mon.port: n}}
+    detail = {m.port: m.buffer.clear() for m in _monitors.values()}
+    total = sum(detail.values())
+    return {"status": "ok", "message": f"전체 {len(detail)}개 포트에서 {total}개 비움",
+            "cleared": total, "ports": detail}
 
 
 def _env_int(env: Mapping[str, str], name: str, default: int) -> int:
@@ -332,14 +430,27 @@ def _env_int(env: Mapping[str, str], name: str, default: int) -> int:
         return default
 
 
-def _viewer_buffer_info() -> dict:
-    """웹 뷰어 /api/buffer 응답(버퍼 탭) — 구조화 스냅샷 + 카운터."""
-    if _buffer is None:
-        return {"status": "error", "entries": []}
-    info = _buffer.info()
+def _viewer_ports_info() -> list[dict]:
+    """웹 뷰어 /api/ports — 셀렉터 구성용 [{port, label}] 목록."""
+    return [{"port": m.port, "label": m.label} for m in _monitors.values()]
+
+
+def _viewer_feed_for(port: str) -> Optional[RawFeed]:
+    """웹 뷰어 /api/stream?port= — 해당 포트의 RawFeed(없으면 None→404)."""
+    m = _monitors.get((port or "").strip().upper())
+    return m.feed if m else None
+
+
+def _viewer_buffer_info(port: str) -> dict:
+    """웹 뷰어 /api/buffer?port= — 해당 포트의 구조화 스냅샷 + 카운터."""
+    m = _monitors.get((port or "").strip().upper())
+    if m is None:
+        return {"status": "error", "entries": [], "capacity": 0}
+    info = m.buffer.info()
     return {
         "status": "ok",
-        "entries": _buffer.snapshot(),
+        "port": m.port,
+        "entries": m.buffer.snapshot(),
         "capacity": info["capacity"],
         "total_received": info["total_received"],
         "total_stored": info["total_stored"],
@@ -348,31 +459,40 @@ def _viewer_buffer_info() -> dict:
 
 
 def _viewer_status_info() -> dict:
-    """웹 뷰어 /api/status 응답(헤더 표시) — get_serial_status의 경량판.
+    """웹 뷰어 /api/status — 전 포트 상태 배열(+버퍼 적재 현황, 탭 카운터용)."""
+    plist = []
+    for m in _monitors.values():
+        r = m.reader
+        binfo = m.buffer.info()
+        plist.append({
+            "port": m.port,
+            "label": m.label,
+            "connected": bool(r and r.connected),
+            "baud": r.baud if r else None,
+            "last_error": r.last_error if r else None,
+            "buffer_entries": binfo["entries"],
+            "buffer_capacity": binfo["capacity"],
+        })
+    return {"ports": plist}
 
-    버퍼 적재 현황을 함께 실어, 뷰어가 버퍼 전체를 받지 않고도
-    탭 카운터("버퍼 N/2000")를 5초 폴링으로 갱신할 수 있게 한다.
-    """
-    buf = _buffer.info() if _buffer is not None else {"entries": 0, "capacity": 0}
-    base = {
-        "buffer_entries": buf["entries"],
-        "buffer_capacity": buf["capacity"],
-    }
-    if _reader is None:
-        base.update(
-            connected=False,
-            port=_config.get("port") or "",
-            baud=_config.get("baud"),
-            last_error="리더 미시작(SERIAL_PORT 미설정)",
-        )
-    else:
-        base.update(
-            connected=_reader.connected,
-            port=_reader.port,
-            baud=_reader.baud,
-            last_error=_reader.last_error,
-        )
-    return base
+
+def _parse_dedup(env: Mapping[str, str]) -> int:
+    """SERIAL_DEDUP 파싱 — 룩백 윈도. 기본 5, 0/false=끔, 1/true=직전 줄만(구버전)."""
+    raw = env.get("SERIAL_DEDUP", "").strip().lower()
+    if raw == "":
+        return 5
+    if raw in ("0", "false", "no", "off"):
+        return 0
+    if raw in ("1", "true", "yes", "on"):
+        return 1
+    try:
+        n = int(raw)
+        if n >= 0:
+            return n
+    except ValueError:
+        pass
+    _log(f"환경변수 SERIAL_DEDUP={raw!r} 해석 실패 → 기본 룩백 5 사용")
+    return 5
 
 
 def _parse_web(env: Mapping[str, str]) -> Optional[int]:
@@ -395,48 +515,64 @@ def _load_config(env: Mapping[str, str]) -> dict:
     main()이 이 결과로 LineBuffer/SerialReader를 구성한다. I/O·스레드 시작과
     분리돼 있어 환경변수 계약(SPEC §3/§4)을 단독 테스트할 수 있다.
     """
-    port = env.get("SERIAL_PORT", "").strip()
-    baud = _env_int(env, "SERIAL_BAUD", 115200)
-    tee = env.get("SERIAL_TEE", "").strip() or None
-    exclude = env.get("SERIAL_EXCLUDE", "").strip() or None
-    include = env.get("SERIAL_INCLUDE", "").strip() or None
-    maxlen = _env_int(env, "SERIAL_BUFFER_LINES", 2000)
-    dedup = env.get("SERIAL_DEDUP", "1").strip().lower() not in ("0", "false", "no", "off")
     return {
-        "port": port, "baud": baud, "tee": tee, "exclude": exclude,
-        "include": include, "maxlen": maxlen, "dedup": dedup,
+        "ports": parse_port_list(env.get("SERIAL_PORT", "")),   # [] = USB 자동 스캔
+        "names": parse_names(env.get("SERIAL_NAMES", "")),
+        "baud": _env_int(env, "SERIAL_BAUD", 115200),
+        "tee": env.get("SERIAL_TEE", "").strip() or None,
+        "exclude": env.get("SERIAL_EXCLUDE", "").strip() or None,
+        "include": env.get("SERIAL_INCLUDE", "").strip() or None,
+        "maxlen": _env_int(env, "SERIAL_BUFFER_LINES", 2000),
+        "dedup": _parse_dedup(env),
         "web": _parse_web(env),
     }
 
 
+def _tee_path_for(base: Optional[str], tag: str) -> Optional[str]:
+    """포트별 tee 파일 경로 — 'log.txt' + 'SSM' → 'log.SSM.txt'(파일명 안전화)."""
+    if not base:
+        return None
+    safe = re.sub(r"[^\w\-]", "_", tag)
+    p = Path(base)
+    return str(p.with_name(f"{p.stem}.{safe}{p.suffix}"))
+
+
 def main() -> None:
-    """엔트리포인트. 환경변수로 설정을 읽고 리더를 띄운 뒤 stdio 로 MCP 서버 구동."""
-    global _buffer, _reader, _config, _feed, _viewer
+    """엔트리포인트. USB 자동 스캔(또는 SERIAL_PORT 목록)으로 포트별 모니터를
+    띄우고 stdio 로 MCP 서버 구동."""
+    global _config, _viewer
 
     cfg = _load_config(os.environ)
-    _config = {
-        "port": cfg["port"], "baud": cfg["baud"], "tee": cfg["tee"],
-        "exclude": cfg["exclude"], "include": cfg["include"],
-    }
-    _buffer = LineBuffer(
-        maxlen=cfg["maxlen"], dedup=cfg["dedup"],
-        exclude=cfg["exclude"], include=cfg["include"],
-    )
-    _feed = RawFeed()
+    _config = cfg
 
-    if not cfg["port"]:
-        _log("경고: SERIAL_PORT 미설정 — 서버는 뜨지만 리더는 시작하지 않는다. "
-             "list_serial_ports 로 포트를 확인하고 환경변수를 설정하라.")
-    else:
-        _reader = SerialReader(
-            port=cfg["port"], baud=cfg["baud"], buffer=_buffer,
-            tee_path=cfg["tee"], feed=_feed,
-        )
-        _reader.start()
+    com = list(list_ports.comports())
+    specs = cfg["ports"]
+    if not specs:
+        specs = [(dev, None) for dev in auto_usb_ports(com)]
+        _log(f"자동 스캔: USB 시리얼 {len(specs)}개 발견")
+    sn_map = {p.device.upper(): getattr(p, "serial_number", None) for p in com}
+
+    for port, baud_override in specs:
+        baud = baud_override or cfg["baud"]
+        name = name_for(port, sn_map.get(port.upper()), cfg["names"])
+        buf = LineBuffer(maxlen=cfg["maxlen"], dedup=cfg["dedup"],
+                         exclude=cfg["exclude"], include=cfg["include"])
+        feed = RawFeed()
+        reader = SerialReader(port=port, baud=baud, buffer=buf,
+                              tee_path=_tee_path_for(cfg["tee"], name or port), feed=feed)
+        mon = PortMonitor(port=port, name=name, buffer=buf, feed=feed, reader=reader)
+        _monitors[port.upper()] = mon
+        reader.start()
+        _log(f"모니터 시작: {mon.label} @ {baud}")
+
+    if not _monitors:
+        _log("경고: 모니터링할 포트 없음 — USB 시리얼이 안 보이고 SERIAL_PORT 도 "
+             "비어 있다. 장비 연결 후 서버를 재시작하라(핫플러그 없음).")
 
     if cfg["web"] is not None:
         _viewer = ViewerServer(
-            feed=_feed,
+            ports_info=_viewer_ports_info,
+            feed_for=_viewer_feed_for,
             buffer_info=_viewer_buffer_info,
             status_info=_viewer_status_info,
             port=cfg["web"],
@@ -446,7 +582,7 @@ def main() -> None:
     else:
         _log("웹 뷰어 꺼짐 (SERIAL_WEB=0)")
 
-    _log(f"시작 (port={cfg['port'] or '(미설정)'}, baud={cfg['baud']}, dedup={cfg['dedup']}, "
+    _log(f"시작 (포트 {len(_monitors)}개, dedup={cfg['dedup']}, "
          f"buffer={cfg['maxlen']}, tee={cfg['tee'] or '없음'})")
     mcp.run()  # stdio transport(기본)
 
