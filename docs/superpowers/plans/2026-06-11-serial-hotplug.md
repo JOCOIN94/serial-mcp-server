@@ -414,7 +414,7 @@ git commit -m "feat: _hotplug_scan_once — 신규 USB 포트 감지·모니터 
 - Modify: `src/serial_mcp/server.py` (`_hotplug_scan_once` 뒤에 루프 함수, `main()` 끝부분)
 - Test: `tests/test_hotplug.py`
 
-- [ ] **Step 1: 실패 테스트 작성** — `tests/test_hotplug.py` 끝에 추가:
+- [x] **Step 1: 실패 테스트 작성** — `tests/test_hotplug.py` 끝에 추가:
 
 ```python
 # ---- _hotplug_loop (주기 호출·예외 생존) ----
@@ -441,12 +441,12 @@ def test_hotplug_loop_exits_immediately_when_stopped():
     srv._hotplug_loop(0.01, stop)   # 호출 0회로 즉시 리턴(블록되면 테스트 타임아웃)
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [x] **Step 2: 실패 확인**
 
 Run: `uv run pytest tests/test_hotplug.py -q`
 Expected: FAIL — `AttributeError: ... no attribute '_hotplug_loop'`
 
-- [ ] **Step 3: 구현** — `_hotplug_scan_once` 뒤에 추가:
+- [x] **Step 3: 구현** — `_hotplug_scan_once` 뒤에 추가:
 
 ```python
 def _hotplug_loop(interval: float, stop: threading.Event) -> None:
@@ -488,12 +488,12 @@ _hotplug_stop = threading.Event()   # 핫플러그 스캔 루프 종료 신호(�
         _log("핫플러그 스캔 꺼짐 (SERIAL_HOTPLUG=0)")
 ```
 
-- [ ] **Step 4: 전체 통과 확인 + 문법 검증**
+- [x] **Step 4: 전체 통과 확인 + 문법 검증**
 
 Run: `uv run pytest -q && py -m compileall -q src`
 Expected: PASS (전건), compileall 무출력
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add tests/test_hotplug.py src/serial_mcp/server.py

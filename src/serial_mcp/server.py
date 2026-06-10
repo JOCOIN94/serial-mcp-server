@@ -177,6 +177,7 @@ _config: dict = {}
 _viewer: Optional[ViewerServer] = None
 _autoname_rules: list = []   # SERIAL_AUTONAME 컴파일 결과 [(이름, re.Pattern)]
 _autoname_lock = threading.Lock()   # 검사-부여 원자화(동시 리셋 시 중복 이름 방지)
+_hotplug_stop = threading.Event()   # 핫플러그 스캔 루프 종료 신호(테스트·향후 정리용)
 
 
 @dataclass
@@ -668,6 +669,18 @@ def _hotplug_scan_once() -> list[str]:
     return [m.port for m in added]
 
 
+def _hotplug_loop(interval: float, stop: threading.Event) -> None:
+    """핫플러그 스캔 루프(데몬 스레드 본체) — 어떤 예외에도 죽지 않는다.
+
+    stop.wait(interval) 가 타이머 겸 종료 신호 수신을 겸한다(즉시 반응).
+    """
+    while not stop.wait(interval):
+        try:
+            _hotplug_scan_once()
+        except Exception as e:  # noqa: BLE001 - 스캔 실패가 스레드를 죽이면 안 됨
+            _log(f"핫플러그 스캔 오류: {e!r}")
+
+
 def main() -> None:
     """엔트리포인트. USB 자동 스캔(또는 SERIAL_PORT 목록)으로 포트별 모니터를
     띄우고 stdio 로 MCP 서버 구동."""
@@ -697,9 +710,22 @@ def main() -> None:
         mon.reader.start()
         _log(f"모니터 시작: {mon.label} @ {mon.reader.baud}")
 
+    hotplug_on = cfg["hotplug"] is not None and not cfg["ports"]
     if not _monitors:
-        _log("경고: 모니터링할 포트 없음 — USB 시리얼이 안 보이고 SERIAL_PORT 도 "
-             "비어 있다. 장비 연결 후 서버를 재시작하라(핫플러그 없음).")
+        if hotplug_on:
+            _log("경고: 모니터링할 포트 없음 — USB 장비를 연결하면 핫플러그 스캔이 자동 추가한다.")
+        else:
+            _log("경고: 모니터링할 포트 없음 — USB 시리얼이 안 보이고 SERIAL_PORT 도 "
+                 "비어 있다. 장비 연결 후 서버를 재시작하라(핫플러그 꺼짐).")
+
+    if hotplug_on:
+        threading.Thread(target=_hotplug_loop, args=(cfg["hotplug"], _hotplug_stop),
+                         name="hotplug-scan", daemon=True).start()
+        _log(f"핫플러그 스캔 켜짐 ({cfg['hotplug']:g}초 간격)")
+    elif cfg["ports"]:
+        _log("핫플러그 스캔 없음 — SERIAL_PORT 고정 목록 모드(늦은 연결은 재연결 루프가 잡음)")
+    else:
+        _log("핫플러그 스캔 꺼짐 (SERIAL_HOTPLUG=0)")
 
     if cfg["web"] is not None:
         _viewer = ViewerServer(

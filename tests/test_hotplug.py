@@ -141,3 +141,27 @@ def test_scan_noop_when_nothing_new(monkeypatch, scan_env):
     monkeypatch.setattr(srv.list_ports, "comports", lambda: [usb("COM_A")])
     assert srv._hotplug_scan_once() == []
     assert srv._monitors is before               # 변화 없으면 dict 교체도 없음
+
+
+# ---- _hotplug_loop (주기 호출·예외 생존) ----
+
+def test_hotplug_loop_survives_scan_exceptions(monkeypatch):
+    """스캔이 예외를 던져도 루프는 죽지 않고 다음 주기를 돈다(서버 생존 우선)."""
+    stop = threading.Event()
+    calls = []
+
+    def boom():
+        calls.append(1)
+        if len(calls) >= 2:
+            stop.set()          # 2회 호출을 확인했으면 루프 종료
+        raise RuntimeError("scan failed")
+
+    monkeypatch.setattr(srv, "_hotplug_scan_once", boom)
+    srv._hotplug_loop(0.01, stop)   # stop 세트 후 리턴해야 한다(무한 루프 금지)
+    assert len(calls) >= 2          # 1회차 예외에도 2회차가 돌았다
+
+
+def test_hotplug_loop_exits_immediately_when_stopped():
+    stop = threading.Event()
+    stop.set()
+    srv._hotplug_loop(0.01, stop)   # 호출 0회로 즉시 리턴(블록되면 테스트 타임아웃)
