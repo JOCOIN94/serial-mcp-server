@@ -1,4 +1,4 @@
-"""silotek-serial-mcp — FastMCP 서버 본체.
+"""serial-mcp-server — FastMCP 서버 본체.
 
 백그라운드 스레드가 시리얼 포트를 지속적으로 읽어 LineBuffer에 쌓고,
 AI(Claude Code)는 6개의 조회 도구로 버퍼를 읽으며, 승인 게이트가 있는

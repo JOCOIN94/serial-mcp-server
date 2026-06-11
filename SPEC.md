@@ -1,4 +1,4 @@
-# silotek-serial-mcp 명세
+# serial-mcp-server 명세
 ### (B안: MCP 코어 + 얇은 스킬 하이브리드)
 
 > **핵심 원칙: "docstring은 자족적으로, 스킬은 그 위에 워크플로만 얹는다."**
@@ -88,22 +88,22 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 ## 6. 프로젝트 구조 및 배포 (하이브리드)
 
 - Python/uv 서버 코드는 독립 git 저장소에 둔다.
-  - 로컬: `C:\Users\User\projects\silotek-serial-mcp\`
-  - GitHub: `https://github.com/JOCOIN94/silotek-serial-mcp`
+  - 로컬: `C:\Users\User\projects\serial-mcp-server\`
+  - GitHub: `https://github.com/JOCOIN94/serial-mcp-server`
   - uv 프로젝트(`pyproject.toml`), 실행 엔트리포인트는 `serial-mcp`. 서버 코드를 다른 저장소에 포함하지 않는다.
 - 코드는 GitHub에 게시한다. 팀원은 uvx로 git에서 직접 실행하므로 클론·경로 지정이 불필요하며, 갱신은 git push로 반영된다.
-- 배포는 기존 silotek-tools 플러그인 마켓플레이스 채널을 재사용한다. silotek-tools 저장소(`C:\Users\User\projects\silotek-tools\`, GitHub `JOCOIN94/silotek-claude-plugins`)에 매니페스트와 스킬 문서만 포함하는 플러그인을 추가한다.
+- 배포는 `silotek` 플러그인 마켓플레이스 채널을 사용한다. `silotek-plugin-marketplace` 저장소(`C:\Users\User\projects\silotek-plugin-marketplace\`, GitHub `JOCOIN94/silotek-plugin-marketplace`)에 매니페스트와 스킬 문서만 포함하는 플러그인을 둔다.
     - `plugins/serial-mcp/.claude-plugin/plugin.json` : `mcpServers`에 다음을 정의한다.
         - `command`: `uvx`
-        - `args`: `--from git+https://github.com/JOCOIN94/silotek-serial-mcp serial-mcp`
+        - `args`: `--from git+https://github.com/JOCOIN94/serial-mcp-server serial-mcp`
         - `env`: `SERIAL_PORT`을 `${SERIAL_PORT:-}`로 참조(빈 기본값 폴백 — 미설정 시 빈 문자열로 치환되고 서버가 기본값 처리). `SERIAL_BAUD`, `SERIAL_TEE`, `SERIAL_EXCLUDE`, `SERIAL_INCLUDE`, `SERIAL_WRITE`, `SERIAL_WRITE_CONFIRM` 등도 동일한 `${VAR:-}` 패스스루로 노출(미지정 시 서버 기본값, 보드레이트 115200, 쓰기 승인 기본 켜짐).
-    - `plugins/serial-mcp/skills/serial-debugging/SKILL.md` : §9의 스킬을 동일 플러그인에 동봉한다.
+    - `plugins/serial-mcp/skills/serial/SKILL.md` : §9의 스킬을 동일 플러그인에 동봉한다.
     - 루트 `.claude-plugin/marketplace.json`에 serial-mcp 플러그인 항목을 추가한다.
-- silotek-tools 저장소에는 Python 코드를 포함하지 않으며, 매니페스트(JSON)와 스킬(마크다운)만 포함한다. 실제 서버 코드는 외부 저장소에서 uvx가 가져온다. silotek-tools는 Node 기반 저장소이므로 언어·도메인을 혼재시키지 않는다(스킬은 마크다운이라 언어중립).
+- silotek-plugin-marketplace 저장소에는 Python 코드를 포함하지 않으며, 매니페스트(JSON)와 스킬(마크다운)만 포함한다. 실제 서버 코드는 외부 저장소에서 uvx가 가져온다. marketplace 저장소는 Node 기반 research-log 플러그인도 포함하므로, serial-mcp 서버 런타임과 언어·도메인을 혼재시키지 않는다(스킬은 마크다운이라 언어중립).
 
 **6.1 버전 동기화 규칙 (B안 운영 부채 관리)**
 - 도구 이름·시그니처는 "안정 계약"으로 취급한다. 변경 시 같은 폴더의 스킬(`SKILL.md`)도 동일 PR에서 함께 수정한다.
-- 스킬·매니페스트는 silotek-tools 한 저장소에 함께 있어 동시 갱신이 가능하다. 서버 코드(외부 레포)와는 분리되므로, 드리프트 최소화를 위해 도구 이름 변경 빈도를 낮게 유지한다.
+- 스킬·매니페스트는 silotek-plugin-marketplace 한 저장소에 함께 있어 동시 갱신이 가능하다. 서버 코드(외부 레포)와는 분리되므로, 드리프트 최소화를 위해 도구 이름 변경 빈도를 낮게 유지한다.
 
 ## 7. 등록 및 사용 (플러그인 방식)
 
@@ -112,7 +112,7 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - 개인별로 상이한 값(포트, 보드레이트, tee 경로)은 plugin.json에 하드코딩하지 않고 `${SERIAL_PORT:-}` 등 환경변수 참조(빈 기본값 폴백)로 처리한다.
 - 대안(마켓 미경유):
     ```
-    claude mcp add --scope user serial-mcp -e SERIAL_PORT=<해당 포트> -e SERIAL_BAUD=115200 -- uvx --from git+https://github.com/JOCOIN94/silotek-serial-mcp serial-mcp
+    claude mcp add --scope user serial-mcp -e SERIAL_PORT=<해당 포트> -e SERIAL_BAUD=115200 -- uvx --from git+https://github.com/JOCOIN94/serial-mcp-server serial-mcp
     ```
     > 이 경로는 MCP 도구만 등록되며 스킬은 포함되지 않는다. docstring이 자족적이라 도구 자체는 정상 동작하나, 스킬의 워크플로 보강은 적용되지 않는다.
 
@@ -126,7 +126,7 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 ## 9. 스킬 명세
 
 **9.1 식별**
-- 위치: `plugins/serial-mcp/skills/serial-debugging/SKILL.md` (MCP와 동일 플러그인에 동봉)
+- 위치: `plugins/serial-mcp/skills/serial/SKILL.md` (MCP와 동일 플러그인에 동봉)
 - 형식: 순수 마크다운. 실행 코드 없음.
 - description(트리거, 항상 컨텍스트 상주 1줄): "시리얼/펌웨어 디버깅 중 장비 로그를 확인하거나, 사람이 장비를 동작시키고 그 결과 로그를 AI가 확인하는 블랙박스 시험 루프를 돌릴 때 사용한다."
 
@@ -163,7 +163,7 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - 웹 로그 뷰어 구현(2026-06-10, §10): RawFeed 허브 + ViewerServer(stdlib HTTP/SSE) + 단일 페이지. 도구 응답 viewer_url 포함.
 - 다중 포트 자동 모니터링 구현(2026-06-10): USB 자동 스캔·PortMonitor×N·별칭(SERIAL_NAMES)·도구 port 라우팅·뷰어 포트 셀렉터·dedup 룩백(기본 5). 설계: `docs/superpowers/specs/2026-06-10-multi-port-design.md`.
 - 보드 자동 식별 구현(2026-06-10): `SERIAL_AUTONAME`(`이름=정규식;…`, 세미콜론 구분, 순서=우선순위)으로 이름 없는 포트의 수신 줄을 대조해 첫 매칭에서 1회 확정(§3). `SERIAL_NAMES` 우선·중복 이름 미부여·잘못된 정규식은 무시(서버 생존). 설계: `docs/superpowers/specs/2026-06-10-multi-port-design.md` §11.
-- 배포 완료(2026-06-10): GitHub 공개 push(`JOCOIN94/silotek-serial-mcp`, uvx 원격 실행 검증), silotek-tools 마켓에 serial-mcp 플러그인 등록(plugin.json — env 10종 패스스루, SKILL.md — 베이스라인 대조 검증 거침, 0.1.0). **§부록 미완 항목 전부 해소** — 이후 변경은 main push가 곧 배포.
+- 배포 완료(2026-06-10): GitHub 공개 push(`JOCOIN94/serial-mcp-server`, uvx 원격 실행 검증), silotek 마켓에 serial-mcp 플러그인 등록(plugin.json — env 10종 패스스루, SKILL.md — 베이스라인 대조 검증 거침, 0.1.0). **§부록 미완 항목 전부 해소** — 이후 변경은 main push가 곧 배포.
 - 핫플러그 구현(2026-06-11): 자동 스캔 모드에서 `SERIAL_HOTPLUG` 간격(기본 5초)으로 comports() 재스캔, 신규 USB 포트를 런타임 모니터 추가. `_monitors`는 copy-on-write로 원자 교체(리더 스레드 순회와 무충돌). 모니터 조립 규칙은 `_make_monitor()`로 추출해 기동·핫플러그가 공유. 뷰어도 동조: 상태 폴링(5초)이 신규 포트를 셀렉터에 추가하고, 포트 0개 기동 후 첫 보드에 스트림 자동 연결(코드리뷰 반영). 계획서: `docs/superpowers/plans/2026-06-11-serial-hotplug.md`.
 - 쓰기·리셋 구현(2026-06-11): `send_serial_command`·`reset_board` 추가, 기본 매 호출 elicitation 승인 게이트, `SERIAL_WRITE`/`SERIAL_WRITE_CONFIRM` 설정, `[TX]`/`[RST]` 감사 마커, `LineBuffer.entries_since()` 기반 응답 회수(dedup 접힘 포함). 단위 테스트 186개 통과. 실장비 검증에서 reset/승인 팝업과 SSM `HELP` 명령 smoke test(명령 목록 출력)를 확인 중이며, `/help`는 에코만 되고 명령 목록을 출력하지 않는 것으로 관찰됨. 계획서: `docs/plans/2026-06-11-serial-write-reset.md`.
 - 테스트 장비: ESP32-S3(SSM 펌웨어), COM4(CH343), 115200.

@@ -1,4 +1,4 @@
-# AGENTS.md — silotek-serial-mcp
+# AGENTS.md — serial-mcp-server
 
 AI가 임베디드 보드(ESP32/STM32 등)의 시리얼 텍스트 로그를 읽는 헤드리스 MCP 서버. 사용 주체는 사람이 아니라 AI(Claude Code, Codex 등). 전체 명세는 `SPEC.md`, 설치·사용은 `README.md`.
 
@@ -52,4 +52,4 @@ AI가 임베디드 보드(ESP32/STM32 등)의 시리얼 텍스트 로그를 읽�
 - `README.md` — 설치·사용·환경변수.
 - `AGENTS.md` — 에이전트 공통 지침(이 파일). `CLAUDE.md`는 이 파일을 임포트하고 Claude Code 전용 사항만 추가한다.
 - `docs/plans/` — 구현 계획서(새 계획서는 여기에). `docs/superpowers/`는 과거 계획·설계서 아카이브 — 문서 머리의 superpowers 스킬 지시문은 폐기됐으므로 무시한다.
-- 배포측(플러그인 매니페스트 `plugin.json` + 안내 스킬 `SKILL.md`)은 별도 레포 `silotek-tools`의 `plugins/serial-mcp/`에 둔다. 이 레포에는 Python 코드만.
+- 배포측(플러그인 매니페스트 `plugin.json` + 안내 스킬 `SKILL.md`)은 별도 레포 `silotek-plugin-marketplace`의 `plugins/serial-mcp/`에 둔다. 이 레포에는 Python 코드만.

@@ -1,4 +1,4 @@
-# CLAUDE.md — silotek-serial-mcp
+# CLAUDE.md — serial-mcp-server
 
 @AGENTS.md
 

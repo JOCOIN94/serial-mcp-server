@@ -1,5 +1,5 @@
 [project]
-name = "silotek-serial-mcp"
+name = "serial-mcp-server"
 version = "0.2.0"
 description = "Headless MCP server that lets an AI read embedded-board serial logs (ESP32/STM32 etc.) during firmware debugging."
 readme = "README.md"
@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 # uvx / `uv run serial-mcp` 로 실행되는 엔트리포인트.
-# 레포명(silotek-serial-mcp)과 무관하게 실행 명령은 짧게 serial-mcp.
+# 레포명(serial-mcp-server)과 무관하게 실행 명령은 짧게 serial-mcp.
 [project.scripts]
 serial-mcp = "serial_mcp.server:main"
 

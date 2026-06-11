@@ -1,4 +1,4 @@
-# silotek-serial-mcp
+# serial-mcp-server
 
 ESP32·STM32 등 시리얼로 텍스트 로그를 출력하는 임베디드 보드의 로그를, **AI(Claude Code,codex 등)가 펌웨어 디버깅 중 직접 읽도록** 해 주는 헤드리스 MCP 서버.
 
@@ -26,16 +26,16 @@ ESP32·STM32 등 시리얼로 텍스트 로그를 출력하는 임베디드 보�
 
 ## 설치
 
-### A. silotek-tools 마켓플레이스 (권장)
+### A. silotek 마켓플레이스 (권장)
 
-이미 silotek-tools 마켓을 등록한 팀은 `/plugin` 에서 **serial-mcp** 플러그인을 설치한다(장비를 다루는 인원만). user 레벨로 활성화하면 모든 코드베이스·세션에서 도구가 노출되고, **사용 안내 스킬**도 함께 따라온다.
+이미 silotek 마켓을 등록한 팀은 `/plugin install serial-mcp@silotek --scope user`로 **serial-mcp** 플러그인을 설치한다(장비를 다루는 인원만). user 레벨로 활성화하면 모든 코드베이스·세션에서 도구가 노출되고, **serial** 사용 안내 스킬도 함께 따라온다.
 
 ### B. 직접 등록 (마켓 미경유)
 
 ```bash
 claude mcp add --scope user serial-mcp \
   -e SERIAL_PORT=<your-port> -e SERIAL_BAUD=115200 \
-  -- uvx --from git+https://github.com/JOCOIN94/silotek-serial-mcp serial-mcp
+  -- uvx --from git+https://github.com/JOCOIN94/serial-mcp-server serial-mcp
 ```
 
 > ⚠️ B 경로는 **MCP 도구만** 등록되고, 사용 안내 스킬은 포함되지 않는다(스킬은 플러그인 경로에만 동봉). docstring 이 자족적이라 도구 자체는 정상 동작한다.
