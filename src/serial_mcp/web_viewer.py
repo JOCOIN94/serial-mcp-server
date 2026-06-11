@@ -572,7 +572,8 @@ async function initPorts() {   // 포트 목록 → 셀렉터 구성 → 첫 포
   try {
     const d = await (await fetch("/api/ports")).json();
     const sel = $("psel");
-    for (const p of d.ports || []) {
+    for (const p of d.ports || []) {   // refreshStatus(동시 기동 폴링)가 먼저 채웠을 수 있다 — 중복 추가 금지
+      if ([...sel.options].some(o => o.value === p.port)) continue;
       const o = document.createElement("option");
       o.value = p.port;
       o.textContent = p.label;
@@ -580,7 +581,7 @@ async function initPorts() {   // 포트 목록 → 셀렉터 구성 → 첫 포
     }
     if ((d.ports || []).length <= 1) sel.style.display = "none";   // 1개면 셀렉터 불필요
     sel.onchange = () => { connectStream(sel.value); refreshStatus(); refreshBuffer(); };
-    if ((d.ports || []).length) connectStream(d.ports[0].port);
+    if (!currentPort && (d.ports || []).length) connectStream(d.ports[0].port);   // refreshStatus가 이미 연결했으면 재연결(화면 리셋) 생략
     refreshStatus();
   } catch (e) { $("port").textContent = "(포트 목록 조회 실패)"; }
 }
