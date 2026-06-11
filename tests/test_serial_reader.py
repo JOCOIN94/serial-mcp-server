@@ -6,6 +6,9 @@
 import io
 from datetime import datetime
 
+import pytest
+
+import serial_mcp.server as srv
 from serial_mcp.ring_buffer import LineBuffer
 from serial_mcp.server import SerialReader
 from serial_mcp.viewer_feed import RawFeed
@@ -16,6 +19,59 @@ BASE = datetime(2026, 6, 9, 14, 0, 0, 0)
 def _make_reader(buf: LineBuffer, tee=None) -> SerialReader:
     r = SerialReader(port="COM_TEST", baud=115200, buffer=buf)
     r._tee = tee   # 실제 파일 대신 StringIO 주입(또는 None)
+    return r
+
+
+class FakeSerial:
+    """SerialReader 쓰기/리셋 경로 검증용 최소 시리얼 대역."""
+
+    def __init__(self, *, fail_write: bool = False) -> None:
+        self.fail_write = fail_write
+        self.writes: list[bytes] = []
+        self.closed = False
+        self.pin_events: list[tuple[str, bool]] = []
+        self._dtr = True
+        self._rts = False
+
+    @property
+    def dtr(self) -> bool:
+        return self._dtr
+
+    @dtr.setter
+    def dtr(self, value: bool) -> None:
+        self._dtr = value
+        self.pin_events.append(("dtr", value))
+
+    @property
+    def rts(self) -> bool:
+        return self._rts
+
+    @rts.setter
+    def rts(self, value: bool) -> None:
+        self._rts = value
+        self.pin_events.append(("rts", value))
+
+    def write(self, data: bytes) -> int:
+        if self.fail_write:
+            raise srv.serial.SerialException("write boom")
+        self.writes.append(data)
+        return len(data)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _connected_reader(
+    buf: LineBuffer,
+    fake: FakeSerial,
+    *,
+    tee=None,
+    feed: RawFeed | None = None,
+) -> SerialReader:
+    r = SerialReader(port="COM_TEST", baud=115200, buffer=buf, feed=feed)
+    r._tee = tee
+    r._ser = fake
+    r.connected = True
     return r
 
 
@@ -122,3 +178,98 @@ def test_ingest_isolates_on_line_exception():
     r._tee = None
     r._ingest(b"x\n", BASE)          # 예외가 새어 나오면 테스트 실패
     assert buf.info()["entries"] == 1
+
+
+# ---- 쓰기/리셋 경로 ----
+
+def test_write_sends_payload_and_audits_tx():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    feed = RawFeed()
+    sub = feed.subscribe()
+    tee = io.StringIO()
+    fake = FakeSerial()
+    r = _connected_reader(buf, fake, tee=tee, feed=feed)
+
+    assert r.write(b"AT+GMR\n", audit="[TX] AT+GMR") == 7
+
+    assert fake.writes == [b"AT+GMR\n"]
+    assert any("[TX] AT+GMR" in line for line in buf.get_recent(10))
+    assert sub.get(timeout=1.0)[1] == "[TX] AT+GMR"
+    assert "[TX] AT+GMR" in tee.getvalue()
+
+
+def test_write_raises_when_disconnected():
+    r = SerialReader(port="COM_TEST", baud=115200, buffer=LineBuffer())
+
+    with pytest.raises(srv.serial.SerialException):
+        r.write(b"AT\n")
+
+
+def test_write_failure_marks_disconnected_for_reconnect():
+    fake = FakeSerial(fail_write=True)
+    r = _connected_reader(LineBuffer(), fake)
+
+    with pytest.raises(srv.serial.SerialException):
+        r.write(b"AT\n")
+
+    assert r.connected is False
+    assert r._ser is None
+    assert fake.closed is True
+    assert "쓰기 실패" in (r.last_error or "")
+
+
+def test_write_audit_skipped_in_buffer_by_filter_but_teed():
+    buf = LineBuffer(maxlen=10, dedup=False, exclude=r"\[TX\]")
+    feed = RawFeed()
+    sub = feed.subscribe()
+    tee = io.StringIO()
+    r = _connected_reader(buf, FakeSerial(), tee=tee, feed=feed)
+
+    r.write(b"AT\n", audit="[TX] AT")
+
+    assert buf.get_recent(10) == []
+    assert sub.get(timeout=1.0)[1] == "[TX] AT"
+    assert "[TX] AT" in tee.getvalue()
+
+
+def test_pulse_reset_sequence_order():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    fake = FakeSerial()
+    r = _connected_reader(buf, fake)
+
+    r.pulse_reset(pulse_s=0)
+
+    assert fake.pin_events == [("dtr", False), ("rts", True), ("rts", False)]
+    assert any("[RST] DTR/RTS 하드웨어 리셋 펄스" in line for line in buf.get_recent(10))
+
+
+def test_pulse_reset_raises_when_disconnected():
+    r = SerialReader(port="COM_TEST", baud=115200, buffer=LineBuffer())
+
+    with pytest.raises(srv.serial.SerialException):
+        r.pulse_reset()
+
+
+def test_open_sets_write_timeout(monkeypatch):
+    captured = {}
+
+    class OpenSerial(FakeSerial):
+        def __init__(self, port, baud, timeout, write_timeout):
+            super().__init__()
+            captured.update({
+                "port": port,
+                "baud": baud,
+                "timeout": timeout,
+                "write_timeout": write_timeout,
+            })
+
+    monkeypatch.setattr(srv.serial, "Serial", OpenSerial)
+    r = SerialReader(port="COM_TEST", baud=115200, buffer=LineBuffer())
+
+    assert r._open() is True
+    assert captured == {
+        "port": "COM_TEST",
+        "baud": 115200,
+        "timeout": 1,
+        "write_timeout": 2,
+    }
