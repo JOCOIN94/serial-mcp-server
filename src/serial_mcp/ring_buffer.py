@@ -148,6 +148,19 @@ class LineBuffer:
             self._buf.clear()
             return n
 
+    def entries_since(self, ts: datetime, max_lines: int = 200) -> list[str]:
+        """ts 이후(last_ts >= ts) 활동한 항목을 render해 반환(시간 오름차순).
+
+        쓰기 도구의 응답 자동 회수용이다. 전송 직전 시각을 기록해 두고 그 이후
+        수신분만 가져온다. dedup으로 기존 항목에 접힌 응답도 last_ts가 갱신되므로
+        잡힌다. 접힌 항목은 기존 render()의 반복 표기로 반환된다.
+        """
+        if max_lines <= 0:
+            return []
+        with self._lock:
+            items = [e for e in self._buf if e.last_ts >= ts]
+        return [e.render() for e in items[-max_lines:]]
+
     def snapshot(self) -> list[dict]:
         """웹 뷰어 버퍼 탭용 구조화 뷰(시간 오름차순).
 

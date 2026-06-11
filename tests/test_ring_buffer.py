@@ -249,6 +249,48 @@ def test_clear_empties_and_returns_prior_count():
     assert buf.clear() == 0
 
 
+# ---- entries_since (쓰기 도구 응답 회수용) ----
+
+def test_entries_since_returns_only_after_ts():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    t0 = datetime(2026, 6, 9, 14, 0, 1, 0)
+    buf.add("before", BASE)
+    buf.add("after", datetime(2026, 6, 9, 14, 0, 2, 0))
+
+    assert buf.entries_since(t0) == ["[14:00:02.000] after"]
+
+
+def test_entries_since_boundary_inclusive():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    t0 = datetime(2026, 6, 9, 14, 0, 1, 0)
+    buf.add("boundary", t0)
+
+    assert buf.entries_since(t0) == ["[14:00:01.000] boundary"]
+
+
+def test_entries_since_catches_folded_entry():
+    buf = LineBuffer(maxlen=10, dedup=True)
+    t0 = datetime(2026, 6, 9, 14, 0, 1, 0)
+    buf.add("tick", BASE)
+    buf.add("tick", datetime(2026, 6, 9, 14, 0, 2, 0))
+
+    assert buf.entries_since(t0) == ["[14:00:00.000] tick  (2회 반복, 14:00:00~14:00:02)"]
+
+
+def test_entries_since_empty_and_max_lines():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    t0 = datetime(2026, 6, 9, 14, 0, 1, 0)
+    assert buf.entries_since(t0) == []
+
+    for i in range(4):
+        buf.add(f"line{i}", datetime(2026, 6, 9, 14, 0, i + 1, 0))
+
+    assert buf.entries_since(t0, max_lines=2) == [
+        "[14:00:03.000] line2",
+        "[14:00:04.000] line3",
+    ]
+
+
 # ---- 동시성 (SPEC §2) ----
 
 def test_concurrent_adds_are_thread_safe():
