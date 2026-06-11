@@ -28,7 +28,7 @@ def _fmt_ts(ts: datetime) -> str:
 class LogEntry:
     """버퍼에 저장되는 한 항목.
 
-    연속 중복이 접히면 count>1 이 되고, 첫/마지막 수신 시각을 함께 보존한다.
+    근접 중복(룩백 윈도 내)이 접히면 count>1 이 되고, 첫/마지막 수신 시각을 함께 보존한다.
     """
 
     text: str            # 타임스탬프를 제외한 라인 내용(dedup 비교 기준)
@@ -47,7 +47,7 @@ class LogEntry:
 
 
 class LineBuffer:
-    """라인 ring buffer + 연속 중복 접기 + 정규식 수집 필터. 스레드 안전."""
+    """라인 ring buffer + 근접 중복 접기(룩백) + 정규식 수집 필터. 스레드 안전."""
 
     def __init__(
         self,
@@ -69,7 +69,7 @@ class LineBuffer:
         self.total_stored = 0     # 신규 항목으로 저장된 수(접힘/필터 제외)
 
     def add(self, text: str, ts: Optional[datetime] = None) -> bool:
-        """라인 한 줄을 '수집 필터 → 연속 중복 접기' 순으로 처리해 버퍼에 반영.
+        """라인 한 줄을 '수집 필터 → 근접 중복 접기(룩백)' 순으로 처리해 버퍼에 반영.
 
         반환값: 새 항목으로 저장되면 True, 걸러지거나 직전 줄에 접히면 False.
         """
