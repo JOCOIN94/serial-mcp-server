@@ -44,7 +44,13 @@ class FakeContext:
 
 
 class RecordingReader:
-    def __init__(self, *, write_exc: Exception | None = None, on_write=None) -> None:
+    def __init__(
+        self,
+        *,
+        write_exc: Exception | None = None,
+        on_write=None,
+        write_return: int | None = None,
+    ) -> None:
         self.connected = True
         self.port = "COM_A"
         self.baud = 115200
@@ -52,6 +58,7 @@ class RecordingReader:
         self.opened_at = None
         self.write_exc = write_exc
         self.on_write = on_write
+        self.write_return = write_return
         self.writes = []
         self.pulses = 0
 
@@ -61,7 +68,7 @@ class RecordingReader:
         self.writes.append((data, audit))
         if self.on_write is not None:
             self.on_write()
-        return len(data)
+        return self.write_return if self.write_return is not None else len(data)
 
     def pulse_reset(self) -> None:
         self.pulses += 1
@@ -228,6 +235,20 @@ def test_send_write_exception_returns_error_dict(monkeypatch):
     assert out["status"] == "error"
     assert "전송 실패" in out["message"]
     assert out["lines"] == []
+
+
+def test_send_reports_payload_length_even_if_writer_returns_short_count(monkeypatch):
+    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": False})
+    reader = RecordingReader(write_return=3)
+    mon = make_monitor(reader=reader)
+    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
+
+    out = run(srv.send_serial_command("AT+GMR", wait_ms=0))
+
+    expected_len = len(b"AT+GMR\n")
+    assert out["status"] == "ok"
+    assert out["bytes"] == expected_len
+    assert f"{expected_len}바이트 전송" in out["message"]
 
 
 def test_send_harvests_only_lines_after_t0(monkeypatch):

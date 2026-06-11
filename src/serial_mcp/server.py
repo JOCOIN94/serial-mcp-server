@@ -627,7 +627,7 @@ async def send_serial_command(
         return {**block, "count": 0, "lines": []}
     t0 = datetime.now()
     try:
-        sent = mon.reader.write(payload, audit=f"[TX] {command}")
+        mon.reader.write(payload, audit=f"[TX] {command}")
     except serial.SerialException as e:
         return {"status": "error", "message": f"{mon.label}: 전송 실패 — {e}", "count": 0, "lines": []}
     # stdio 단일 클라이언트 환경에서는 짧은 write/pulse 직접 호출과 asyncio.sleep으로 충분하다.
@@ -635,12 +635,12 @@ async def send_serial_command(
     lines = mon.buffer.entries_since(t0)
     return {
         "status": "ok",
-        "message": f"{mon.label}: {sent}바이트 전송, {wait_ms}ms 대기 후 {len(lines)}줄 회수",
+        "message": f"{mon.label}: {len(payload)}바이트 전송, {wait_ms}ms 대기 후 {len(lines)}줄 회수",
         "port": mon.port,
         "name": mon.name,
         "sent": command,
         "eol": eol,
-        "bytes": sent,
+        "bytes": len(payload),
         "wait_ms": wait_ms,
         "count": len(lines),
         "lines": lines,
