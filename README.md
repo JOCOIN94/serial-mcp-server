@@ -2,14 +2,14 @@
 
 ESP32·STM32 등 시리얼로 텍스트 로그를 출력하는 임베디드 보드의 로그를, **AI(Claude Code,codex 등)가 펌웨어 디버깅 중 직접 읽도록** 해 주는 헤드리스 MCP 서버.
 
-사람은 장비를 물리적으로 동작시키고, AI는 이 서버의 읽기 전용 도구로 그 결과 로그를 스스로 조회해 원인을 분석하고 코드를 고친다. 
+사람은 장비를 물리적으로 동작시키고, AI는 이 서버의 도구로 그 결과 로그를 스스로 조회해 원인을 분석하고 코드를 고친다. 자동리셋 회로가 있는 보드는 AI가 승인 팝업을 거쳐 직접 리셋할 수 있고, 펌웨어 CLI/AT 명령도 승인 후 전송할 수 있다.
 **사람이 로그를 눈으로 보기 위한 모니터가 아니다.** 다만 포트를 MCP가 점유하면 테라텀으로 볼 수 없으므로, **localhost 웹 뷰어**를 내장한다 — 서버가 떠 있으면 브라우저에서 `http://127.0.0.1:8743` (기본)으로 실시간 스트림·링버퍼를 컬러로 볼 수 있다(도구 응답의 `viewer_url` 참조).
 
-- 읽기 전용 · stdio transport · 의존성은 `mcp[cli]` + `pyserial` 뿐
+- 조회 도구는 읽기 전용 · 쓰기는 `send_serial_command`/`reset_board` 2종만 승인 게이트로 허용 · stdio transport · 의존성은 `mcp[cli]` + `pyserial` 뿐
 - OS 무관(macOS / Windows / Linux, WSL 제외)
 - 백그라운드 스레드가 포트를 계속 읽어 ring buffer(기본 2000줄)에 적재 · 근접 중복 접기(dedup, 룩백 기본 5줄) · 정규식 수집 필터 · 공백뿐인 줄 미저장(tee 파일에는 원본 그대로)
 
-## 도구 (모두 읽기 전용)
+## 도구
 
 | 도구 | 용도 |
 |---|---|
@@ -19,8 +19,10 @@ ESP32·STM32 등 시리얼로 텍스트 로그를 출력하는 임베디드 보�
 | `query_serial_logs(pattern, max_results=100)` | 정규식 검색 |
 | `get_log_buffer_info` | 버퍼 크기 / 최신·최오래 항목 |
 | `clear_log_buffer` | 버퍼 비우기 (시험 시작) |
+| `send_serial_command(command, port="", eol="\n", wait_ms=500)` | 보드 CLI/AT 명령 전송 + 직후 응답 회수(매 호출 승인) |
+| `reset_board(port="", wait_ms=2000)` | DTR/RTS 자동리셋 펄스 + 부팅 로그 회수(매 호출 승인) |
 
-**블랙박스 루프:** `clear_log_buffer` → [사람이 장비 동작/리셋] → `get_recent_logs` / `query_serial_logs`.
+**블랙박스 루프:** `clear_log_buffer` → 가능하면 `reset_board` 승인 후 직접 리셋(거부/미지원/0줄이면 사람이 물리 리셋) → `get_recent_logs` / `query_serial_logs`.
 
 ## 설치
 
@@ -53,6 +55,14 @@ claude mcp add --scope user serial-mcp \
 | `SERIAL_DEDUP` | `5` | 중복 접기 룩백 윈도 — 최근 N줄 안의 같은 줄을 접음. `1`(=`true`)=직전 줄만, `0`/`false`/`no`/`off`로 끔 |
 | `SERIAL_WEB` | `8743` | 웹 뷰어 포트. `0`/`false`/`no`/`off`로 끔. 점유 시 임시 포트 폴백(실제 URL은 `viewer_url`) |
 | `SERIAL_HOTPLUG` | `5` | 자동 스캔 모드에서 새 USB 포트 감지 간격(초, 소수 허용) — 서버 실행 중 꽂은 보드를 자동 추가. `0`/`false`/`no`/`off`로 끄면 시작 시 1회 스캔만. `SERIAL_PORT` 지정 시 스캔 없음 |
+| `SERIAL_WRITE` | `true` | 쓰기 도구 전면 스위치. `0`/`false`/`no`/`off`면 `send_serial_command`/`reset_board`가 등록은 유지하되 전송하지 않고 에러 반환 |
+| `SERIAL_WRITE_CONFIRM` | `true` | 쓰기 도구의 서버측 elicitation 승인 게이트. `0`/`false`/`no`/`off`면 승인 팝업을 생략하고 클라이언트의 일반 도구 권한 게이트에 위임 |
+
+### 쓰기 승인 동작
+
+`send_serial_command`와 `reset_board`는 기본적으로 매 호출 사용자 승인을 요구한다. 클라이언트가 elicitation(승인 팝업)을 지원하지 않으면 전송하지 않고 `SERIAL_WRITE_CONFIRM=off` 안내가 포함된 에러를 반환한다. 사용자가 거절하거나 취소하면 `status="declined"`이며, AI는 같은 명령을 반복 호출하지 않고 사람과 다음 행동을 합의해야 한다.
+
+송신 감사 마커는 `[TX] ...` 또는 `[RST] ...`로 기록된다. 웹 스트림과 tee 파일에는 항상 남고, 링버퍼에는 include/exclude 필터가 적용된다. 포트를 여는 순간 일부 자동리셋 보드가 리셋될 수 있는데, 이는 pyserial open 시 DTR/RTS 상태 변화로 생기는 기존 동작이며 명시적 `reset_board` 호출과 구분된다.
 
 ### 다중 포트 · 별칭
 

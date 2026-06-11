@@ -1,6 +1,6 @@
 [project]
 name = "silotek-serial-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Headless MCP server that lets an AI read embedded-board serial logs (ESP32/STM32 etc.) during firmware debugging."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -8,7 +8,7 @@ license = { text = "UNLICENSED" }
 authors = [{ name = "Silotek" }]
 keywords = ["mcp", "serial", "esp32", "stm32", "firmware", "pyserial"]
 dependencies = [
-    "mcp[cli]>=1.2.0",
+    "mcp[cli]>=1.10",
     "pyserial>=3.5",
 ]
 

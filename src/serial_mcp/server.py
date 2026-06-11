@@ -1,14 +1,15 @@
 """silotek-serial-mcp — FastMCP 서버 본체.
 
 백그라운드 스레드가 시리얼 포트를 지속적으로 읽어 LineBuffer에 쌓고,
-AI(Claude Code)는 6개의 읽기 전용 도구로 그 버퍼를 조회한다.
+AI(Claude Code)는 6개의 조회 도구로 버퍼를 읽으며, 승인 게이트가 있는
+쓰기 도구 2개(send_serial_command/reset_board)로 제한된 능동 시험을 수행한다.
 
 설계 주의:
 - stdout 으로 MCP JSON-RPC 가 흐른다. stdout 에 절대 print/로그 금지.
   모든 진단은 stderr 또는 tee 파일로만(_log 헬퍼 사용).
 - 버퍼는 LineBuffer 내부 Lock 으로 보호된다(리더 스레드 ↔ 도구 호출 동시 접근).
-- 현재 읽기 전용. 향후 쓰기(명령 전송)는 SerialReader 가 포트 핸들을 들고 있어
-  메서드 추가만으로 확장 가능(지금은 추가하지 않는다).
+- 쓰기는 send_serial_command/reset_board 두 도구로만 제공하며, 기본값은 매 호출
+  서버측 elicitation 승인이다. SERIAL_WRITE=off로 전면 차단할 수 있다.
 """
 
 from __future__ import annotations

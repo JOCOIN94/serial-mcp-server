@@ -23,7 +23,7 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - 헤드리스로만 동작한다. GUI를 포함하지 않으며, PyQt6 등 GUI 라이브러리를 사용하지 않는다. (localhost 웹 뷰어(§10)는 GUI 라이브러리가 아니라 사용자의 브라우저를 화면으로 쓰므로 이 제약에 위배되지 않는다.)
 - 의존성은 두 가지로 한정한다: 최신 공식 MCP Python SDK(`mcp[cli]`, FastMCP 사용)와 `pyserial`.
 - 운영체제에 독립적으로 동작한다(macOS, Windows, Linux). WSL은 대상이 아니다. 전송 방식(transport)은 stdio로 한다.
-- 읽기 전용으로 구현한다. 포트에 데이터를 쓰는 기능(명령 전송)은 현 단계에서 구현하지 않는다. 다만 향후 해당 기능을 용이하게 추가할 수 있도록 구조를 확장 가능하게 설계한다.
+- 조회 도구는 읽기 전용으로 유지한다. 포트에 쓰는 기능은 `send_serial_command`(텍스트 명령 전송)와 `reset_board`(DTR/RTS 리셋) 2종만 제공하며, 기본값은 매 호출 서버측 elicitation 승인이다. `SERIAL_WRITE_CONFIRM=off`로 승인을 클라이언트 권한 게이트에 위임할 수 있고, `SERIAL_WRITE=off`로 쓰기를 전면 차단할 수 있다.
 - 클린 코드, 클린 아키텍처 원칙을 지켜, 확장과 유지 보수가 좋은 코딩 패턴을 사용하라.(일관된 패턴을 사용하여 각기 다른 스타일이 되지않도록 한다.)
 - stdio 주의: stdout으로 MCP JSON-RPC 메시지가 전송된다. stdout에는 어떠한 로그나 출력도 기록해서는 안 된다(프로토콜이 손상된다). 모든 진단 및 로그 출력은 stderr 또는 tee 파일로만 전송한다.
 - 동시성: 백그라운드 수신 스레드와 도구 호출이 동일한 버퍼에 접근한다. 버퍼 접근은 Lock으로 보호한다.
@@ -57,9 +57,9 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - 근거: 실장비(SSM) 펌웨어가 메시지 사이에 빈 줄을 교대로 출력해 §4.2의 중복 접기 판정(당시 직전 줄 비교)이 항상 깨졌다(dedup 무력화 + 버퍼 절반 낭비). 빈 줄은 AI 디버깅에 정보 가치가 없다.
 - tee 파일(§3)에는 빈 줄을 포함한 수신 원본이 그대로 기록된다.
 
-## 5. 도구 (모두 읽기 전용이며, AI가 사용한다)
+## 5. 도구 (조회 6종 읽기 전용 + 쓰기 2종 승인 게이트)
 
-각 도구는 `status`와 `message`를 포함한 dict를 반환한다. docstring은 사람을 위한 설명이 아니라 AI를 위한 사용 지침으로 작성하며, AI가 해당 도구를 언제·어떤 목적으로 호출하는지 명확히 기술한다. 반환 dict는 AI가 파싱·추론하기 좋은 구조로 구성한다. 다중 포트에서는 모든 조회 도구가 `port` 인자(별칭/포트명/라벨 `SSM (COM4)` 형태 모두 허용, 대소문자 무관)를 받는다 — 에러 응답의 `ports` 목록 항목을 그대로 되돌려 호출해도 해석된다 — 미지정 시 포트 1개면 그 포트, 복수면 에러와 함께 `ports` 목록을 반환한다(`get_serial_status` 미지정은 전 포트 상태 배열, `clear_log_buffer` 미지정은 전체 비우기).
+각 도구는 `status`와 `message`를 포함한 dict를 반환한다. `status`는 기본적으로 `ok|error`이며, 사용자가 쓰기 승인을 거부한 경우 `declined`를 반환한다(시스템 오류가 아니므로 AI는 같은 요청을 반복하지 말고 사람과 다음 행동을 합의한다). docstring은 사람을 위한 설명이 아니라 AI를 위한 사용 지침으로 작성하며, AI가 해당 도구를 언제·어떤 목적으로 호출하는지 명확히 기술한다. 반환 dict는 AI가 파싱·추론하기 좋은 구조로 구성한다. 다중 포트에서는 모든 조회/쓰기 도구가 `port` 인자(별칭/포트명/라벨 `SSM (COM4)` 형태 모두 허용, 대소문자 무관)를 받는다 — 에러 응답의 `ports` 목록 항목을 그대로 되돌려 호출해도 해석된다 — 미지정 시 포트 1개면 그 포트, 복수면 에러와 함께 `ports` 목록을 반환한다(`get_serial_status` 미지정은 전 포트 상태 배열, `clear_log_buffer` 미지정은 전체 비우기).
 
 - `list_serial_ports` : 사용 가능한 포트 목록 + VID/PID·description(어댑터 칩 식별용, 예: CH343, CP210x) + 별칭 `name`·`monitored_ports`(보드 식별은 별칭으로).
 - `get_serial_status` : 현재 연결 상태, 포트, 보드레이트. (웹 뷰어 활성 시 `viewer_url` 포함 — `get_log_buffer_info`도 동일. 사람이 로그를 직접 보고 싶어 하면 AI가 이 링크를 안내한다.)
@@ -67,13 +67,23 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - `query_serial_logs(pattern, max_results=100)` : 정규식으로 버퍼 검색.
 - `get_log_buffer_info` : 버퍼 크기 / 최신·최오래 항목.
 - `clear_log_buffer` : 버퍼 수동 비우기.
+- `send_serial_command(command, port="", eol="\n", wait_ms=500)` : 보드 CLI/AT 명령을 UTF-8 텍스트로 전송하고, 전송 직후 `wait_ms` 동안 들어온 응답 로그를 회수한다.
+- `reset_board(port="", wait_ms=2000)` : DTR/RTS 펄스로 자동리셋 회로 보드를 하드웨어 리셋하고, 부팅 로그를 회수한다. native-USB/미배선 보드는 0줄 회수로 나타날 수 있으며, 이때 사람에게 물리 리셋을 요청한다.
 
-블랙박스 시험 절차: `clear_log_buffer`(시작) → [사람이 장비 동작] → `get_recent_logs` / `query_serial_logs`(확인). AI가 자율 반복한다.
+블랙박스 시험 절차: `clear_log_buffer`(시작) → 가능하면 `reset_board`(승인 팝업) 또는 사람이 장비 동작/리셋 → `get_recent_logs` / `query_serial_logs`(확인). AI가 자율 반복한다.
 
 **5.1 docstring과 스킬의 책임 분리**
 - 각 도구의 docstring은 **자족적(self-contained)**으로 작성한다. 스킬이 없는 환경(예: `claude mcp add`로 MCP만 등록)에서도 AI가 그 도구를 단독 사용할 수 있도록, 도구 하나의 목적·호출 시점·반환 구조를 완결적으로 기술한다.
 - "clear→동작→조회" 루프의 전체 순서·판단·함정은 docstring에 중복하지 않고 스킬(§9)에 위임한다. docstring에는 해당 도구가 루프에서 차지하는 단계를 한 줄로 참조한다.
 - 요컨대 docstring은 "도구 하나가 무엇을, 언제"(지역), 스킬은 "여러 도구를 어떤 순서·판단으로 엮는가"(전역)를 담당한다.
+
+**5.2 쓰기 승인·감사 계약**
+- `send_serial_command`와 `reset_board`는 도구 등록 자체는 항상 유지하되, `_config.get("write", True)`가 false(`SERIAL_WRITE=off`)이면 전송하지 않고 즉시 `status="error"`를 반환한다.
+- 기본값은 매 호출 서버측 elicitation 승인이다(`SERIAL_WRITE_CONFIRM` 미설정/true). 클라이언트가 elicitation capability를 지원하지 않거나 capability를 광고했지만 요청이 `McpError`로 실패하면 전송하지 않고 `SERIAL_WRITE_CONFIRM=off` 안내를 포함한 에러를 반환한다. 이 fail-safe 때문에 클라이언트 허용목록만으로 서버측 승인을 우회할 수 없다.
+- `SERIAL_WRITE_CONFIRM=off`는 서버측 elicitation을 생략하고 클라이언트의 일반 도구 권한 게이트에 위임한다. 안전 정책 변경이므로 사용자가 명시적으로 설정해야 한다.
+- 사용자가 승인 팝업에서 decline/cancel하면 `status="declined"`를 반환한다. AI는 같은 명령이나 리셋을 반복 호출하지 말고 사람에게 이유를 묻고 다음 행동을 합의한다.
+- 송신 감사 기록은 `[TX] {command}` 또는 `[RST] DTR/RTS 하드웨어 리셋 펄스` 마커로 남긴다. tee 파일과 웹 feed에는 항상 남고, ring buffer에는 include/exclude 필터가 적용된다. `send_serial_command`의 응답 회수는 쓰기 직전 `t0` 이후 `LineBuffer.entries_since(t0)` 기반이라 dedup으로 기존 항목에 접힌 응답도 `last_ts` 갱신으로 회수된다.
+- 포트를 여는 순간 DTR/RTS 어서트로 일부 자동리셋 보드가 리셋될 수 있다. 이는 기존 pyserial open 동작이며 `reset_board` 도입과 별개다. 리셋 도구는 명시적 DTR/RTS 펄스만 감사 마커로 남긴다.
 
 ## 6. 프로젝트 구조 및 배포 (하이브리드)
 
@@ -86,7 +96,7 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
     - `plugins/serial-mcp/.claude-plugin/plugin.json` : `mcpServers`에 다음을 정의한다.
         - `command`: `uvx`
         - `args`: `--from git+https://github.com/JOCOIN94/silotek-serial-mcp serial-mcp`
-        - `env`: `SERIAL_PORT`을 `${SERIAL_PORT:-}`로 참조(빈 기본값 폴백 — 미설정 시 빈 문자열로 치환되고 서버가 기본값 처리). `SERIAL_BAUD`, `SERIAL_TEE`, `SERIAL_EXCLUDE`, `SERIAL_INCLUDE` 등도 동일한 `${VAR:-}` 패스스루로 노출(미지정 시 서버 기본값, 보드레이트 115200).
+        - `env`: `SERIAL_PORT`을 `${SERIAL_PORT:-}`로 참조(빈 기본값 폴백 — 미설정 시 빈 문자열로 치환되고 서버가 기본값 처리). `SERIAL_BAUD`, `SERIAL_TEE`, `SERIAL_EXCLUDE`, `SERIAL_INCLUDE`, `SERIAL_WRITE`, `SERIAL_WRITE_CONFIRM` 등도 동일한 `${VAR:-}` 패스스루로 노출(미지정 시 서버 기본값, 보드레이트 115200, 쓰기 승인 기본 켜짐).
     - `plugins/serial-mcp/skills/serial-debugging/SKILL.md` : §9의 스킬을 동일 플러그인에 동봉한다.
     - 루트 `.claude-plugin/marketplace.json`에 serial-mcp 플러그인 항목을 추가한다.
 - silotek-tools 저장소에는 Python 코드를 포함하지 않으며, 매니페스트(JSON)와 스킬(마크다운)만 포함한다. 실제 서버 코드는 외부 저장소에서 uvx가 가져온다. silotek-tools는 Node 기반 저장소이므로 언어·도메인을 혼재시키지 않는다(스킬은 마크다운이라 언어중립).
@@ -121,8 +131,9 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - description(트리거, 항상 컨텍스트 상주 1줄): "시리얼/펌웨어 디버깅 중 장비 로그를 확인하거나, 사람이 장비를 동작시키고 그 결과 로그를 AI가 확인하는 블랙박스 시험 루프를 돌릴 때 사용한다."
 
 **9.2 스킬이 담는 내용**
-- 블랙박스 루프 절차: `clear_log_buffer` → 사람에게 "지금 장비를 동작/리셋해 주세요" 요청 → 적절히 대기 → `get_recent_logs`/`query_serial_logs`로 회수 → 분석 → 코드 수정 → 반복. 필요 시 `get_log_buffer_info`로 신규 유입 확인.
-- 사람 협업 프로토콜(B안에서 스킬이 가장 기여하는 부분): 서버는 읽기 전용이므로 AI는 보드를 직접 리셋·동작시킬 수 없다. 장비가 idle이어서 신규 로그가 없을 때 AI는 **사람에게 물리적 동작/리셋을 명시적으로 요청**해야 한다. 그 요청 문구·타이밍·회수 시점을 스킬이 규정한다.
+- 블랙박스 루프 절차: `clear_log_buffer` → `reset_board(port=...)` 우선 호출(승인 팝업) → 적절히 대기 → `get_recent_logs`/`query_serial_logs`로 회수 → 분석 → 코드 수정 → 반복. 필요 시 `get_log_buffer_info`로 신규 유입 확인.
+- 사람 협업 프로토콜(B안에서 스킬이 가장 기여하는 부분): AI는 자동리셋 회로 보드에서는 `reset_board`로 직접 리셋을 시도한다. 사용자가 승인 거부(`status="declined"`), 클라이언트 elicitation 미지원, native-USB/미배선으로 0줄 회수 등일 때만 **사람에게 물리적 동작/리셋을 명시적으로 요청**한다. 그 요청 문구·타이밍·회수 시점을 스킬이 규정한다.
+- 명령 전송 판단: `send_serial_command`는 펌웨어가 제공하는 CLI/AT/진단 명령을 알고 있을 때만 사용한다. 명령 문법 자체는 펌웨어의 책임이며, 승인 거부(`declined`)는 재시도 금지 신호로 해석한다.
 - 보드 식별 절차: 별칭(`SERIAL_NAMES`/`SERIAL_AUTONAME` 산출 `name`·`label`)이 진실 — 범용 USB-UART 어댑터(CH343 등) 환경에서 VID/PID로 보드를 단정하지 않는다. idle 보드는 자동 식별이 첫 로그 유입 때 1회 확정되므로 지연될 수 있고, 모호하면 사람에게 포트↔보드 매핑을 묻는다.
 - 함정·해석: 포트 점유 오류 대응(점유 프로그램 종료 요청·자동 재연결 안내), 핫플러그 스캔 지연(기본 5초 — `monitored=false`면 재조회, 고정 포트 모드는 스캔 없음), 플래싱 직후 부팅 로그 잘림(루프로 재판정), dedup 표기 `(N회 반복, …)` 해석(정밀 순서 필요 시 `SERIAL_DEDUP` 하향), tee 파일은 보조 기록, 사람이 직접 볼 땐 도구 응답의 `viewer_url`(웹 뷰어) 안내.
 - 사일로텍 장비 메모: SSM/SB 명칭과 `SERIAL_AUTONAME` 규칙 예시(배포 환경 종속 참고 정보).
@@ -154,4 +165,5 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - 보드 자동 식별 구현(2026-06-10): `SERIAL_AUTONAME`(`이름=정규식;…`, 세미콜론 구분, 순서=우선순위)으로 이름 없는 포트의 수신 줄을 대조해 첫 매칭에서 1회 확정(§3). `SERIAL_NAMES` 우선·중복 이름 미부여·잘못된 정규식은 무시(서버 생존). 설계: `docs/superpowers/specs/2026-06-10-multi-port-design.md` §11.
 - 배포 완료(2026-06-10): GitHub 공개 push(`JOCOIN94/silotek-serial-mcp`, uvx 원격 실행 검증), silotek-tools 마켓에 serial-mcp 플러그인 등록(plugin.json — env 10종 패스스루, SKILL.md — 베이스라인 대조 검증 거침, 0.1.0). **§부록 미완 항목 전부 해소** — 이후 변경은 main push가 곧 배포.
 - 핫플러그 구현(2026-06-11): 자동 스캔 모드에서 `SERIAL_HOTPLUG` 간격(기본 5초)으로 comports() 재스캔, 신규 USB 포트를 런타임 모니터 추가. `_monitors`는 copy-on-write로 원자 교체(리더 스레드 순회와 무충돌). 모니터 조립 규칙은 `_make_monitor()`로 추출해 기동·핫플러그가 공유. 뷰어도 동조: 상태 폴링(5초)이 신규 포트를 셀렉터에 추가하고, 포트 0개 기동 후 첫 보드에 스트림 자동 연결(코드리뷰 반영). 계획서: `docs/superpowers/plans/2026-06-11-serial-hotplug.md`.
+- 쓰기·리셋 구현(2026-06-11): `send_serial_command`·`reset_board` 추가, 기본 매 호출 elicitation 승인 게이트, `SERIAL_WRITE`/`SERIAL_WRITE_CONFIRM` 설정, `[TX]`/`[RST]` 감사 마커, `LineBuffer.entries_since()` 기반 응답 회수(dedup 접힘 포함). 단위 테스트 185개 통과(실장비 reset/승인 팝업 검증은 사용자 자리에서 별도 수행 필요). 계획서: `docs/plans/2026-06-11-serial-write-reset.md`.
 - 테스트 장비: ESP32-S3(SSM 펌웨어), COM4(CH343), 115200.

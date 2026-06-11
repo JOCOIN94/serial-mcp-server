@@ -27,7 +27,7 @@ AI가 임베디드 보드(ESP32/STM32 등)의 시리얼 텍스트 로그를 읽�
 - 순수 로직 모듈(`ring_buffer.py`·`ports.py` 등)은 시리얼 I/O·MCP 의존성과 분리해 테스트 가능하게 유지한다.
 - **stdout 금지**: MCP JSON-RPC가 stdout으로 흐른다. 모든 진단·로그는 stderr 또는 tee 파일로만(`_log` 헬퍼 사용).
 - 버퍼 접근은 Lock으로 보호한다(리더 스레드 ↔ 도구 호출 동시 접근).
-- 읽기 전용. 쓰기(명령 전송)는 향후 확장이며 구조만 열어둔다.
+- 조회 도구는 읽기 전용이다. 쓰기는 `send_serial_command`·`reset_board` 2종만 허용하며, 기본값은 매 호출 서버측 elicitation 승인 게이트다.
 
 ## 문서–코드 일치 유지
 
