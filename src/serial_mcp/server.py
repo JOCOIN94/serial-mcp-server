@@ -13,6 +13,7 @@ AI(Claude Code)는 6개의 읽기 전용 도구로 그 버퍼를 조회한다.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 import re
@@ -26,7 +27,11 @@ from typing import Callable, Mapping, Optional
 
 import serial
 from serial.tools import list_ports
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
+from mcp.shared.exceptions import McpError
+from mcp.types import ClientCapabilities, ElicitationCapability
+# pydantic은 mcp[cli]의 하드 의존성이므로 별도 top-level 의존성 추가가 아니다.
+from pydantic import BaseModel
 
 from .ports import (
     auto_usb_ports,
@@ -251,6 +256,10 @@ _autoname_lock = threading.Lock()   # 검사-부여 원자화(동시 리셋 시 
 _hotplug_stop = threading.Event()   # 핫플러그 스캔 루프 종료 신호(테스트·향후 정리용)
 
 
+class _WriteApproval(BaseModel):
+    """쓰기 승인 폼 — 빈 스키마라 클라이언트는 수락/거절만 표시한다."""
+
+
 @dataclass
 class PortMonitor:
     """포트 하나의 모니터링 묶음 — 리더·버퍼·생중계 허브(설계 §4)."""
@@ -321,6 +330,45 @@ def _resolve_port(port: str) -> tuple[Optional[PortMonitor], Optional[dict]]:
         "message": f"포트 '{port}' 를 모르겠다 — ports 목록에서 골라 다시 호출하라.",
         "ports": [m.label for m in _monitors.values()],
     }
+
+
+def _write_disabled_result() -> dict:
+    return {
+        "status": "error",
+        "message": "쓰기 비활성(SERIAL_WRITE=off) — 활성화하려면 SERIAL_WRITE 환경변수를 지우거나 1로",
+        "count": 0,
+        "lines": [],
+    }
+
+
+def _approval_unavailable_result() -> dict:
+    return {
+        "status": "error",
+        "message": "클라이언트가 elicitation(승인 팝업) 미지원 — 승인을 클라이언트 권한 게이트에 위임하려면 SERIAL_WRITE_CONFIRM=off 설정",
+    }
+
+
+async def _confirm_write(ctx: Optional[Context], summary: str) -> Optional[dict]:
+    """매 호출 사용자 승인 게이트. 통과하면 None, 차단하면 도구 반환 dict."""
+    if not _config.get("write_confirm", True):
+        return None
+    capability = ClientCapabilities(elicitation=ElicitationCapability())
+    if ctx is None or not ctx.session.check_client_capability(capability):
+        return _approval_unavailable_result()
+    try:
+        result = await ctx.elicit(message=summary, schema=_WriteApproval)
+    except McpError:
+        return _approval_unavailable_result()
+    if result.action == "accept":
+        return None
+    return {
+        "status": "declined",
+        "message": "사용자가 전송을 거부했다 — 같은 명령을 재시도하지 말고, 사람에게 이유를 묻고 다음 행동을 합의하라.",
+    }
+
+
+def _clamp_wait_ms(wait_ms: int) -> int:
+    return max(0, min(int(wait_ms), 30000))
 
 
 @mcp.tool()
@@ -530,6 +578,119 @@ def clear_log_buffer(port: str = "") -> dict:
     total = sum(detail.values())
     return {"status": "ok", "message": f"전체 {len(detail)}개 포트에서 {total}개 비움",
             "cleared": total, "ports": detail}
+
+
+@mcp.tool()
+async def send_serial_command(
+    command: str,
+    port: str = "",
+    eol: str = "\n",
+    wait_ms: int = 500,
+    ctx: Optional[Context] = None,
+) -> dict:
+    """[언제 호출] 보드 CLI/AT 명령을 전송하고 직후 응답 로그를 한 번에 회수할 때.
+
+    매 호출 사용자 승인 팝업이 뜬다. 거부되면 status="declined"를 반환하므로 같은
+    명령을 반복 재시도하지 말고 사람과 다음 행동을 합의하라.
+
+    [port 규약] get_recent_logs 와 동일 — 별칭("SSM")/포트명("COM4")/라벨("SSM (COM4)")
+    모두 허용. 복수 포트에서 미지정이면 ports 목록과 함께 에러.
+
+    [무엇을 반환] sent/eol/bytes/wait_ms/count/lines. 전송 감사 마커 [TX]가 lines에
+    함께 포함될 수 있다.
+
+    [루프 단계] 능동 시험(쓰기).
+    """
+    if not _config.get("write", True):
+        return _write_disabled_result()
+    mon, err = _resolve_port(port)
+    if err:
+        return {**err, "count": 0, "lines": []}
+    allowed_eol = {"\n", "\r\n", "\r", ""}
+    if eol not in allowed_eol:
+        return {
+            "status": "error",
+            "message": "eol은 '\\n', '\\r\\n', '\\r', '' 중 하나여야 한다.",
+            "count": 0,
+            "lines": [],
+        }
+    if command == "" and eol == "":
+        return {"status": "error", "message": "빈 페이로드는 전송하지 않는다.", "count": 0, "lines": []}
+    wait_ms = _clamp_wait_ms(wait_ms)
+    payload = (command + eol).encode("utf-8")
+    block = await _confirm_write(
+        ctx,
+        f"{mon.label} 포트로 시리얼 명령 전송 승인 요청\n명령: {command!r} (eol={eol!r}, {len(payload)}바이트)",
+    )
+    if block:
+        return {**block, "count": 0, "lines": []}
+    t0 = datetime.now()
+    try:
+        sent = mon.reader.write(payload, audit=f"[TX] {command}")
+    except serial.SerialException as e:
+        return {"status": "error", "message": f"{mon.label}: 전송 실패 — {e}", "count": 0, "lines": []}
+    # stdio 단일 클라이언트 환경에서는 짧은 write/pulse 직접 호출과 asyncio.sleep으로 충분하다.
+    await asyncio.sleep(wait_ms / 1000)
+    lines = mon.buffer.entries_since(t0)
+    return {
+        "status": "ok",
+        "message": f"{mon.label}: {sent}바이트 전송, {wait_ms}ms 대기 후 {len(lines)}줄 회수",
+        "port": mon.port,
+        "name": mon.name,
+        "sent": command,
+        "eol": eol,
+        "bytes": sent,
+        "wait_ms": wait_ms,
+        "count": len(lines),
+        "lines": lines,
+    }
+
+
+@mcp.tool()
+async def reset_board(port: str = "", wait_ms: int = 2000, ctx: Optional[Context] = None) -> dict:
+    """[언제 호출] 블랙박스 루프 시작 시 사람이 누르던 물리 리셋을 AI가 직접 수행할 때.
+
+    DTR/RTS 자동리셋 회로가 있는 보드에서만 동작한다. native-USB 또는 미배선 보드는
+    예외 없이 0줄 회수로 끝날 수 있으므로, 이때는 사람에게 물리 리셋을 요청하라.
+
+    [port 규약] get_recent_logs 와 동일.
+
+    [무엇을 반환] wait_ms/count/lines. 성공 시 [RST] 감사 마커가 버퍼/웹 피드/tee에
+    기록될 수 있다.
+
+    [루프 단계] 시험 시작(리셋).
+    """
+    if not _config.get("write", True):
+        return _write_disabled_result()
+    mon, err = _resolve_port(port)
+    if err:
+        return {**err, "count": 0, "lines": []}
+    wait_ms = _clamp_wait_ms(wait_ms)
+    block = await _confirm_write(
+        ctx,
+        f"{mon.label} 보드를 DTR/RTS 펄스로 하드웨어 리셋합니다. 승인하시겠습니까?",
+    )
+    if block:
+        return {**block, "count": 0, "lines": []}
+    t0 = datetime.now()
+    try:
+        mon.reader.pulse_reset()
+    except serial.SerialException as e:
+        return {"status": "error", "message": f"{mon.label}: 리셋 실패 — {e}", "count": 0, "lines": []}
+    await asyncio.sleep(wait_ms / 1000)
+    lines = mon.buffer.entries_since(t0)
+    msg = f"{mon.label}: 리셋 펄스 전송, {wait_ms}ms 대기 후 {len(lines)}줄 회수"
+    if not lines:
+        msg += " — 부팅 로그 없음 — native-USB 보드이거나 자동리셋 미배선일 수 있다. 사람에게 물리 리셋을 요청하라"
+    return {
+        "status": "ok",
+        "message": msg,
+        "port": mon.port,
+        "name": mon.name,
+        "wait_ms": wait_ms,
+        "count": len(lines),
+        "lines": lines,
+    }
 
 
 def _env_int(env: Mapping[str, str], name: str, default: int) -> int:
