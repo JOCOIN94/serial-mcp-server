@@ -302,6 +302,7 @@ docstring 요구(자족적, 기존 스타일):
 2. `py -m compileall -q src` — 문법 검증.
 3. **실장비 검증(사람 필요 — 사용자에게 요청)**: Claude Code 세션에서 serial-mcp 재기동(SSM, COM4) 후 —
    a. `reset_board(port="SSM")` 호출 → **승인 팝업이 뜨는지**(elicitation 클라이언트 지원 확인) → 수락 → `ESP-ROM:esp32s3` 부트 배너가 `lines`로 회수되는지.
-   b. `send_serial_command` 거절 경로: 팝업에서 거절 → `status=="declined"` + 미전송 확인.
-   c. 웹 뷰어/tee에 `[RST]`/`[TX]` 마커 표시 확인.
+   b. `send_serial_command(command="/help", port="SSM", wait_ms=1000)` 호출 → 승인 팝업 수락 → `/help` 응답이 `lines`로 회수되는지. 이 항목은 단순 전송 성공이 아니라 SSM 펌웨어가 실제 명령을 처리하는지 확인하는 smoke test다.
+   c. `send_serial_command` 거절 경로: 팝업에서 거절 → `status=="declined"` + 미전송 확인.
+   d. 웹 뷰어/tee에 `[RST]`/`[TX]` 마커 표시 확인(`/help` 송신은 `[TX] /help`로 남아야 함).
 4. 통과 후 push: 서버 레포 main 먼저(uvx 배포원), 이어서 silotek-tools(플러그인 env·스킬). 마지막으로 `/code-review`(워크플로 4단계)를 사용자에게 권고.
