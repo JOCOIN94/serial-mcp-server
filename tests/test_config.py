@@ -32,7 +32,7 @@ def test_load_config_defaults_when_empty():
     assert _load_config({}) == {
         "ports": [], "names": {}, "autoname": [], "baud": 115200, "tee": None,
         "exclude": None, "include": None, "maxlen": 2000, "dedup": 5, "web": 8743,
-        "hotplug": 5.0,
+        "hotplug": 5.0, "write": True, "write_confirm": True,
     }
 
 
@@ -43,13 +43,14 @@ def test_load_config_reads_all_vars():
         "SERIAL_BAUD": "57600", "SERIAL_TEE": "log.txt",
         "SERIAL_EXCLUDE": "DEBUG", "SERIAL_INCLUDE": "ERROR",
         "SERIAL_BUFFER_LINES": "500", "SERIAL_DEDUP": "0", "SERIAL_WEB": "9000",
-        "SERIAL_HOTPLUG": "10",
+        "SERIAL_HOTPLUG": "10", "SERIAL_WRITE": "off", "SERIAL_WRITE_CONFIRM": "no",
     })
     assert cfg == {
         "ports": [("COM4", None), ("COM13", 9600)], "names": {"COM4": "SSM"},
         "autoname": [("SB1", "STM32")],
         "baud": 57600, "tee": "log.txt", "exclude": "DEBUG", "include": "ERROR",
         "maxlen": 500, "dedup": 0, "web": 9000, "hotplug": 10.0,
+        "write": False, "write_confirm": False,
     }
 
 
@@ -128,3 +129,25 @@ def test_load_config_hotplug_custom_interval():
 def test_load_config_hotplug_invalid_falls_back(val):
     # inf/nan은 양수로 통과하면 사실상 무음 비활성 — 해석 실패로 취급(코드리뷰 반영)
     assert _load_config({"SERIAL_HOTPLUG": val})["hotplug"] == 5.0
+
+
+# ---- SERIAL_WRITE / SERIAL_WRITE_CONFIRM (쓰기 안전 게이트) ----
+
+@pytest.mark.parametrize(
+    "env,expected",
+    [
+        ({}, (True, True)),
+        ({"SERIAL_WRITE": "off", "SERIAL_WRITE_CONFIRM": "off"}, (False, False)),
+        ({"SERIAL_WRITE": "0", "SERIAL_WRITE_CONFIRM": "0"}, (False, False)),
+        ({"SERIAL_WRITE": "false", "SERIAL_WRITE_CONFIRM": "false"}, (False, False)),
+        ({"SERIAL_WRITE": "no", "SERIAL_WRITE_CONFIRM": "no"}, (False, False)),
+        ({"SERIAL_WRITE": "on", "SERIAL_WRITE_CONFIRM": "on"}, (True, True)),
+        ({"SERIAL_WRITE": "1", "SERIAL_WRITE_CONFIRM": "1"}, (True, True)),
+        ({"SERIAL_WRITE": "true", "SERIAL_WRITE_CONFIRM": "true"}, (True, True)),
+        ({"SERIAL_WRITE": "yes", "SERIAL_WRITE_CONFIRM": "yes"}, (True, True)),
+        ({"SERIAL_WRITE": "abc", "SERIAL_WRITE_CONFIRM": "abc"}, (True, True)),
+    ],
+)
+def test_load_config_write_flags(env, expected):
+    cfg = _load_config(env)
+    assert (cfg["write"], cfg["write_confirm"]) == expected

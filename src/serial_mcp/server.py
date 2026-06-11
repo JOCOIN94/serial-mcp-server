@@ -662,6 +662,19 @@ def _parse_hotplug(env: Mapping[str, str]) -> Optional[float]:
     return 5.0
 
 
+def _parse_flag(env: Mapping[str, str], name: str, default: bool = True) -> bool:
+    """불리언 환경변수 파싱 — 미설정/빈값은 기본값, 해석 실패도 _log 후 기본값."""
+    raw = env.get(name, "").strip().lower()
+    if raw == "":
+        return default
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    _log(f"환경변수 {name}={raw!r} 해석 실패 → 기본값 {default} 사용")
+    return default
+
+
 def _load_config(env: Mapping[str, str]) -> dict:
     """환경변수 매핑에서 서버 설정을 파싱해 dict로 반환(부작용 없음, 순수 함수).
 
@@ -680,6 +693,8 @@ def _load_config(env: Mapping[str, str]) -> dict:
         "dedup": _parse_dedup(env),
         "web": _parse_web(env),
         "hotplug": _parse_hotplug(env),
+        "write": _parse_flag(env, "SERIAL_WRITE"),
+        "write_confirm": _parse_flag(env, "SERIAL_WRITE_CONFIRM"),
     }
 
 
