@@ -23,6 +23,7 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - 헤드리스로만 동작한다. GUI를 포함하지 않으며, PyQt6 등 GUI 라이브러리를 사용하지 않는다. (localhost 웹 뷰어(§10)는 GUI 라이브러리가 아니라 사용자의 브라우저를 화면으로 쓰므로 이 제약에 위배되지 않는다.)
 - 의존성은 두 가지로 한정한다: 최신 공식 MCP Python SDK(`mcp[cli]`, FastMCP 사용)와 `pyserial`.
 - 운영체제에 독립적으로 동작한다(macOS, Windows, Linux). WSL은 대상이 아니다. 전송 방식(transport)은 stdio로 한다.
+- 클라이언트 중립: 본 서버는 표준 MCP만 사용하며 특정 클라이언트(Claude Code, Codex 등)에 의존하지 않는다 — 모든 기능은 어느 클라이언트에서 호출해도 동일하게 동작해야 한다. 클라이언트마다 지원이 다른 선택 기능(예: elicitation)을 쓸 때는 미지원 클라이언트에서의 폴백 동작을 함께 정의한다(§5.2의 승인 fail-safe가 그 예).
 - 조회 도구는 읽기 전용으로 유지한다. 포트에 쓰는 기능은 `send_serial_command`(텍스트 명령 전송)와 `reset_board`(DTR/RTS 리셋) 2종만 제공하며, 기본값은 매 호출 서버측 elicitation 승인이다. `SERIAL_WRITE_CONFIRM=off`로 승인을 클라이언트 권한 게이트에 위임할 수 있고, `SERIAL_WRITE=off`로 쓰기를 전면 차단할 수 있다.
 - 클린 코드, 클린 아키텍처 원칙을 지켜, 확장과 유지 보수가 좋은 코딩 패턴을 사용하라.(일관된 패턴을 사용하여 각기 다른 스타일이 되지않도록 한다.)
 - stdio 주의: stdout으로 MCP JSON-RPC 메시지가 전송된다. stdout에는 어떠한 로그나 출력도 기록해서는 안 된다(프로토콜이 손상된다). 모든 진단 및 로그 출력은 stderr 또는 tee 파일로만 전송한다.
