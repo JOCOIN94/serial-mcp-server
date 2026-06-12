@@ -67,7 +67,7 @@ claude mcp add --scope user serial-mcp \
 | `SERIAL_BUFFER_LINES` | `2000` | ring buffer 크기 |
 | `SERIAL_DEDUP` | `5` | 중복 접기 룩백 윈도 — 최근 N줄 안의 같은 줄을 접음. `1`(=`true`)=직전 줄만, `0`/`false`/`no`/`off`로 끔 |
 | `SERIAL_WEB` | `8743` | 웹 뷰어 포트. `0`/`false`/`no`/`off`로 끔. 점유 시 임시 포트 폴백(실제 URL은 `viewer_url`) |
-| `SERIAL_HOTPLUG` | `5` | 자동 스캔 모드에서 새 USB 포트 감지 간격(초, 소수 허용) — 서버 실행 중 꽂은 보드를 자동 추가. `0`/`false`/`no`/`off`로 끄면 시작 시 1회 스캔만. `SERIAL_PORT` 지정 시 스캔 없음 |
+| `SERIAL_HOTPLUG` | `5` | 포트 감시 간격(초, 소수 허용). 자동 스캔 모드: 서버 실행 중 꽂은 보드를 자동 추가(연속 2회 스캔 확인 후 — 드라이버 정착 유예). 모든 모드: 열거 목록에서 연속 2회 사라진 포트의 좀비 핸들 강제 해제(플래키 어댑터 대응). `0`/`false`/`no`/`off`로 끄면 시작 시 1회 스캔만 |
 | `SERIAL_WRITE` | `true` | 쓰기 도구 전면 스위치. `0`/`false`/`no`/`off`면 `send_serial_command`/`reset_board`가 등록은 유지하되 전송하지 않고 에러 반환 |
 | `SERIAL_WRITE_CONFIRM` | `true` | 쓰기 도구의 서버측 elicitation 승인 게이트. `0`/`false`/`no`/`off`면 승인 팝업을 생략하고 클라이언트의 일반 도구 권한 게이트에 위임 |
 | `SERIAL_CHAR_DELAY` | `10` | `send_serial_command` 전송 시 문자 간 지연(ms, 소수 허용, 상한 100). 폴링 수신 펌웨어(STM32 등)가 기계 속도 연속 바이트를 흘리는 문자 유실 방지 — 모든 보드에 공통 적용. `0`/`false`/`no`/`off`로 끄면 통짜 전송 |

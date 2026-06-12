@@ -23,9 +23,15 @@ class StubReader:
         self.connected = False
         self.last_error = None
         self.opened_at = None
+        self.force_disconnect_calls = []
 
     def start(self):
         self.started = True
+
+    def force_disconnect(self, reason):
+        self.force_disconnect_calls.append(reason)
+        self.connected = False
+        self.last_error = reason
 
 
 BASE_CFG = {
@@ -93,16 +99,45 @@ def scan_env(monkeypatch, stub_reader):
     existing = srv._make_monitor("COM_A", None, {}, BASE_CFG)
     monkeypatch.setattr(srv, "_monitors", {"COM_A": existing})
     monkeypatch.setattr(srv, "_config", dict(BASE_CFG))
+    monkeypatch.setattr(srv, "_hotplug_pending", set())
     return existing
 
 
+def seen_last_scan(monkeypatch, *ports):
+    """직전 스캔에서 이미 목격된 상태를 주입 — 정착 유예(연속 2회)를 통과시킨다."""
+    monkeypatch.setattr(srv, "_hotplug_pending", {p.upper() for p in ports})
+
+
 def test_scan_adds_new_usb_port_and_starts_reader(monkeypatch, scan_env):
+    seen_last_scan(monkeypatch, "COM_B")
     monkeypatch.setattr(srv.list_ports, "comports",
                         lambda: [usb("COM_A"), usb("COM_B")])
     added = srv._hotplug_scan_once()
     assert added == ["COM_B"]
     assert "COM_B" in srv._monitors
     assert srv._monitors["COM_B"].reader.started is True
+
+
+def test_scan_add_requires_two_consecutive_scans(monkeypatch, scan_env):
+    """새 포트는 연속 2회 스캔에서 확인된 뒤에야 추가된다(드라이버 정착 유예)."""
+    monkeypatch.setattr(srv.list_ports, "comports",
+                        lambda: [usb("COM_A"), usb("COM_B")])
+    assert srv._hotplug_scan_once() == []            # 1회차: 보류
+    assert "COM_B" not in srv._monitors
+    assert srv._hotplug_scan_once() == ["COM_B"]     # 2회차: 추가
+    assert srv._monitors["COM_B"].reader.started is True
+
+
+def test_scan_pending_cleared_when_port_vanishes(monkeypatch, scan_env):
+    """한 번 보였다 사라진 포트는 보류가 풀린다 — 재등장 시 다시 2회 연속 필요."""
+    ports = {"now": [usb("COM_A"), usb("COM_B")]}
+    monkeypatch.setattr(srv.list_ports, "comports", lambda: ports["now"])
+    assert srv._hotplug_scan_once() == []            # 목격 1회
+    ports["now"] = [usb("COM_A")]
+    assert srv._hotplug_scan_once() == []            # 사라짐 → 보류 해제
+    ports["now"] = [usb("COM_A"), usb("COM_B")]
+    assert srv._hotplug_scan_once() == []            # 재등장 1회차 — 아직 보류
+    assert "COM_B" not in srv._monitors
 
 
 def test_scan_ignores_known_ports_case_insensitive(monkeypatch, scan_env):
@@ -119,6 +154,7 @@ def test_scan_ignores_non_usb_ports(monkeypatch, scan_env):
 
 def test_scan_applies_serial_names_to_new_port(monkeypatch, scan_env):
     srv._config["names"] = {"SN777": "SB2"}
+    seen_last_scan(monkeypatch, "COM_C")
     monkeypatch.setattr(srv.list_ports, "comports",
                         lambda: [usb("COM_A"), usb("COM_C", sn="SN777")])
     srv._hotplug_scan_once()
@@ -128,6 +164,7 @@ def test_scan_applies_serial_names_to_new_port(monkeypatch, scan_env):
 def test_scan_replaces_dict_copy_on_write(monkeypatch, scan_env):
     """리더 스레드가 순회 중인 옛 dict 객체는 불변 — 전역 참조만 교체돼야 한다."""
     before = srv._monitors
+    seen_last_scan(monkeypatch, "COM_B")
     monkeypatch.setattr(srv.list_ports, "comports",
                         lambda: [usb("COM_A"), usb("COM_B")])
     srv._hotplug_scan_once()
@@ -146,10 +183,70 @@ def test_scan_noop_when_nothing_new(monkeypatch, scan_env):
 def test_scan_hooks_autoname_on_new_unnamed_port(monkeypatch, scan_env):
     """핫플러그로 추가된 무명 포트도 기동 경로와 동일하게 autoname 훅을 단다."""
     monkeypatch.setattr(srv, "_autoname_rules", srv.compile_autoname([("SB1", r"STM32")]))
+    seen_last_scan(monkeypatch, "COM_B")
     monkeypatch.setattr(srv.list_ports, "comports",
                         lambda: [usb("COM_A"), usb("COM_B")])
     srv._hotplug_scan_once()
     assert srv._monitors["COM_B"].reader.on_line is not None
+
+
+# ---- 좀비 핸들 해제 (열거 교차 확인 — 2026-06-12 실측 대응) ----
+
+def test_scan_releases_zombie_after_two_absent_scans(monkeypatch, scan_env):
+    """connected 인데 열거 목록에서 연속 2회 사라진 포트는 핸들을 강제 해제한다."""
+    scan_env.reader.connected = True
+    monkeypatch.setattr(srv.list_ports, "comports", lambda: [])
+    srv._hotplug_scan_once()                          # 부재 1회 — 유예
+    assert scan_env.reader.force_disconnect_calls == []
+    srv._hotplug_scan_once()                          # 부재 2회 — 해제
+    assert len(scan_env.reader.force_disconnect_calls) == 1
+    assert scan_env.reader.connected is False
+
+
+def test_scan_zombie_counter_resets_on_reappearance(monkeypatch, scan_env):
+    """한 번 사라졌다 다시 보이면 부재 카운터가 리셋된다(플래핑 방지)."""
+    scan_env.reader.connected = True
+    ports = {"now": []}
+    monkeypatch.setattr(srv.list_ports, "comports", lambda: ports["now"])
+    srv._hotplug_scan_once()                          # 부재 1회
+    ports["now"] = [usb("COM_A")]
+    srv._hotplug_scan_once()                          # 재등장 — 리셋
+    ports["now"] = []
+    srv._hotplug_scan_once()                          # 부재 1회(다시)
+    assert scan_env.reader.force_disconnect_calls == []
+
+
+def test_scan_ignores_absent_but_disconnected_monitors(monkeypatch, scan_env):
+    """이미 끊긴 모니터는 건드리지 않는다 — 재연결은 리더 루프 소관."""
+    scan_env.reader.connected = False
+    monkeypatch.setattr(srv.list_ports, "comports", lambda: [])
+    srv._hotplug_scan_once()
+    srv._hotplug_scan_once()
+    assert scan_env.reader.force_disconnect_calls == []
+
+
+def test_scan_allow_add_false_watches_but_never_adds(monkeypatch, scan_env):
+    """고정 포트 모드: 좀비 해제는 수행하되 새 포트 추가는 하지 않는다."""
+    scan_env.reader.connected = True
+    monkeypatch.setattr(srv.list_ports, "comports", lambda: [usb("COM_B")])
+    assert srv._hotplug_scan_once(allow_add=False) == []
+    assert srv._hotplug_scan_once(allow_add=False) == []
+    assert "COM_B" not in srv._monitors               # 2회 연속 목격에도 미추가
+    assert len(scan_env.reader.force_disconnect_calls) == 1   # COM_A 부재 2회 → 해제
+
+
+def test_reader_force_disconnect_closes_handle_and_marks_state():
+    """SerialReader.force_disconnect — 핸들 close + connected/last_error 갱신."""
+    from serial_mcp.ring_buffer import LineBuffer
+    r = srv.SerialReader(port="COMZ", baud=115200, buffer=LineBuffer(maxlen=10))
+    closed = []
+    r._ser = SimpleNamespace(close=lambda: closed.append(1))
+    r.connected = True
+    r.force_disconnect("열거 목록에서 사라짐")
+    assert closed == [1]
+    assert r._ser is None
+    assert r.connected is False
+    assert "열거 목록에서 사라짐" in r.last_error
 
 
 # ---- _hotplug_loop (주기 호출·예외 생존) ----
@@ -159,7 +256,7 @@ def test_hotplug_loop_survives_scan_exceptions(monkeypatch):
     stop = threading.Event()
     calls = []
 
-    def boom():
+    def boom(allow_add=True):
         calls.append(1)
         if len(calls) >= 2:
             stop.set()          # 2회 호출을 확인했으면 루프 종료

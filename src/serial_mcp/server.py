@@ -163,6 +163,25 @@ class SerialReader:
                 continue  # timeout — 수신 데이터 없음
             self._ingest(raw, datetime.now())
 
+    def force_disconnect(self, reason: str) -> None:
+        """외부 감시자가 핸들을 강제 해제한다 — 좀비 핸들 대응(SPEC §3).
+
+        일부 어댑터/드라이버(시리얼넘버 없는 PL2303 클론 등)는 장치가 죽어도
+        읽기 예외 없이 타임아웃만 반복해, 리더 루프가 탈락을 영원히 감지하지
+        못한다(2026-06-12 실측: 40분간 connected 인 채 수신 0). 핸들을 즉시
+        닫아 OS 재열거 충돌을 막고, 재연결은 기존 리더 루프가 맡는다.
+        """
+        with self._ser_lock:
+            ser, self._ser = self._ser, None
+            self.connected = False
+            self.last_error = reason
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception:
+                pass
+        _log(f"강제 해제: {self.port} — {reason}")
+
     def _serial_failure(self, prefix: str, exc: Exception) -> serial.SerialException:
         """쓰기/리셋 오류를 재연결 루프가 복구할 수 있는 상태로 변환."""
         self.connected = False
@@ -284,6 +303,7 @@ class PortMonitor:
     buffer: LineBuffer
     feed: RawFeed
     reader: Optional[SerialReader]    # 테스트에선 SimpleNamespace 주입 가능
+    absent_scans: int = 0             # 열거 목록 연속 부재 횟수(핫플러그 스캔 스레드만 갱신)
 
     @property
     def label(self) -> str:
@@ -936,21 +956,50 @@ def _make_monitor(
     return mon
 
 
-def _hotplug_scan_once() -> list[str]:
-    """핫플러그 1회 스캔 — 새 USB 시리얼 포트를 모니터에 추가하고 포트명 목록 반환.
+_hotplug_pending: set[str] = set()   # 직전 스캔에서 처음 목격된 새 포트(정착 유예 대기)
+
+
+def _hotplug_scan_once(allow_add: bool = True) -> list[str]:
+    """포트 감시 1회 스캔 — 좀비 핸들 해제 + (allow_add 시) 새 USB 포트 추가.
+
+    좀비 해제: connected 라고 믿는 포트가 열거 목록에서 **연속 2회** 사라지면
+    핸들을 강제로 닫는다. 일부 드라이버는 장치가 죽어도 읽기 예외를 던지지
+    않아 리더 루프가 탈락을 감지하지 못하고, 그 사이 좀비 핸들이 재열거를
+    방해한다(2026-06-12 실측). 2회 유예는 일시적 열거 누락 플래핑 방지.
+
+    추가 디바운스: 새 포트는 **연속 2회** 스캔에서 보여야 추가한다 — 막
+    열거된 장치를 드라이버 초기화 중에 여는 것을 피한다(정착 유예).
 
     _monitors 는 copy-on-write 로만 갱신한다(새 dict 생성 → 전역 참조 원자 교체).
     리더 스레드(_autoname_check)·도구 호출이 옛 dict 를 순회 중이어도 안전하다.
     사라진 포트의 모니터는 제거하지 않는다 — 버퍼·tee 를 보존하고, 재연결은
     SerialReader 의 재시도 루프가 담당한다.
     """
-    global _monitors
+    global _monitors, _hotplug_pending
     com = list(list_ports.comports())
+
+    # 1) 좀비 해제 — 부재 카운터는 이 스레드만 갱신한다
+    present = {p.device.upper() for p in com}
+    for mon in _monitors.values():
+        if mon.reader.connected and mon.port.upper() not in present:
+            mon.absent_scans += 1
+            if mon.absent_scans >= 2:
+                mon.absent_scans = 0
+                mon.reader.force_disconnect(
+                    "장치가 열거 목록에서 사라짐(연속 2회) — 좀비 핸들 해제")
+        else:
+            mon.absent_scans = 0
+
+    # 2) 새 포트 추가 (자동 스캔 모드 전용)
+    if not allow_add:
+        return []
     fresh = [d for d in auto_usb_ports(com) if d.upper() not in _monitors]
-    if not fresh:
+    confirmed = [d for d in fresh if d.upper() in _hotplug_pending]
+    _hotplug_pending = {d.upper() for d in fresh} - {d.upper() for d in confirmed}
+    if not confirmed:
         return []
     sn_map = {p.device.upper(): getattr(p, "serial_number", None) for p in com}
-    added = [_make_monitor(d, None, sn_map, _config) for d in fresh]
+    added = [_make_monitor(d, None, sn_map, _config) for d in confirmed]
     # 등록을 먼저 끝낸 뒤 리더 시작(main 의 1·2패스와 동일한 순서 보장)
     _monitors = {**_monitors, **{m.port.upper(): m for m in added}}
     for m in added:
@@ -959,16 +1008,16 @@ def _hotplug_scan_once() -> list[str]:
     return [m.port for m in added]
 
 
-def _hotplug_loop(interval: float, stop: threading.Event) -> None:
-    """핫플러그 스캔 루프(데몬 스레드 본체) — 어떤 예외에도 죽지 않는다.
+def _hotplug_loop(interval: float, stop: threading.Event, allow_add: bool = True) -> None:
+    """포트 감시 루프(데몬 스레드 본체) — 어떤 예외에도 죽지 않는다.
 
     stop.wait(interval) 가 타이머 겸 종료 신호 수신을 겸한다(즉시 반응).
     """
     while not stop.wait(interval):
         try:
-            _hotplug_scan_once()
+            _hotplug_scan_once(allow_add=allow_add)
         except Exception as e:  # noqa: BLE001 - 스캔 실패가 스레드를 죽이면 안 됨
-            _log(f"핫플러그 스캔 오류: {e!r}")
+            _log(f"포트 감시 스캔 오류: {e!r}")
 
 
 def main() -> None:
@@ -1000,22 +1049,26 @@ def main() -> None:
         mon.reader.start()
         _log(f"모니터 시작: {mon.label} @ {mon.reader.baud}")
 
-    hotplug_on = cfg["hotplug"] is not None and not cfg["ports"]
+    watch_on = cfg["hotplug"] is not None
+    allow_add = not cfg["ports"]      # 고정 포트 모드에선 좀비 해제만, 추가 없음
     if not _monitors:
-        if hotplug_on:
+        if watch_on and allow_add:
             _log("경고: 모니터링할 포트 없음 — USB 장비를 연결하면 핫플러그 스캔이 자동 추가한다.")
         else:
             _log("경고: 모니터링할 포트 없음 — USB 시리얼이 안 보이고 SERIAL_PORT 도 "
                  "비어 있다. 장비 연결 후 서버를 재시작하라(핫플러그 꺼짐).")
 
-    if hotplug_on:
-        threading.Thread(target=_hotplug_loop, args=(cfg["hotplug"], _hotplug_stop),
+    if watch_on:
+        threading.Thread(target=_hotplug_loop,
+                         args=(cfg["hotplug"], _hotplug_stop, allow_add),
                          name="hotplug-scan", daemon=True).start()
-        _log(f"핫플러그 스캔 켜짐 ({cfg['hotplug']:g}초 간격)")
-    elif cfg["ports"]:
-        _log("핫플러그 스캔 없음 — SERIAL_PORT 고정 목록 모드(늦은 연결은 재연결 루프가 잡음)")
+        if allow_add:
+            _log(f"포트 감시 켜짐 ({cfg['hotplug']:g}초 간격 — 새 포트 추가 + 좀비 핸들 해제)")
+        else:
+            _log(f"포트 감시 켜짐 ({cfg['hotplug']:g}초 간격 — SERIAL_PORT 고정 모드, "
+                 "좀비 핸들 해제만 수행(늦은 연결은 재연결 루프가 잡음))")
     else:
-        _log("핫플러그 스캔 꺼짐 (SERIAL_HOTPLUG=0)")
+        _log("포트 감시 꺼짐 (SERIAL_HOTPLUG=0)")
 
     if cfg["web"] is not None:
         _viewer = ViewerServer(
