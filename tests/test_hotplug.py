@@ -31,7 +31,7 @@ class StubReader:
 BASE_CFG = {
     "ports": [], "names": {}, "autoname": [], "baud": 115200, "tee": None,
     "exclude": None, "include": None, "maxlen": 2000, "dedup": 5, "web": None,
-    "hotplug": 5.0,
+    "hotplug": 5.0, "char_delay": 0.0,
 }
 
 

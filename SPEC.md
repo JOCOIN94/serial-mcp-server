@@ -85,6 +85,7 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - 사용자가 승인 팝업에서 decline/cancel하면 `status="declined"`를 반환한다. AI는 같은 명령이나 리셋을 반복 호출하지 말고 사람에게 이유를 묻고 다음 행동을 합의한다.
 - 송신 감사 기록은 `[TX] {command}` 또는 `[RST] DTR/RTS 하드웨어 리셋 펄스` 마커로 남긴다. tee 파일과 웹 feed에는 항상 남고, ring buffer에는 include/exclude 필터가 적용된다. `send_serial_command`의 응답 회수는 쓰기 직전 `t0` 이후 `LineBuffer.entries_since(t0)` 기반이라 dedup으로 기존 항목에 접힌 응답도 `last_ts` 갱신으로 회수된다.
 - 포트를 여는 순간 DTR/RTS 어서트로 일부 자동리셋 보드가 리셋될 수 있다. 이는 기존 pyserial open 동작이며 `reset_board` 도입과 별개다. 리셋 도구는 명시적 DTR/RTS 펄스만 감사 마커로 남긴다.
+- 전송은 기본적으로 문자 간 지연(`SERIAL_CHAR_DELAY`, 기본 10ms)을 두고 1바이트씩 기록한다 — 폴링 수신 펌웨어가 기계 속도 연속 바이트를 흘리는 문자 유실 대응(실측 근거 2026-06-12: SB-STM32에 `HELP` 송신 시 `HLP` 수신). 보드를 가리지 않고 공통 적용하며(즉답형 펌웨어에 부작용 없음), 끄면 통짜 기록이다.
 
 ## 6. 프로젝트 구조 및 배포 (하이브리드)
 

@@ -70,6 +70,7 @@ class SerialReader:
         reconnect_interval: float = 3.0,
         feed: Optional[RawFeed] = None,
         on_line: Optional[Callable[[datetime, str], None]] = None,
+        char_delay: float = 0.0,
     ) -> None:
         self.port = port
         self.baud = baud
@@ -78,6 +79,7 @@ class SerialReader:
         self.reconnect_interval = reconnect_interval
         self.feed = feed   # 웹 뷰어 생중계 허브(없으면 발행 생략)
         self.on_line = on_line   # 서버측 라인 후킹(보드 자동 식별 등, 없으면 생략)
+        self.char_delay = char_delay   # 전송 문자 간 지연(초) — 폴링 수신 펌웨어의 바이트 유실 대응
 
         self._thread = threading.Thread(target=self._run, name="serial-reader", daemon=True)
         self._stop = threading.Event()
@@ -177,13 +179,25 @@ class SerialReader:
         return serial.SerialException(str(exc))
 
     def write(self, data: bytes, audit: Optional[str] = None) -> int:
-        """페이로드를 포트에 기록한다. 성공하면 audit 텍스트를 TX 감사 기록으로 남긴다."""
+        """페이로드를 포트에 기록한다. 성공하면 audit 텍스트를 TX 감사 기록으로 남긴다.
+
+        char_delay(초)가 0보다 크면 1바이트씩 사이에 지연을 두고 기록한다 — 폴링
+        수신 펌웨어(SB-STM32 등)가 기계 속도 연속 바이트를 흘리는 문자 유실 대응.
+        보드를 가리지 않고 공통 적용한다(즉답형 펌웨어에도 부작용 없음).
+        """
         with self._ser_lock:
             ser = self._ser
             if ser is None or not self.connected:
                 raise serial.SerialException(f"포트가 연결되어 있지 않음: {self.port}")
             try:
-                n = ser.write(data)
+                if self.char_delay > 0 and len(data) > 1:
+                    n = 0
+                    for i in range(len(data)):
+                        n += ser.write(data[i:i + 1])
+                        if i < len(data) - 1:
+                            time.sleep(self.char_delay)
+                else:
+                    n = ser.write(data)
             except Exception as e:  # noqa: BLE001 - pyserial/드라이버 예외를 동일 계약으로 변환
                 raise self._serial_failure("쓰기 실패", e) from e
         if audit is not None:
@@ -824,6 +838,30 @@ def _parse_hotplug(env: Mapping[str, str]) -> Optional[float]:
     return 5.0
 
 
+def _parse_char_delay(env: Mapping[str, str]) -> float:
+    """SERIAL_CHAR_DELAY 파싱 — 전송 문자 간 지연(ms). 기본 10(켜짐), 반환은 초.
+
+    폴링 수신 펌웨어(SB-STM32 등)가 기계 속도 연속 바이트를 흘리는 문자 유실 대응
+    (실측 근거 2026-06-12: 'HELP' 송신 → 보드 수신 'HLP'). 0/false/no/off → 끔(0.0),
+    유한 양수(소수 허용, 상한 100ms) → 지연. 해석 실패는 기본값.
+    """
+    raw = env.get("SERIAL_CHAR_DELAY", "").strip().lower()
+    if raw == "":
+        return 0.010
+    if raw in ("false", "no", "off"):
+        return 0.0
+    try:
+        n = float(raw)
+        if n == 0:
+            return 0.0   # "0"·"0.0" 모두 끔 — 표기 차이로 켜짐/꺼짐이 갈리면 안 됨
+        if n > 0 and math.isfinite(n):
+            return min(n, 100.0) / 1000.0   # 과도한 값이 이벤트 루프를 오래 막지 않게 상한
+    except ValueError:
+        pass
+    _log(f"환경변수 SERIAL_CHAR_DELAY={raw!r} 해석 실패 → 기본 10ms 사용")
+    return 0.010
+
+
 def _parse_flag(env: Mapping[str, str], name: str, default: bool = True) -> bool:
     """불리언 환경변수 파싱 — 미설정/빈값은 기본값, 해석 실패도 _log 후 기본값."""
     raw = env.get(name, "").strip().lower()
@@ -857,6 +895,7 @@ def _load_config(env: Mapping[str, str]) -> dict:
         "hotplug": _parse_hotplug(env),
         "write": _parse_flag(env, "SERIAL_WRITE"),
         "write_confirm": _parse_flag(env, "SERIAL_WRITE_CONFIRM"),
+        "char_delay": _parse_char_delay(env),
     }
 
 
@@ -892,7 +931,8 @@ def _make_monitor(
         on_line = (lambda ts, text, m=mon: _autoname_check(m, text))
     mon.reader = SerialReader(port=port, baud=baud, buffer=buf,
                               tee_path=_tee_path_for(cfg["tee"], name or port),
-                              feed=feed, on_line=on_line)
+                              feed=feed, on_line=on_line,
+                              char_delay=cfg["char_delay"])
     return mon
 
 

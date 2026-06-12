@@ -32,7 +32,7 @@ def test_load_config_defaults_when_empty():
     assert _load_config({}) == {
         "ports": [], "names": {}, "autoname": [], "baud": 115200, "tee": None,
         "exclude": None, "include": None, "maxlen": 2000, "dedup": 5, "web": 8743,
-        "hotplug": 5.0, "write": True, "write_confirm": True,
+        "hotplug": 5.0, "write": True, "write_confirm": True, "char_delay": 0.01,
     }
 
 
@@ -44,13 +44,14 @@ def test_load_config_reads_all_vars():
         "SERIAL_EXCLUDE": "DEBUG", "SERIAL_INCLUDE": "ERROR",
         "SERIAL_BUFFER_LINES": "500", "SERIAL_DEDUP": "0", "SERIAL_WEB": "9000",
         "SERIAL_HOTPLUG": "10", "SERIAL_WRITE": "off", "SERIAL_WRITE_CONFIRM": "no",
+        "SERIAL_CHAR_DELAY": "25",
     })
     assert cfg == {
         "ports": [("COM4", None), ("COM13", 9600)], "names": {"COM4": "SSM"},
         "autoname": [("SB1", "STM32")],
         "baud": 57600, "tee": "log.txt", "exclude": "DEBUG", "include": "ERROR",
         "maxlen": 500, "dedup": 0, "web": 9000, "hotplug": 10.0,
-        "write": False, "write_confirm": False,
+        "write": False, "write_confirm": False, "char_delay": 0.025,
     }
 
 
