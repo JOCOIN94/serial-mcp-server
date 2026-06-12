@@ -52,4 +52,5 @@ AI가 임베디드 보드(ESP32/STM32 등)의 시리얼 텍스트 로그를 읽�
 - `README.md` — 설치·사용·환경변수.
 - `AGENTS.md` — 에이전트 공통 지침(이 파일). `CLAUDE.md`는 이 파일을 임포트하고 Claude Code 전용 사항만 추가한다.
 - `docs/plans/` — 구현 계획서(새 계획서는 여기에). `docs/superpowers/`는 과거 계획·설계서 아카이브 — 문서 머리의 superpowers 스킬 지시문은 폐기됐으므로 무시한다.
-- 배포측(플러그인 매니페스트 `plugin.json` + 안내 스킬 `SKILL.md`)은 별도 레포 `silotek-plugin-marketplace`의 `plugins/serial-mcp/`에 둔다. 이 레포에는 Python 코드만.
+- `docs/assets/` — 문서용 이미지·검증 산출물 등 정적 보조 자료가 필요할 때만 둔다.
+- 배포측(Claude/Codex 플러그인 매니페스트, `serial` 안내 스킬, Codex MCP 등록 스크립트)은 별도 레포 `silotek-plugin-marketplace`의 `plugins/serial-mcp/`에 둔다. 이 레포에는 serial-mcp Python 서버 코드를 넣지 않는다.

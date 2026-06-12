@@ -1,10 +1,11 @@
-# 구현 계획서: 시리얼 쓰기(명령 전송) + 보드 리셋 (Codex 인계용)
+# 완료된 구현 계획서: 시리얼 쓰기(명령 전송) + 보드 리셋 (Codex 인계용)
 
 > **이 문서는 자족적(self-contained) 맥락 캡슐이다.** 구현자는 대화 맥락 없이 이 문서와 레포만으로 작업을 완수할 수 있어야 한다. 설계 결정은 모두 확정됐다 — 구현 중 설계를 재협의하지 말고, §10 실패 기준에 해당하면 중단하고 사용자에게 보고하라.
+> 상태: 구현은 완료됐고, repo/마켓플레이스 명칭은 2026-06-11 v1 표준화 후 구조(`serial-mcp-server`, `silotek-plugin-marketplace`, `skills/serial`)로 갱신해 보존한다.
 
 ## 1. 목표
 
-읽기 전용인 silotek-serial-mcp에 **쓰기 도구 2종**을 추가한다:
+기존 조회 중심 서버였던 serial-mcp-server에 **쓰기 도구 2종**을 추가한다:
 
 1. `send_serial_command` — 보드에 텍스트 명령을 전송하고, 전송 직후 수신된 응답 로그까지 한 번에 회수한다.
 2. `reset_board` — DTR/RTS 펄스로 보드를 하드웨어 리셋하고, 부팅 로그를 회수한다. 블랙박스 루프의 "사람이 보드를 리셋해 주세요" 단계를 AI가 스스로 수행할 수 있게 된다.
@@ -14,7 +15,7 @@
 ## 2. 배경 (맥락 캡슐)
 
 - 이 레포는 임베디드 보드(ESP32-S3 등)의 시리얼 텍스트 로그를 AI(Claude Code 등)가 읽는 헤드리스 MCP 서버다(FastMCP + pyserial, stdio transport). 전체 명세는 `SPEC.md`, 공통 지침은 `AGENTS.md`.
-- 현재 SPEC §2는 "읽기 전용으로 구현한다. … 향후 해당 기능을 용이하게 추가할 수 있도록 구조를 확장 가능하게 설계한다"고 명시 — 이번 작업이 그 "향후 확장"이다. 구현 완료 시 SPEC을 포함한 문서들을 코드와 **같은 작업 단위로** 개정한다(§8 문서 델타 — AGENTS.md "문서–코드 일치 유지" 규칙의 (B) 유형).
+- 이 계획 작성 당시 SPEC §2는 "읽기 전용으로 구현한다. … 향후 해당 기능을 용이하게 추가할 수 있도록 구조를 확장 가능하게 설계한다"고 명시했다. 이번 작업이 그 "향후 확장"이며, 구현 완료 후 현재 SPEC/README/AGENTS는 쓰기 2종 승인 게이트 기준으로 갱신되어 있다.
 - **사용자 확정 결정(변경 불가):**
   1. 쓰기 **기본 켜짐 + 매 호출 사용자 승인**. env로 꺼야만 쓸 수 있는 옵트인 방식이 아니다. 승인은 서버측 elicitation이 1차 메커니즘.
   2. 범위는 명령 전송 + 보드 리셋 2종. (raw 바이트 모드, 서버측 승인 타임아웃 등은 이번 범위 밖.)
@@ -29,7 +30,7 @@
 - 이 PC의 `python`은 Windows Store 별칭이라 동작 안 함 — `py` 또는 `uv`만 사용.
 - 커밋: 한국어 + Conventional Commits 접두사. **main push = 곧 배포**(uvx가 git main에서 직접 실행)이므로, push는 전체 녹색 + 실장비 검증(§12) 후에만.
 
-## 4. 검증된 전제 (이미 소스에서 직접 확인된 사실)
+## 4. 구현 착수 당시 검증된 전제 (이미 소스에서 직접 확인된 사실)
 
 라인 번호는 커밋 `b52eb6c` 기준 참고 좌표다 — 구현 전 실제 파일을 읽고 시작하라.
 
@@ -48,7 +49,7 @@
 - `src/serial_mcp/ring_buffer.py`: 순수 로직 모듈(시리얼/MCP 의존 금지 원칙). `LogEntry(text, first_ts, last_ts, count)` — dedup 접힘 시 `last_ts` 갱신됨(95-96) → **타임스탬프 기반 응답 회수가 접힌 항목도 잡는다**. `LineBuffer`는 자체 `_lock` 보유. `snapshot()`은 시각을 문자열로 반환하므로 datetime 비교 불가 → 새 메서드 필요(§5.1).
 - `src/serial_mcp/viewer_feed.py`: `RawFeed.publish(ts, text)` — 논블로킹, drop-oldest.
 - `pyproject.toml`: version `0.1.0`, `mcp[cli]>=1.2.0`, dev=`pytest>=8.1.1`.
-- 배포측(별도 레포): `C:\Users\User\projects\silotek-tools\plugins\serial-mcp\.claude-plugin\plugin.json`(env 패스스루 11종, version 0.1.1), `...\skills\serial-debugging\SKILL.md`(8행 "서버는 읽기 전용", 12-15행 표준 루프).
+- 배포측(별도 레포, v1 표준화 후): `C:\Users\User\projects\silotek-plugin-marketplace\plugins\serial-mcp\.claude-plugin\plugin.json`, `.codex-plugin\plugin.json`, `scripts\install-codex.ps1`, `scripts\verify-codex.ps1`, `skills\serial\SKILL.md`.
 
 ## 5. 구현 설계
 
@@ -198,8 +199,8 @@ docstring 요구(자족적, 기존 스타일):
 | 3 | §5.3 설정 (기존 계약 테스트 2건 갱신 + parametrize 신규 → `_parse_flag`) | `feat: SERIAL_WRITE·SERIAL_WRITE_CONFIRM 설정` |
 | 4 | §5.4+§5.5 승인 게이트 + 도구 2개 (test_write_tools.py 15개 → 구현) | `feat: send_serial_command·reset_board 도구 — elicitation 승인 게이트` |
 | 5 | §8 문서 델타(서버 레포) + §5.6 버전 | `docs: 쓰기·리셋 반영 — SPEC·README·AGENTS 개정, 0.2.0` |
-| 6 | §8 silotek-tools 레포 동기 변경 | (해당 레포에서) `feat: serial-mcp 0.2.0 — 쓰기·리셋 env/스킬 동기화` |
-| 7 | 최종 검증 §12 → 통과 후 push(서버 레포 먼저, silotek-tools 다음) | — |
+| 6 | §8 silotek-plugin-marketplace 레포 동기 변경 | (해당 레포에서) `refactor: silotek 플러그인 마켓플레이스 v1 표준화` |
+| 7 | 최종 검증 §12 → 통과 후 push(서버 레포 먼저, silotek-plugin-marketplace 다음) | — |
 
 ## 7. 테스트 목록 (전문)
 
@@ -256,12 +257,14 @@ docstring 요구(자족적, 기존 스타일):
 | `server.py:1-12` | 모듈 docstring의 "6개의 읽기 전용 도구"·"현재 읽기 전용" 서술 개정 |
 | `pyproject.toml` | §5.6 |
 
-**silotek-tools 레포 (`C:\Users\User\projects\silotek-tools`):**
+**silotek-plugin-marketplace 레포 (`C:\Users\User\projects\silotek-plugin-marketplace`):**
 
 | 파일 | 변경 |
 |---|---|
-| `plugins/serial-mcp/.claude-plugin/plugin.json` | `env`에 `"SERIAL_WRITE": "${SERIAL_WRITE:-}"`, `"SERIAL_WRITE_CONFIRM": "${SERIAL_WRITE_CONFIRM:-}"` 추가(기존 11종 패턴 동일), `version` 0.1.1→0.2.0, description에 쓰기·리셋 한 줄 |
-| `plugins/serial-mcp/skills/serial-debugging/SKILL.md` | 8행 "서버는 **읽기 전용**" 개정. 표준 루프(12-15행) 2단계: "`reset_board(port=...)`로 AI가 직접 리셋(승인 팝업 — 사람이 수락) → 거부/미지원/0줄(native-USB)이면 사람에게 물리 리셋 요청(폴백)". `send_serial_command` 사용 판단(명령 문법은 펌웨어 몫), `status="declined"` 해석(재시도 금지·사람과 합의) 추가 |
+| `plugins/serial-mcp/.claude-plugin/plugin.json` | `env`에 `"SERIAL_WRITE": "${SERIAL_WRITE:-}"`, `"SERIAL_WRITE_CONFIRM": "${SERIAL_WRITE_CONFIRM:-}"` 추가, v1 표준화 후 `version` 1.0.0, description에 쓰기·리셋 한 줄 |
+| `plugins/serial-mcp/.codex-plugin/plugin.json` | Codex용 메타데이터를 `serial` 스킬과 쓰기·리셋 capability 기준으로 갱신 |
+| `plugins/serial-mcp/scripts/install-codex.ps1`, `verify-codex.ps1` | Codex top-level MCP 등록/검증 경로를 `git+https://github.com/JOCOIN94/serial-mcp-server` 기준으로 동기화 |
+| `plugins/serial-mcp/skills/serial/SKILL.md` | 8행 "서버는 **읽기 전용**" 개정. 표준 루프(12-15행) 2단계: "`reset_board(port=...)`로 AI가 직접 리셋(승인 팝업 — 사람이 수락) → 거부/미지원/0줄(native-USB)이면 사람에게 물리 리셋 요청(폴백)". `send_serial_command` 사용 판단(명령 문법은 펌웨어 몫), `status="declined"` 해석(재시도 금지·사람과 합의) 추가 |
 | `.claude-plugin/marketplace.json` | serial-mcp 항목에 버전 표기가 있으면 동기화(구현 시 확인) |
 
 ## 9. 완료 기준 (Definition of Done)
@@ -271,8 +274,8 @@ docstring 요구(자족적, 기존 스타일):
 - [ ] 기존 테스트 수정은 test_config.py 완전 일치 계약 2건뿐(§7-13). `_ingest` 시그니처·동작, 기존 도구 6종 시그니처·반환 불변.
 - [ ] stdout에 어떤 출력도 추가되지 않음(새 코드 전부 `_log` 또는 tee만).
 - [ ] §8 문서 델타 전부 반영(두 레포). 한 사실의 중복 서술(SPEC·README의 env 목록 등)은 함께 갱신됨.
-- [ ] pyproject 0.2.0 + mcp 플로어 상향, plugin.json 0.2.0.
-- [ ] 실장비 검증(§12) 통과 — **사람 개입 필요**: 사용자가 자리할 때 수행, 통과 후에만 push(서버 레포 → silotek-tools 순).
+- [ ] pyproject 0.2.0 + mcp 플로어 상향, 배포 plugin.json v1 표준화.
+- [ ] 실장비 검증(§12) 통과 — **사람 개입 필요**: 사용자가 자리할 때 수행, 통과 후에만 push(서버 레포 → silotek-plugin-marketplace 순).
 
 ## 10. 실패 기준 (해당 시 중단하고 사용자에게 보고 — 임의 우회 금지)
 
@@ -305,4 +308,4 @@ docstring 요구(자족적, 기존 스타일):
    b. `send_serial_command(command="HELP", port="SSM", wait_ms=1000)` 호출 → 승인 팝업 수락 → 명령 목록(`Command : RESET, REFLASHESP, ...`)이 `lines`로 회수되는지. 실장비 확인 결과 SSM 펌웨어는 `/help`가 아니라 대문자 `HELP`(슬래시 없음)를 명령 목록 출력 명령으로 처리한다. 이 항목은 단순 전송 성공이 아니라 SSM 펌웨어가 실제 명령을 처리하는지 확인하는 smoke test다.
    c. `send_serial_command` 거절 경로: 팝업에서 거절 → `status=="declined"` + 미전송 확인.
    d. 웹 뷰어/tee에 `[RST]`/`[TX]` 마커 표시 확인(`HELP` 송신은 `[TX] HELP`로 남아야 함).
-4. 통과 후 push: 서버 레포 main 먼저(uvx 배포원), 이어서 silotek-tools(플러그인 env·스킬). 마지막으로 `/code-review`(워크플로 4단계)를 사용자에게 권고.
+4. 통과 후 push: 서버 레포 main 먼저(uvx 배포원), 이어서 silotek-plugin-marketplace(플러그인 env·스킬·Codex 등록 스크립트). 마지막으로 `/code-review`(워크플로 4단계)를 사용자에게 권고.

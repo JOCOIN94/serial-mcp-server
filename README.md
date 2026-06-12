@@ -28,7 +28,20 @@ ESP32·STM32 등 시리얼로 텍스트 로그를 출력하는 임베디드 보�
 
 ### A. silotek 마켓플레이스 (권장)
 
-이미 silotek 마켓을 등록한 팀은 `/plugin install serial-mcp@silotek --scope user`로 **serial-mcp** 플러그인을 설치한다(장비를 다루는 인원만). user 레벨로 활성화하면 모든 코드베이스·세션에서 도구가 노출되고, **serial** 사용 안내 스킬도 함께 따라온다.
+이미 silotek 마켓을 등록한 팀은 **serial-mcp** 플러그인을 설치한다(장비를 다루는 인원만).
+
+Claude Code:
+
+```text
+/plugin install serial-mcp@silotek --scope user
+```
+
+Codex는 플러그인으로 `serial` 스킬을 설치한 뒤, 현재 구조상 MCP 도구를 top-level 설정에도 한 번 등록해야 한다. `silotek-plugin-marketplace` 저장소 루트에서:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\plugins\serial-mcp\scripts\install-codex.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\plugins\serial-mcp\scripts\verify-codex.ps1 -RequireDirectConfig
+```
 
 ### B. 직접 등록 (마켓 미경유)
 

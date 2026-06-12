@@ -92,14 +92,16 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
   - GitHub: `https://github.com/JOCOIN94/serial-mcp-server`
   - uv 프로젝트(`pyproject.toml`), 실행 엔트리포인트는 `serial-mcp`. 서버 코드를 다른 저장소에 포함하지 않는다.
 - 코드는 GitHub에 게시한다. 팀원은 uvx로 git에서 직접 실행하므로 클론·경로 지정이 불필요하며, 갱신은 git push로 반영된다.
-- 배포는 `silotek` 플러그인 마켓플레이스 채널을 사용한다. `silotek-plugin-marketplace` 저장소(`C:\Users\User\projects\silotek-plugin-marketplace\`, GitHub `JOCOIN94/silotek-plugin-marketplace`)에 매니페스트와 스킬 문서만 포함하는 플러그인을 둔다.
+- 배포는 `silotek` 플러그인 마켓플레이스 채널을 사용한다. `silotek-plugin-marketplace` 저장소(`C:\Users\User\projects\silotek-plugin-marketplace\`, GitHub `JOCOIN94/silotek-plugin-marketplace`)는 v1 구조로 `plugins/research-log/`와 `plugins/serial-mcp/`를 분리한다.
+- `plugins/serial-mcp/`에는 Python 서버 코드 없이 배포 메타데이터, 안내 스킬, Codex 등록 스크립트만 둔다.
     - `plugins/serial-mcp/.claude-plugin/plugin.json` : `mcpServers`에 다음을 정의한다.
         - `command`: `uvx`
         - `args`: `--from git+https://github.com/JOCOIN94/serial-mcp-server serial-mcp`
         - `env`: `SERIAL_PORT`을 `${SERIAL_PORT:-}`로 참조(빈 기본값 폴백 — 미설정 시 빈 문자열로 치환되고 서버가 기본값 처리). `SERIAL_BAUD`, `SERIAL_TEE`, `SERIAL_EXCLUDE`, `SERIAL_INCLUDE`, `SERIAL_WRITE`, `SERIAL_WRITE_CONFIRM` 등도 동일한 `${VAR:-}` 패스스루로 노출(미지정 시 서버 기본값, 보드레이트 115200, 쓰기 승인 기본 켜짐).
+    - `plugins/serial-mcp/.codex-plugin/plugin.json` : Codex용 플러그인 메타데이터와 `skills: "./skills/"`를 정의한다. Codex는 현재 플러그인 내부 MCP 선언을 도구로 안정 주입하지 못할 수 있으므로, `scripts/install-codex.ps1`가 `codex mcp add`로 top-level MCP 등록을 수행하고 `scripts/verify-codex.ps1`가 읽기 전용으로 확인한다.
     - `plugins/serial-mcp/skills/serial/SKILL.md` : §9의 스킬을 동일 플러그인에 동봉한다.
     - 루트 `.claude-plugin/marketplace.json`에 serial-mcp 플러그인 항목을 추가한다.
-- silotek-plugin-marketplace 저장소에는 Python 코드를 포함하지 않으며, 매니페스트(JSON)와 스킬(마크다운)만 포함한다. 실제 서버 코드는 외부 저장소에서 uvx가 가져온다. marketplace 저장소는 Node 기반 research-log 플러그인도 포함하므로, serial-mcp 서버 런타임과 언어·도메인을 혼재시키지 않는다(스킬은 마크다운이라 언어중립).
+- silotek-plugin-marketplace 저장소의 serial-mcp 플러그인에는 Python 코드를 포함하지 않는다. 실제 서버 코드는 외부 저장소에서 uvx가 가져온다. marketplace 저장소는 Node 기반 research-log 플러그인도 포함하므로, serial-mcp 서버 런타임과 언어·도메인을 혼재시키지 않는다(스킬은 마크다운이라 언어중립).
 
 **6.1 버전 동기화 규칙 (B안 운영 부채 관리)**
 - 도구 이름·시그니처는 "안정 계약"으로 취급한다. 변경 시 같은 폴더의 스킬(`SKILL.md`)도 동일 PR에서 함께 수정한다.
@@ -107,8 +109,8 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 
 ## 7. 등록 및 사용 (플러그인 방식)
 
-- 팀원은 `/plugin`에서 serial-mcp 플러그인을 설치하며(장비를 다루는 인원에 한함), user 레벨로 활성화하면 모든 코드베이스·세션에서 도구가 노출된다.
-- 플러그인 설치 한 번으로 MCP 도구와 스킬이 함께 설치·활성화된다. 도구가 없는 세션에 스킬만 노출되어 존재하지 않는 도구를 참조하는 "유령 참조"가 발생하지 않는다(생명주기 동기화).
+- Claude Code 팀원은 `/plugin install serial-mcp@silotek --scope user`로 serial-mcp 플러그인을 설치하며(장비를 다루는 인원에 한함), user 레벨로 활성화하면 모든 코드베이스·세션에서 MCP 도구와 `serial` 스킬이 노출된다.
+- Codex 팀원은 플러그인으로 `serial` 스킬을 설치한 뒤 `plugins/serial-mcp/scripts/install-codex.ps1`로 top-level MCP 등록을 수행한다. 확인은 `scripts/verify-codex.ps1 -RequireDirectConfig`로 한다. 이는 Codex의 플러그인 내부 MCP 주입이 불안정한 동안 필요한 보조 경로다.
 - 개인별로 상이한 값(포트, 보드레이트, tee 경로)은 plugin.json에 하드코딩하지 않고 `${SERIAL_PORT:-}` 등 환경변수 참조(빈 기본값 폴백)로 처리한다.
 - 대안(마켓 미경유):
     ```
@@ -118,8 +120,8 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 
 ## 8. README 요구사항 (팀 공유, macOS/Windows 혼용)
 
-- 마켓에서 serial-mcp 설치 방법(및 대안 `claude mcp add --scope user`).
-- 플러그인 설치 시 MCP 도구와 함께 스킬이 따라오며, `claude mcp add` 대안 경로엔 스킬이 빠진다는 주의.
+- 마켓에서 serial-mcp 설치 방법(Claude Code `/plugin install serial-mcp@silotek --scope user`, Codex 플러그인 + `scripts/install-codex.ps1` 보조 등록) 및 대안 `claude mcp add --scope user`.
+- Claude Code 플러그인 설치 시 MCP 도구와 스킬이 함께 따라오며, Codex는 `serial` 스킬과 top-level MCP 등록 스크립트를 함께 사용한다는 주의. `claude mcp add` 대안 경로엔 스킬이 빠진다.
 - macOS/Windows 각각 환경변수 설정법(macOS `export`, Windows `setx`), 포트 확인법(`list_serial_ports` 또는 macOS `ls /dev/cu.*`, Windows 장치 관리자).
 - uv·uvx 설치와 PATH(특히 Windows), COM10 이상도 `COM10` 그대로(pyserial이 `\\.\` 접두를 자동 처리), private 레포면 git 인증 필요.
 
@@ -155,7 +157,7 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 
 ---
 
-### 부록: 구현 상태 (2026-06-10)
+### 부록: 구현 상태
 - 코어 서버 스캐폴딩 완료: `ring_buffer.py`(순수 로직), `server.py`(FastMCP + 리더 스레드 + 6개 도구), `pyproject.toml`, README.
 - 단위 테스트 완료(2026-06-10): pytest 56개 — `ring_buffer`(dedup·필터·ring·query·동시성, 21) + 도구 6종 계약(11) + 리더 라인처리·tee(6) + 설정 로딩(16) + 스모크(2). 코드 리뷰 보강 4개 포함(tee×필터/dedup 상호작용, query 원문 검색, status 미연결 분기). 테스트 가능성 확보를 위해 `SerialReader._ingest()`(I/O 루프에서 라인처리 분리)와 `_load_config()`/`_env_int(env,…)`(환경변수 계약)를 **동작 보존** 추출. 계획서: `docs/superpowers/plans/2026-06-09-serial-mcp-test-suite.md`.
 - 실장비 검증 완료(2026-06-10): MCP stdio 클라이언트로 서버를 스폰해 6개 도구 전부 엔드투엔드 확인. 블랙박스 루프 검증 — `clear_log_buffer` → 사람이 리셋 → 부트 ROM 배너(`ESP-ROM:esp32s3-20210327`, `rst:0x1 (POWERON)`, `entry 0x403c88b8`)부터 부팅 시퀀스 전체 회수, `query_serial_logs`로 부팅 마커 17줄 매칭. 부팅 버스트(2초에 50줄+) 손실 없음, stdout 오염 없음.
@@ -163,7 +165,8 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - 웹 로그 뷰어 구현(2026-06-10, §10): RawFeed 허브 + ViewerServer(stdlib HTTP/SSE) + 단일 페이지. 도구 응답 viewer_url 포함.
 - 다중 포트 자동 모니터링 구현(2026-06-10): USB 자동 스캔·PortMonitor×N·별칭(SERIAL_NAMES)·도구 port 라우팅·뷰어 포트 셀렉터·dedup 룩백(기본 5). 설계: `docs/superpowers/specs/2026-06-10-multi-port-design.md`.
 - 보드 자동 식별 구현(2026-06-10): `SERIAL_AUTONAME`(`이름=정규식;…`, 세미콜론 구분, 순서=우선순위)으로 이름 없는 포트의 수신 줄을 대조해 첫 매칭에서 1회 확정(§3). `SERIAL_NAMES` 우선·중복 이름 미부여·잘못된 정규식은 무시(서버 생존). 설계: `docs/superpowers/specs/2026-06-10-multi-port-design.md` §11.
-- 배포 완료(2026-06-10): GitHub 공개 push(`JOCOIN94/serial-mcp-server`, uvx 원격 실행 검증), silotek 마켓에 serial-mcp 플러그인 등록(plugin.json — env 10종 패스스루, SKILL.md — 베이스라인 대조 검증 거침, 0.1.0). **§부록 미완 항목 전부 해소** — 이후 변경은 main push가 곧 배포.
+- 초기 배포 완료(2026-06-10): GitHub 공개 push(`JOCOIN94/serial-mcp-server`, uvx 원격 실행 검증), silotek 마켓에 serial-mcp 플러그인 등록(초기 플러그인 0.1.0, plugin.json env 10종 패스스루, SKILL.md 베이스라인 대조 검증 거침). **§부록 미완 항목 전부 해소** — 이후 서버 변경은 main push가 곧 uvx 배포.
 - 핫플러그 구현(2026-06-11): 자동 스캔 모드에서 `SERIAL_HOTPLUG` 간격(기본 5초)으로 comports() 재스캔, 신규 USB 포트를 런타임 모니터 추가. `_monitors`는 copy-on-write로 원자 교체(리더 스레드 순회와 무충돌). 모니터 조립 규칙은 `_make_monitor()`로 추출해 기동·핫플러그가 공유. 뷰어도 동조: 상태 폴링(5초)이 신규 포트를 셀렉터에 추가하고, 포트 0개 기동 후 첫 보드에 스트림 자동 연결(코드리뷰 반영). 계획서: `docs/superpowers/plans/2026-06-11-serial-hotplug.md`.
 - 쓰기·리셋 구현(2026-06-11): `send_serial_command`·`reset_board` 추가, 기본 매 호출 elicitation 승인 게이트, `SERIAL_WRITE`/`SERIAL_WRITE_CONFIRM` 설정, `[TX]`/`[RST]` 감사 마커, `LineBuffer.entries_since()` 기반 응답 회수(dedup 접힘 포함). 단위 테스트 186개 통과. 실장비 검증에서 reset/승인 팝업과 SSM `HELP` 명령 smoke test(명령 목록 출력)를 확인 중이며, `/help`는 에코만 되고 명령 목록을 출력하지 않는 것으로 관찰됨. 계획서: `docs/plans/2026-06-11-serial-write-reset.md`.
+- 배포 메타데이터 v1 표준화(2026-06-11): 서버 패키지/레포명은 `serial-mcp-server` 0.2.0, 실행 엔트리포인트는 `serial-mcp`로 정리. 배포 레포는 `silotek-plugin-marketplace`, marketplace ID는 `silotek`, serial-mcp 플러그인 버전은 1.0.0, 스킬 경로는 `plugins/serial-mcp/skills/serial/SKILL.md`로 표준화. Codex용 `.codex-plugin/plugin.json`과 `scripts/install-codex.ps1`/`verify-codex.ps1`를 포함한다.
 - 테스트 장비: ESP32-S3(SSM 펌웨어), COM4(CH343), 115200.
