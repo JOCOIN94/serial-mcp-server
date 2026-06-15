@@ -203,6 +203,19 @@ def test_scan_releases_zombie_after_two_absent_scans(monkeypatch, scan_env):
     assert scan_env.reader.connected is False
 
 
+def test_scan_skips_released_port_for_zombie_handling(monkeypatch, scan_env):
+    """사용자가 release 한 포트는 의도적 양보라 좀비 해제/부재 카운팅 대상이 아니다."""
+    scan_env.reader.connected = True
+    scan_env.released.set()
+    monkeypatch.setattr(srv.list_ports, "comports", lambda: [])
+
+    srv._hotplug_scan_once()
+    srv._hotplug_scan_once()
+
+    assert scan_env.absent_scans == 0
+    assert scan_env.reader.force_disconnect_calls == []
+
+
 def test_scan_zombie_counter_resets_on_reappearance(monkeypatch, scan_env):
     """한 번 사라졌다 다시 보이면 부재 카운터가 리셋된다(플래핑 방지)."""
     scan_env.reader.connected = True
@@ -247,6 +260,28 @@ def test_reader_force_disconnect_closes_handle_and_marks_state():
     assert r._ser is None
     assert r.connected is False
     assert "열거 목록에서 사라짐" in r.last_error
+
+
+def test_reader_run_skips_open_while_reconnect_paused(monkeypatch):
+    """release 플래그가 켜져 있으면 리더 재시도 루프는 포트를 다시 열지 않는다."""
+    from serial_mcp.ring_buffer import LineBuffer
+
+    released = threading.Event()
+    released.set()
+    r = srv.SerialReader(
+        port="COMZ",
+        baud=115200,
+        buffer=LineBuffer(maxlen=10),
+        reconnect_paused=released,
+    )
+    opened = []
+
+    monkeypatch.setattr(r, "_open", lambda: opened.append(1) or False)
+    monkeypatch.setattr(r, "_wait_retry", lambda: r._stop.set())
+
+    r._run()
+
+    assert opened == []
 
 
 # ---- _hotplug_loop (주기 호출·예외 생존) ----

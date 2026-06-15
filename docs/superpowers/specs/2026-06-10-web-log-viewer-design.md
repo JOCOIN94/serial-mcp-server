@@ -55,11 +55,12 @@ RawFeed 허브. 시리얼 I/O·HTTP 의존성 없음(`ring_buffer.py`와 같은 
 
 - 바인딩: `127.0.0.1` 고정. 포트: 설정값(기본 8743) → `OSError`(점유) 시 포트 0(임시)으로 재시도 → 그래도 실패하면 뷰어 비활성(서버는 계속 동작).
 - `url` 속성: `http://127.0.0.1:{실제포트}` 또는 `None`(비활성/실패).
-- 라우트(전부 GET, 읽기 전용 — 서버 상태를 바꾸는 엔드포인트 없음):
+- 라우트(조회는 GET 읽기 전용. 2026-06-15 층2 소유권 백엔드에서 `GET /api/release`가 명시적 상태 변경 예외로 추가됨):
   - `GET /` — 단일 HTML 페이지(CSS/JS 인라인 문자열, 외부 CDN 없음 → 오프라인 동작, 패키징 추가 설정 불필요)
   - `GET /api/stream` — SSE. RawFeed 구독, 이벤트 `data: {"ts":"HH:MM:SS.mmm","text":"..."}` 1줄당 1이벤트. 15초마다 하트비트 코멘트(`: ping`). 클라이언트 끊김 감지 시 구독 해지.
   - `GET /api/buffer` — `{"status":"ok","entries":[snapshot()...],"capacity":N,"total_received":N,"total_stored":N,"dedup":bool}`
-  - `GET /api/status` — `{"connected":bool,"port":str,"baud":int,"last_error":str|null}` (헤더 표시용)
+  - `GET /api/status` — `{"session":str|null,"ports":[{"port":str,"label":str,"connected":bool,"baud":int,"last_error":str|null,"hw":str|null,"board":str|null,"released":bool,...}]}` (헤더·소유권 보드 표시용)
+  - `GET /api/release?port=COM4` — 해당 포트 핸들을 닫고 재연결을 억제한다. 같은 MCP 세션이 해당 포트를 다시 도구로 호출하면 자동 재점유한다.
 - `log_message` 오버라이드 → `_log`(stderr)로 우회. **stdout 금지 유지**.
 
 ### 4.4 `server.py` 변경 (기존 파일)
@@ -111,8 +112,8 @@ RawFeed 허브. 시리얼 I/O·HTTP 의존성 없음(`ring_buffer.py`와 같은 
 
 ## 9. 비범위 (YAGNI)
 
-- 쓰기/명령 전송(서버 전체가 읽기 전용 — 기존 SPEC §2 유지)
+- 쓰기/명령 전송 UI(시리얼 TX). 웹 뷰어의 상태 변경은 소유권 `release`만 예외로 허용한다.
 - 인증·외부 접속(127.0.0.1 한정)
 - 서버측 검색·필터 UI(브라우저 Ctrl+F + AI의 query_serial_logs로 충분)
-- 다중 장비/포트 동시 뷰
+- 여러 포트를 한 화면에 나란히 펼치는 동시 뷰. 포트 전환·소유권 보드·다중 포트 상태 표시는 2026-06-15 층1/층2에서 범위를 초과해 구현됐다.
 - 로그 다운로드 버튼(tee 파일이 그 역할)
