@@ -47,7 +47,8 @@ def test_root_serves_html(viewer):
         assert r.status == 200
         body = r.read().decode("utf-8")
     assert "serial-mcp" in body
-    assert "psel" in body            # 포트 셀렉터 존재
+    assert "portboard" in body       # 좌측 포트 보드(board.js 렌더 타깃)
+    assert "tabStream" in body       # 스트림/버퍼 탭 셸
 
 
 def test_api_ports_lists_monitors(viewer):
