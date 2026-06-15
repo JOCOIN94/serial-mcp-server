@@ -1,4 +1,4 @@
-"""MCP 도구 6종 계약 테스트(다중 포트, SPEC §5 개정).
+"""MCP 도구 계약 테스트(다중 포트, SPEC §5 개정).
 
 도구는 모듈 전역 _monitors(dict[str, PortMonitor])를 읽는다 → monkeypatch 주입.
 @mcp.tool()은 원본 함수를 반환하므로 직접 호출.
@@ -106,6 +106,66 @@ def test_status_with_port_returns_single(dual):
 def test_status_includes_viewer_url(monkeypatch, single):
     monkeypatch.setattr(srv, "_viewer", SimpleNamespace(url="http://127.0.0.1:8743"))
     assert srv.get_serial_status()["viewer_url"] == "http://127.0.0.1:8743"
+
+
+def test_viewer_status_includes_session_hw_board_and_released(monkeypatch, dual):
+    a, b = dual
+    a.name = "SB-STM"
+    b.released.set()
+    monkeypatch.setattr(srv, "_session_label", "claude-code", raising=False)
+
+    out = srv._viewer_status_info()
+
+    assert out["session"] == "claude-code"
+    assert out["ports"][0]["hw"] == "SB"
+    assert out["ports"][0]["board"] == "STM"
+    assert out["ports"][0]["released"] is False
+    assert out["ports"][1]["released"] is True
+
+
+def test_session_label_captured_from_first_tool_context(monkeypatch, single):
+    def ctx(name):
+        return SimpleNamespace(
+            session=SimpleNamespace(
+                client_params=SimpleNamespace(
+                    clientInfo=SimpleNamespace(name=name),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(srv, "_session_label", None, raising=False)
+
+    srv.get_serial_status(ctx=ctx("claude-code"))
+    srv.get_serial_status(ctx=ctx("codex"))
+
+    assert srv._viewer_status_info()["session"] == "claude-code"
+
+
+def test_viewer_release_port_sets_flag_and_disconnects(monkeypatch, single):
+    calls = []
+
+    def force_disconnect(reason):
+        calls.append(reason)
+
+    single.reader.force_disconnect = force_disconnect
+
+    out = srv._viewer_release_port("COM_A")
+
+    assert out == {"status": "ok", "port": "COM_A", "released": True}
+    assert single.released.is_set()
+    assert "release" in calls[0]
+
+
+def test_resolve_reclaims_released_port_on_explicit_tool_call(single):
+    calls = []
+    single.released.set()
+    single.reader.resume_reconnect = lambda: calls.append("resume")
+
+    out = srv.get_recent_logs(port="COM_A")
+
+    assert out["status"] == "ok"
+    assert not single.released.is_set()
+    assert calls == ["resume"]
 
 
 # ---- get_recent_logs / query_serial_logs / get_log_buffer_info ----

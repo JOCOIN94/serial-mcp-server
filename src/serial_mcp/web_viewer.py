@@ -4,7 +4,7 @@
 2026-06-10-web-log-viewer-design.md. MCP 서버 본체와 독립 — 기동 실패해도
 본체에 영향을 주지 않는다(url이 None으로 남을 뿐).
 
-- 라우트는 전부 GET 읽기 전용. 서버 상태를 바꾸는 엔드포인트는 없다.
+- 조회 라우트는 GET 읽기 전용. 소유권 제어 `/api/release`만 명시적 상태 변경 예외다.
 - stdout 금지: 접근 로그는 stderr로만 낸다(log_message 오버라이드).
 - 실시간 스트림은 SSE 수동 구현 — RawFeed 구독.
 - server.py 전역에 직접 의존하지 않고 필요한 데이터를 콜러블로 주입받는다
@@ -38,6 +38,7 @@ class _ViewerHTTPServer(ThreadingHTTPServer):
     feed_for: Callable[[str], Optional[RawFeed]]
     buffer_info: Callable[[str], dict]
     status_info: Callable[[], dict]
+    release_port: Callable[[str], dict]
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -65,12 +66,15 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(self.server.buffer_info(port))
         elif path == "/api/status":
             self._send_json(self.server.status_info())
+        elif path == "/api/release":
+            out = self.server.release_port(port)
+            self._send_json(out, status=404 if out.get("status") == "error" else 200)
         else:
             self.send_error(404)
 
-    def _send_json(self, obj: dict) -> None:
+    def _send_json(self, obj: dict, status: int = 200) -> None:
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -120,12 +124,16 @@ class ViewerServer:
         feed_for: Callable[[str], Optional[RawFeed]],
         buffer_info: Callable[[str], dict],
         status_info: Callable[[], dict],
+        release_port: Optional[Callable[[str], dict]] = None,
         port: int = 8743,
     ) -> None:
         self._ports_info = ports_info
         self._feed_for = feed_for
         self._buffer_info = buffer_info
         self._status_info = status_info
+        self._release_port = release_port or (
+            lambda _port: {"status": "error", "message": "unknown port"}
+        )
         self._preferred_port = port
         self._httpd: Optional[_ViewerHTTPServer] = None
         self.url: Optional[str] = None   # 기동 성공 시 http://127.0.0.1:{port}, 실패 시 None
@@ -144,6 +152,7 @@ class ViewerServer:
         self._httpd.feed_for = self._feed_for
         self._httpd.buffer_info = self._buffer_info
         self._httpd.status_info = self._status_info
+        self._httpd.release_port = self._release_port
         self.url = f"http://127.0.0.1:{self._httpd.server_address[1]}"
         threading.Thread(
             target=self._httpd.serve_forever, name="serial-web", daemon=True
@@ -158,7 +167,7 @@ class ViewerServer:
 # ---- 단일 페이지(인라인 CSS/JS, 외부 CDN 없음 → 오프라인 동작) ----
 # Claude Design 핸드오프(claude.ai/design) 기반 — app.css + Serial Viewer.html 마크업 +
 # board.js + app.js 를 단일 인라인으로 통합. mock.js·React tweaks 패널 제외, tweaks 기본값 baked-in.
-# 좌측 소유권 보드(세션/hw/board/release)는 백엔드 미지원분 degraded — TODO(codex) 표시.
+# 좌측 소유권 보드(세션/hw/board/release)는 /api/status + /api/release 백엔드 계약을 사용한다.
 # 컬러 원칙: "색은 장식이 아니라 신호" — 평상시 회색 2~3톤, 이상 상황만 채도.
 # 우선순위: ANSI 해석 > 레벨 라인 틴트 > 성공 키워드 > JSON 절제 > 메타 dim.
 _HTML = r"""<!DOCTYPE html>
@@ -527,7 +536,9 @@ kbd {
         padding: 5px 7px; border-radius: 4px; cursor: pointer; }
 .prow:hover { background: var(--bg-hover); }
 .prow.active { background: var(--accent-bg); }
+.prow.released { opacity: .55; }
 .prow .dot { width: 9px; height: 9px; animation: none; }
+.prow.released .dot { background: var(--muted); box-shadow: none; }
 .pb-board { font: 13px var(--mono); color: var(--fg-bright);
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .prow.active .pb-board { color: var(--accent); font-weight: 600; }
@@ -709,7 +720,7 @@ body.rhythm-relaxed { --row-pad: 6px; --lh: 1.9; }
 
   function sig(ports, session, active) {
     return active + "|" + (session || "") + "|" + ports.map(p =>
-      [p.port, p.hw, p.board, p.label, p.connected, p.baud, p.last_error].join(",")
+      [p.port, p.hw, p.board, p.label, p.connected, p.released, p.baud, p.last_error].join(",")
     ).join(";");
   }
 
@@ -719,10 +730,9 @@ body.rhythm-relaxed { --row-pad: 6px; --lh: 1.9; }
     return m ? m[0] : (name || "");
   }
 
-  // 백엔드가 hw/board 를 안 주는 동안, label(별칭)에서 유닛/칩을 역추론한다.
+  // hw/board 미제공 또는 구버전 응답일 때 label(별칭)에서 유닛/칩을 역추론한다.
   //   "SB-STM (COM8)" → 유닛 "SB"·칩 "STM",  "SSM (COM4)" → 유닛 "SSM"·칩 없음,
   //   "COM8"(별칭 미부여) → null(미분류). 별칭은 서버 autoname/SERIAL_NAMES 산출.
-  // TODO(codex): /api/status 가 hw/board 를 정식 제공하면 p.hw/p.board 가 우선이라 이 추론은 자동으로 덮인다.
   function aliasOf(p) {
     const m = String(p.label || "").match(/^(.+?)\s*\(/);   // 괄호 앞 = 별칭, 괄호 없으면 미부여
     return m ? m[1].trim() : null;
@@ -744,9 +754,9 @@ body.rhythm-relaxed { --row-pad: 6px; --lh: 1.9; }
 
   // 포트 한 행:  ● dot   board   COM
   function buildRow(p, active, onSelect) {
-    const row = el("div", "prow" + (p.port === active ? " active" : ""));
-    row.title = "클릭 — 이 포트 로그 보기";
-    row.appendChild(el("span", "dot " + (p.connected ? "on" : "fail")));
+    const row = el("div", "prow" + (p.port === active ? " active" : "") + (p.released ? " released" : ""));
+    row.title = p.released ? "release 상태 — MCP 도구 호출 시 재점유" : "클릭 — 이 포트 로그 보기";
+    row.appendChild(el("span", "dot " + (p.released ? "" : (p.connected ? "on" : "fail"))));
     row.appendChild(txt("span", chipFamily(boardOf(p) || p.port), "pb-board"));
     row.appendChild(txt("span", p.port, "pb-com"));
     row.onclick = () => onSelect(p.port);
@@ -776,15 +786,13 @@ body.rhythm-relaxed { --row-pad: 6px; --lh: 1.9; }
     const card = el("div", "sess-card");
     const head = el("div", "sess-head");
     if (!session) {                       // 백엔드 session 미제공(degraded) — 미점유로 단정하지 않는다
-      // TODO(codex): /api/status 최상위 session 제공 시 owned(벤더 글리프+해제)/free(미점유) 분기 복원.
-      //   코랄 Claude 글리프(spark-claude)는 실제 session 에 'claude'가 있을 때만 — degraded 에선 중립 placeholder.
       card.classList.add("free");
       head.innerHTML = '<span class="vmark free">' + HEX + "</span>";
       head.appendChild(txt("span", "세션 대기 중", "sess-name"));
       const btn = el("button", "btn release");
       btn.textContent = "해제";
-      btn.disabled = true;                // 백엔드 소유권(session/release) 연결 전 — 비활성
-      btn.title = "백엔드 소유권 연결 전 — 비활성";
+      btn.disabled = true;
+      btn.title = "MCP clientInfo 캡처 전 — 비활성";
       head.appendChild(btn);
       card.appendChild(head);
       return card;
@@ -833,7 +841,8 @@ body.rhythm-relaxed { --row-pad: 6px; --lh: 1.9; }
 })();
 
 /* app.js — serial-mcp 로그 뷰어 클라이언트.
-   읽기 전용: /api/stream(SSE) · /api/buffer · /api/status · /api/ports. */
+   조회: /api/stream(SSE) · /api/buffer · /api/status · /api/ports.
+   소유권 제어 예외: /api/release. */
 "use strict";
 
 const $ = id => document.getElementById(id);
@@ -1181,7 +1190,6 @@ function selectPort(port) {
   refreshBuffer();
 }
 async function releaseSession(ports, session) {
-  // TODO(codex): /api/release?port= 는 백엔드 미구현(404). 세션 카드가 session 있을 때만 그려져 평소 미호출.
   if (!confirm((session || "이 세션") + "\n이 AI 세션의 포트 점유를 해제할까요?\n(" + ports.join(", ") + ")")) return;
   for (const p of ports) { try { await fetch("/api/release?port=" + encodeURIComponent(p)); } catch (e) {} }
   resetPortBoardSig();

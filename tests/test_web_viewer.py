@@ -17,22 +17,33 @@ BASE = datetime(2026, 6, 9, 14, 0, 0, 0)
 @pytest.fixture
 def viewer():
     feeds = {"COM_A": RawFeed(), "COM_B": RawFeed()}
+    release_calls = []
+
+    def release_port(port):
+        release_calls.append(port)
+        if port == "COM_A":
+            return {"status": "ok", "port": port, "released": True}
+        return {"status": "error", "message": "unknown port"}
+
     v = ViewerServer(
         ports_info=lambda: [{"port": "COM_A", "label": "SSM (COM_A)"},
                             {"port": "COM_B", "label": "COM_B"}],
         feed_for=lambda p: feeds.get(p),
         buffer_info=lambda p: {"status": "ok", "port": p, "entries": [], "capacity": 2000},
-        status_info=lambda: {"ports": [
+        status_info=lambda: {"session": "codex", "ports": [
             {"port": "COM_A", "label": "SSM (COM_A)", "connected": True, "baud": 115200,
-             "last_error": None, "buffer_entries": 3, "buffer_capacity": 2000},
+             "last_error": None, "buffer_entries": 3, "buffer_capacity": 2000,
+             "hw": "SSM", "board": None, "released": False},
             {"port": "COM_B", "label": "COM_B", "connected": False, "baud": 115200,
-             "last_error": "busy", "buffer_entries": 0, "buffer_capacity": 2000},
+             "last_error": "busy", "buffer_entries": 0, "buffer_capacity": 2000,
+             "hw": None, "board": None, "released": True},
         ]},
+        release_port=release_port,
         port=0,   # 테스트는 임시 포트
     )
     v.start()
     assert v.url is not None
-    yield v, feeds
+    yield v, feeds, release_calls
     v.stop()
 
 
@@ -42,7 +53,7 @@ def _get_json(url):
 
 
 def test_root_serves_html(viewer):
-    v, _ = viewer
+    v, _, _ = viewer
     with urllib.request.urlopen(v.url + "/", timeout=5) as r:
         assert r.status == 200
         body = r.read().decode("utf-8")
@@ -52,25 +63,45 @@ def test_root_serves_html(viewer):
 
 
 def test_api_ports_lists_monitors(viewer):
-    v, _ = viewer
+    v, _, _ = viewer
     d = _get_json(v.url + "/api/ports")
     assert [p["label"] for p in d["ports"]] == ["SSM (COM_A)", "COM_B"]
 
 
 def test_api_status_returns_port_array(viewer):
-    v, _ = viewer
+    v, _, _ = viewer
     d = _get_json(v.url + "/api/status")
+    assert d["session"] == "codex"
     assert d["ports"][0]["connected"] is True
+    assert d["ports"][0]["hw"] == "SSM"
+    assert d["ports"][0]["board"] is None
+    assert d["ports"][0]["released"] is False
     assert d["ports"][1]["last_error"] == "busy"
+    assert d["ports"][1]["released"] is True
 
 
 def test_api_buffer_routes_by_port(viewer):
-    v, _ = viewer
+    v, _, _ = viewer
     assert _get_json(v.url + "/api/buffer?port=COM_B")["port"] == "COM_B"
 
 
+def test_api_release_routes_to_backend_callback(viewer):
+    v, _, release_calls = viewer
+    d = _get_json(v.url + "/api/release?port=COM_A")
+    assert d == {"status": "ok", "port": "COM_A", "released": True}
+    assert release_calls == ["COM_A"]
+
+
+def test_api_release_unknown_port_returns_404(viewer):
+    v, _, release_calls = viewer
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(v.url + "/api/release?port=COM_X", timeout=5)
+    assert exc.value.code == 404
+    assert release_calls == ["COM_X"]
+
+
 def test_stream_sse_isolated_per_port(viewer):
-    v, feeds = viewer
+    v, feeds, _ = viewer
     resp = urllib.request.urlopen(v.url + "/api/stream?port=COM_A", timeout=5)
     try:
         assert "text/event-stream" in resp.headers["Content-Type"]
@@ -84,14 +115,14 @@ def test_stream_sse_isolated_per_port(viewer):
 
 
 def test_stream_unknown_port_404(viewer):
-    v, _ = viewer
+    v, _, _ = viewer
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(v.url + "/api/stream?port=NOPE", timeout=5)
     assert exc.value.code == 404
 
 
 def test_unknown_path_returns_404(viewer):
-    v, _ = viewer
+    v, _, _ = viewer
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(v.url + "/nope", timeout=5)
     assert exc.value.code == 404
