@@ -4,7 +4,6 @@
 """
 
 import io
-import threading
 from datetime import datetime
 
 import pytest
@@ -274,27 +273,3 @@ def test_open_sets_write_timeout(monkeypatch):
         "timeout": 1,
         "write_timeout": 2,
     }
-
-
-def test_open_closes_new_handle_if_release_wins_race(monkeypatch):
-    released = threading.Event()
-    opened = []
-
-    class OpenSerial(FakeSerial):
-        def __init__(self, port, baud, timeout, write_timeout):
-            super().__init__()
-            opened.append(self)
-            released.set()
-
-    monkeypatch.setattr(srv.serial, "Serial", OpenSerial)
-    r = SerialReader(
-        port="COM_TEST",
-        baud=115200,
-        buffer=LineBuffer(),
-        reconnect_paused=released,
-    )
-
-    assert r._open() is False
-    assert opened[0].closed is True
-    assert r._ser is None
-    assert r.connected is False

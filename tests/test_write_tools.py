@@ -74,32 +74,6 @@ class RecordingReader:
         self.pulses += 1
 
 
-class ReconnectOnWaitReader(RecordingReader):
-    def __init__(self) -> None:
-        super().__init__()
-        self.connected = False
-        self.resume_calls = 0
-        self.wait_calls = []
-
-    def resume_reconnect(self) -> None:
-        self.resume_calls += 1
-
-    def wait_until_connected(self, timeout_s: float) -> bool:
-        self.wait_calls.append(timeout_s)
-        self.connected = True
-        return True
-
-    def write(self, data: bytes, audit: str | None = None) -> int:
-        if not self.connected:
-            raise srv.serial.SerialException("not connected")
-        return super().write(data, audit)
-
-    def pulse_reset(self) -> None:
-        if not self.connected:
-            raise srv.serial.SerialException("not connected")
-        super().pulse_reset()
-
-
 def make_monitor(port="COM_A", name="SSM", reader=None) -> srv.PortMonitor:
     return srv.PortMonitor(
         port=port,
@@ -250,22 +224,6 @@ def test_send_routes_by_port_and_errors_on_ambiguous(monkeypatch, dual):
     assert b.reader.writes == [(b"AT\n", "[TX] AT")]
 
 
-def test_send_waits_for_reclaimed_release_before_writing(monkeypatch):
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": False})
-    reader = ReconnectOnWaitReader()
-    mon = make_monitor(reader=reader)
-    mon.released.set()
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
-
-    out = run(srv.send_serial_command("AT", wait_ms=0))
-
-    assert out["status"] == "ok"
-    assert reader.resume_calls == 1
-    assert reader.wait_calls
-    assert reader.writes == [(b"AT\n", "[TX] AT")]
-    assert not mon.released.is_set()
-
-
 def test_send_write_exception_returns_error_dict(monkeypatch):
     monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": False})
     reader = RecordingReader(write_exc=srv.serial.SerialException("boom"))
@@ -315,22 +273,6 @@ def test_reset_calls_pulse_and_shares_approval_contract(single):
     assert single.reader.pulses == 1
     assert declined["status"] == "declined"
     assert single.reader.pulses == 1
-
-
-def test_reset_waits_for_reclaimed_release_before_pulsing(monkeypatch):
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": False})
-    reader = ReconnectOnWaitReader()
-    mon = make_monitor(reader=reader)
-    mon.released.set()
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
-
-    out = run(srv.reset_board(wait_ms=0))
-
-    assert out["status"] == "ok"
-    assert reader.resume_calls == 1
-    assert reader.wait_calls
-    assert reader.pulses == 1
-    assert not mon.released.is_set()
 
 
 def test_reset_zero_lines_message_hints_human_fallback(monkeypatch, single):

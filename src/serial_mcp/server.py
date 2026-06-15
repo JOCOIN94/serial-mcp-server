@@ -15,16 +15,21 @@ AI(Claude Code)는 6개의 조회 도구로 버퍼를 읽으며, 승인 게이�
 from __future__ import annotations
 
 import asyncio
+import atexit
+import json
 import math
 import os
 import re
+import socket
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 from typing import Callable, Mapping, Optional
+from urllib.error import URLError
+from urllib.request import urlopen
 
 import serial
 from serial.tools import list_ports
@@ -71,7 +76,6 @@ class SerialReader:
         feed: Optional[RawFeed] = None,
         on_line: Optional[Callable[[datetime, str], None]] = None,
         char_delay: float = 0.0,
-        reconnect_paused: Optional[threading.Event] = None,
     ) -> None:
         self.port = port
         self.baud = baud
@@ -81,7 +85,6 @@ class SerialReader:
         self.feed = feed   # 웹 뷰어 생중계 허브(없으면 발행 생략)
         self.on_line = on_line   # 서버측 라인 후킹(보드 자동 식별 등, 없으면 생략)
         self.char_delay = char_delay   # 전송 문자 간 지연(초) — 폴링 수신 펌웨어의 바이트 유실 대응
-        self._reconnect_paused = reconnect_paused
 
         self._thread = threading.Thread(target=self._run, name="serial-reader", daemon=True)
         self._stop = threading.Event()
@@ -95,9 +98,6 @@ class SerialReader:
         self.connected = False
         self.last_error: Optional[str] = None
         self.opened_at: Optional[datetime] = None
-
-    def _reconnect_is_paused(self) -> bool:
-        return self._reconnect_paused is not None and self._reconnect_paused.is_set()
 
     def start(self) -> None:
         if self.tee_path:
@@ -126,25 +126,11 @@ class SerialReader:
     def _open(self) -> bool:
         try:
             ser = serial.Serial(self.port, self.baud, timeout=1, write_timeout=2)
-            close_new = False
             with self._ser_lock:
-                if self._reconnect_is_paused():
-                    close_new = True
-                    self._ser = None
-                    self.connected = False
-                    self.last_error = f"release 상태 — 재연결 대기({self.port})"
-                else:
-                    self._ser = ser
-                    self.connected = True
-                    self.opened_at = datetime.now()
-                    self.last_error = None
-            if close_new:
-                try:
-                    ser.close()
-                except Exception:
-                    pass
-                _log(f"release 상태라 열림 직후 닫음: {self.port}")
-                return False
+                self._ser = ser
+                self.connected = True
+                self.opened_at = datetime.now()
+                self.last_error = None
             _log(f"열림: {self.port} @ {self.baud}")
             return True
         except serial.SerialException as e:
@@ -162,35 +148,11 @@ class SerialReader:
         self._wake.wait(self.reconnect_interval)
         self._wake.clear()
 
-    def resume_reconnect(self) -> None:
-        """release 상태를 푼 뒤 리더 루프를 깨워 재연결을 앞당긴다."""
-        if self._reconnect_paused is not None:
-            self._reconnect_paused.clear()
-        self._wake.set()
-
-    def wait_until_connected(self, timeout_s: float) -> bool:
-        """재점유 직후 리더 루프가 포트를 다시 열 때까지 짧게 기다린다."""
-        deadline = time.monotonic() + max(0.0, timeout_s)
-        self._wake.set()
-        while True:
-            with self._ser_lock:
-                if self._ser is not None and self.connected:
-                    return True
-            if self._stop.is_set() or self._reconnect_is_paused():
-                return False
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return False
-            time.sleep(min(0.05, remaining))
-
     def _run(self) -> None:
         while not self._stop.is_set():
-            if self._reconnect_is_paused():
-                self._wait_retry()
-                continue
             if self._ser is None or not self.connected:
                 if not self._open():
-                    self._wait_retry()  # 중단/재점유 신호에 즉시 반응
+                    self._wait_retry()  # 중단 신호에 즉시 반응
                     continue
             ser = self._ser
             try:
@@ -334,12 +296,15 @@ mcp = FastMCP("serial-mcp")
 _monitors: dict[str, "PortMonitor"] = {}
 _config: dict = {}
 _viewer: Optional[ViewerServer] = None
+_lock_socket: Optional[socket.socket] = None
+_owner_active = False
+_owner_lock = threading.RLock()
 _autoname_rules: list = []   # SERIAL_AUTONAME 컴파일 결과 [(이름, re.Pattern)]
 _autoname_lock = threading.Lock()   # 검사-부여 원자화(동시 리셋 시 중복 이름 방지)
 _hotplug_stop = threading.Event()   # 핫플러그 스캔 루프 종료 신호(테스트·향후 정리용)
+_hotplug_thread: Optional[threading.Thread] = None
 _session_label: Optional[str] = None
 _session_lock = threading.Lock()
-_RECLAIM_CONNECT_TIMEOUT = 3.0
 
 
 class _WriteApproval(BaseModel):
@@ -356,7 +321,6 @@ class PortMonitor:
     feed: RawFeed
     reader: Optional[SerialReader]    # 테스트에선 SimpleNamespace 주입 가능
     absent_scans: int = 0             # 열거 목록 연속 부재 횟수(핫플러그 스캔 스레드만 갱신)
-    released: threading.Event = field(default_factory=threading.Event)
 
     @property
     def label(self) -> str:
@@ -414,6 +378,216 @@ def _capture_session(ctx: Optional[Context]) -> None:
             _session_label = name
 
 
+def _owner_port() -> int:
+    raw = _config.get("web", 8743)
+    return int(raw) if raw is not None else 8743
+
+
+def _owner_url(port: Optional[int] = None) -> str:
+    return f"http://127.0.0.1:{port if port is not None else _owner_port()}"
+
+
+def _probe_owner_info(port: int) -> dict:
+    """다른 owner의 /api/status를 짧게 조회해 안내에 쓸 세션명을 얻는다."""
+    info = {"owner_url": _owner_url(port), "owner_session": None}
+    try:
+        with urlopen(info["owner_url"] + "/api/status", timeout=0.3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, URLError, TimeoutError, json.JSONDecodeError):
+        return info
+    session = payload.get("session")
+    if isinstance(session, str) and session.strip():
+        info["owner_session"] = session.strip()
+    return info
+
+
+def _owner_busy_result(*, for_status: bool = False) -> dict:
+    port = _owner_port()
+    info = _probe_owner_info(port)
+    who = f"({info['owner_session']})" if info["owner_session"] else ""
+    message = (
+        f"다른 serial-mcp 세션{who}이 점유 중입니다. "
+        f"먼저 해제하세요. 웹뷰어: {info['owner_url']}"
+    )
+    out = {
+        "status": "busy" if for_status else "error",
+        "message": message,
+        "owner_session": info["owner_session"],
+        "owner_url": info["owner_url"],
+        "viewer_url": None,
+    }
+    if for_status:
+        out.update({"connected": False, "ports": []})
+    return out
+
+
+def _bind_lock_socket(port: int) -> socket.socket:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+        sock.bind(("127.0.0.1", port))
+        sock.listen(1)
+        return sock
+    except Exception:
+        sock.close()
+        raise
+
+
+def _start_monitors_locked(cfg: dict) -> None:
+    """현재 프로세스가 owner가 된 뒤에만 포트 모니터를 생성·시작한다."""
+    global _monitors
+
+    com = list(list_ports.comports())
+    specs = cfg["ports"]
+    if not specs:
+        specs = [(dev, None) for dev in auto_usb_ports(com)]
+        _log(f"자동 스캔: USB 시리얼 {len(specs)}개 발견")
+    sn_map = {p.device.upper(): getattr(p, "serial_number", None) for p in com}
+
+    monitors: dict[str, PortMonitor] = {}
+    for port, baud_override in specs:
+        key = port.upper()
+        if key in monitors:
+            _log(f"중복 포트 무시: {port}")
+            continue
+        monitors[key] = _make_monitor(port, baud_override, sn_map, cfg)
+    _monitors = monitors
+    for mon in _monitors.values():
+        if mon.reader is not None:
+            mon.reader.start()
+            _log(f"모니터 시작: {mon.label} @ {mon.reader.baud}")
+
+
+def _start_hotplug_locked(cfg: dict) -> None:
+    global _hotplug_stop, _hotplug_thread
+
+    watch_on = cfg["hotplug"] is not None
+    allow_add = not cfg["ports"]
+    if not _monitors:
+        if watch_on and allow_add:
+            _log("경고: 모니터링할 포트 없음 — USB 장비를 연결하면 핫플러그 스캔이 자동 추가한다.")
+        else:
+            _log("경고: 모니터링할 포트 없음 — USB 시리얼이 안 보이고 SERIAL_PORT 도 "
+                 "비어 있다. 장비 연결 후 서버를 재시작하라(핫플러그 꺼짐).")
+    if not watch_on:
+        _log("포트 감시 꺼짐 (SERIAL_HOTPLUG=0)")
+        return
+
+    _hotplug_stop = threading.Event()
+    _hotplug_thread = threading.Thread(
+        target=_hotplug_loop,
+        args=(cfg["hotplug"], _hotplug_stop, allow_add),
+        name="hotplug-scan",
+        daemon=True,
+    )
+    _hotplug_thread.start()
+    if allow_add:
+        _log(f"포트 감시 켜짐 ({cfg['hotplug']:g}초 간격 — 새 포트 추가 + 좀비 핸들 해제)")
+    else:
+        _log(f"포트 감시 켜짐 ({cfg['hotplug']:g}초 간격 — SERIAL_PORT 고정 모드, "
+             "좀비 핸들 해제만 수행(늦은 연결은 재연결 루프가 잡음))")
+
+
+def _acquire_owner_locked() -> Optional[dict]:
+    """8743/SERIAL_WEB bind를 시도해 성공 시 whole-session owner 리소스를 시작한다."""
+    global _viewer, _lock_socket, _owner_active
+
+    if _owner_active or _monitors:
+        return None
+
+    cfg = _config or _load_config(os.environ)
+    port = _owner_port()
+    web_ui = bool(cfg.get("web_ui", True))
+
+    try:
+        if web_ui:
+            viewer = ViewerServer(
+                ports_info=_viewer_ports_info,
+                feed_for=_viewer_feed_for,
+                buffer_info=_viewer_buffer_info,
+                status_info=_viewer_status_info,
+                release_port=_viewer_release_port,
+                port=port,
+            )
+            if not viewer.start():
+                return _owner_busy_result()
+            _viewer = viewer
+            _log(f"웹 뷰어: {_viewer.url}")
+        else:
+            try:
+                _lock_socket = _bind_lock_socket(port)
+            except (OSError, OverflowError) as e:
+                _log(f"소유권 잠금 포트 {port} 바인딩 실패: {e}")
+                return _owner_busy_result()
+            _viewer = None
+            _log(f"소유권 잠금: {_owner_url(port)} bind 성공(UI 미서빙)")
+        _owner_active = True
+        _start_monitors_locked(cfg)
+        _start_hotplug_locked(cfg)
+        _log(f"소유권 획득 (포트 {len(_monitors)}개, dedup={cfg['dedup']}, "
+             f"buffer={cfg['maxlen']}, tee={cfg['tee'] or '없음'})")
+        return None
+    except Exception:
+        _release_owner_locked("소유권 획득 실패 정리")
+        raise
+
+
+def _ensure_owner(ctx: Optional[Context] = None, *, for_status: bool = False) -> Optional[dict]:
+    _capture_session(ctx)
+    with _owner_lock:
+        if _owner_active or _monitors:
+            return None
+        err = _acquire_owner_locked()
+        if err is None:
+            return None
+        if for_status:
+            err["status"] = "busy"
+            err.update({"connected": False, "ports": []})
+        return err
+
+
+def _release_owner_locked(reason: str) -> None:
+    """COM 핸들 → 뷰어/8743 순서로 whole-session 소유권을 반납한다."""
+    global _monitors, _viewer, _lock_socket, _owner_active, _hotplug_thread
+
+    had_owner = _owner_active or bool(_monitors) or _viewer is not None or _lock_socket is not None
+    _hotplug_stop.set()
+
+    for mon in list(_monitors.values()):
+        reader = mon.reader
+        if reader is not None:
+            stop = getattr(reader, "stop", None)
+            if callable(stop):
+                stop()
+    _monitors = {}
+
+    viewer, _viewer = _viewer, None
+    lock_socket, _lock_socket = _lock_socket, None
+    _owner_active = False
+    _hotplug_thread = None
+
+    if viewer is not None:
+        viewer.stop()
+    if lock_socket is not None:
+        try:
+            lock_socket.close()
+        except OSError:
+            pass
+    if had_owner:
+        _log(f"소유권 반납: {reason}")
+
+
+def _release_owner(reason: str) -> None:
+    with _owner_lock:
+        _release_owner_locked(reason)
+
+
+atexit.register(lambda: _release_owner("프로세스 종료"))
+
+
 def _hw_board_from_name(name: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     if not name:
         return None, None
@@ -446,32 +620,7 @@ def _autoname_check(mon: PortMonitor, text: str) -> None:
     _log(f"자동 식별: {mon.port} → {name} (SERIAL_AUTONAME 패턴 매칭)")
 
 
-def _reclaim_if_released(mon: PortMonitor) -> bool:
-    if not mon.released.is_set():
-        return False
-    mon.released.clear()
-    if mon.reader is not None:
-        resume = getattr(mon.reader, "resume_reconnect", None)
-        if callable(resume):
-            resume()
-    _log(f"재점유: {mon.label} — MCP 도구 호출로 release 해제")
-    return True
-
-
-def _wait_for_reclaimed_connection(mon: PortMonitor) -> Optional[str]:
-    reader = mon.reader
-    if reader is None:
-        return f"{mon.label}: release 해제 후 재점유 실패 — reader 없음"
-    wait = getattr(reader, "wait_until_connected", None)
-    if callable(wait):
-        if wait(_RECLAIM_CONNECT_TIMEOUT):
-            return None
-    elif getattr(reader, "connected", False):
-        return None
-    return f"{mon.label}: release 해제 후 포트 재점유 대기 시간 초과"
-
-
-def _resolve_port(port: str, *, reclaim_released: bool = True) -> tuple[Optional[PortMonitor], Optional[dict]]:
+def _resolve_port(port: str) -> tuple[Optional[PortMonitor], Optional[dict]]:
     """도구의 port 인자(별칭/포트명/빈값)를 PortMonitor로 해석.
 
     반환: (monitor, None) 또는 (None, 에러 dict — 도구가 그대로 반환).
@@ -487,8 +636,6 @@ def _resolve_port(port: str, *, reclaim_released: bool = True) -> tuple[Optional
     if not key:
         if len(_monitors) == 1:
             mon = next(iter(_monitors.values()))
-            if reclaim_released:
-                _reclaim_if_released(mon)
             return mon, None
         return None, {
             "status": "error",
@@ -498,8 +645,6 @@ def _resolve_port(port: str, *, reclaim_released: bool = True) -> tuple[Optional
     for m in _monitors.values():
         # 라벨 형태("SSM (COM4)")도 허용 — 에러 응답의 ports 목록을 그대로 되돌려도 해석
         if m.port.upper() == key or (m.name and m.name.upper() == key) or m.label.upper() == key:
-            if reclaim_released:
-                _reclaim_if_released(m)
             return m, None
     return None, {
         "status": "error",
@@ -597,7 +742,9 @@ def get_serial_status(port: str = "", ctx: Optional[Context] = None) -> dict:
     사람이 로그를 직접 눈으로 보고 싶어 하면 viewer_url 링크를 안내하라(웹 뷰어).
     [루프 단계] 문제 진단.
     """
-    _capture_session(ctx)
+    busy = _ensure_owner(ctx, for_status=True)
+    if busy:
+        return busy
 
     def one(m: PortMonitor) -> dict:
         r = m.reader
@@ -657,7 +804,9 @@ def get_recent_logs(lines: int = 200, port: str = "", ctx: Optional[Context] = N
 
     [루프 단계] 결과 확인.
     """
-    _capture_session(ctx)
+    busy = _ensure_owner(ctx)
+    if busy:
+        return {**busy, "count": 0, "lines": []}
     mon, err = _resolve_port(port)
     if err:
         return {**err, "count": 0, "lines": []}
@@ -691,7 +840,9 @@ def query_serial_logs(
 
     [루프 단계] 결과 확인(표적 검색).
     """
-    _capture_session(ctx)
+    busy = _ensure_owner(ctx)
+    if busy:
+        return {**busy, "count": 0, "lines": []}
     mon, err = _resolve_port(port)
     if err:
         return {**err, "count": 0, "lines": []}
@@ -722,7 +873,9 @@ def get_log_buffer_info(port: str = "", ctx: Optional[Context] = None) -> dict:
 
     [루프 단계] 진행 점검(폴링).
     """
-    _capture_session(ctx)
+    busy = _ensure_owner(ctx)
+    if busy:
+        return busy
     mon, err = _resolve_port(port)
     if err:
         return err
@@ -748,7 +901,11 @@ def clear_log_buffer(port: str = "", ctx: Optional[Context] = None) -> dict:
 
     [루프 단계] 시험 시작.
     """
-    _capture_session(ctx)
+    busy = _ensure_owner(ctx)
+    if busy:
+        return {"status": "error", "message": busy["message"], "cleared": 0,
+                "ports": {}, "owner_session": busy.get("owner_session"),
+                "owner_url": busy.get("owner_url"), "viewer_url": None}
     if not _monitors:
         return {"status": "error", "message": "모니터링 중인 포트 없음", "cleared": 0, "ports": {}}
     if (port or "").strip():
@@ -791,9 +948,6 @@ async def send_serial_command(
     _capture_session(ctx)
     if not _config.get("write", True):
         return _write_disabled_result()
-    mon, err = _resolve_port(port, reclaim_released=False)
-    if err:
-        return {**err, "count": 0, "lines": []}
     allowed_eol = {"\n", "\r\n", "\r", ""}
     if eol not in allowed_eol:
         return {
@@ -806,16 +960,19 @@ async def send_serial_command(
         return {"status": "error", "message": "빈 페이로드는 전송하지 않는다.", "count": 0, "lines": []}
     wait_ms = _clamp_wait_ms(wait_ms)
     payload = (command + eol).encode("utf-8")
+    target = (port or "").strip() or "기본/단일 포트"
     block = await _confirm_write(
         ctx,
-        f"{mon.label} 포트로 시리얼 명령 전송 승인 요청\n명령: {command!r} (eol={eol!r}, {len(payload)}바이트)",
+        f"{target} 대상으로 시리얼 명령 전송 승인 요청\n명령: {command!r} (eol={eol!r}, {len(payload)}바이트)",
     )
     if block:
         return {**block, "count": 0, "lines": []}
-    if _reclaim_if_released(mon):
-        reclaim_error = _wait_for_reclaimed_connection(mon)
-        if reclaim_error is not None:
-            return {"status": "error", "message": reclaim_error, "count": 0, "lines": []}
+    busy = _ensure_owner(ctx)
+    if busy:
+        return {**busy, "count": 0, "lines": []}
+    mon, err = _resolve_port(port)
+    if err:
+        return {**err, "count": 0, "lines": []}
     t0 = datetime.now()
     try:
         mon.reader.write(payload, audit=f"[TX] {command}")
@@ -855,20 +1012,20 @@ async def reset_board(port: str = "", wait_ms: int = 2000, ctx: Optional[Context
     _capture_session(ctx)
     if not _config.get("write", True):
         return _write_disabled_result()
-    mon, err = _resolve_port(port, reclaim_released=False)
-    if err:
-        return {**err, "count": 0, "lines": []}
     wait_ms = _clamp_wait_ms(wait_ms)
+    target = (port or "").strip() or "기본/단일 포트"
     block = await _confirm_write(
         ctx,
-        f"{mon.label} 보드를 DTR/RTS 펄스로 하드웨어 리셋합니다. 승인하시겠습니까?",
+        f"{target} 보드를 DTR/RTS 펄스로 하드웨어 리셋합니다. 승인하시겠습니까?",
     )
     if block:
         return {**block, "count": 0, "lines": []}
-    if _reclaim_if_released(mon):
-        reclaim_error = _wait_for_reclaimed_connection(mon)
-        if reclaim_error is not None:
-            return {"status": "error", "message": reclaim_error, "count": 0, "lines": []}
+    busy = _ensure_owner(ctx)
+    if busy:
+        return {**busy, "count": 0, "lines": []}
+    mon, err = _resolve_port(port)
+    if err:
+        return {**err, "count": 0, "lines": []}
     t0 = datetime.now()
     try:
         mon.reader.pulse_reset()
@@ -947,23 +1104,14 @@ def _viewer_status_info() -> dict:
             "buffer_capacity": binfo["capacity"],
             "hw": hw,
             "board": board,
-            "released": m.released.is_set(),
         })
     return {"session": _session_label, "ports": plist}
 
 
 def _viewer_release_port(port: str) -> dict:
-    """웹 뷰어 /api/release?port= — 지정 포트 OS 핸들을 양보하고 재연결을 억제."""
-    if not (port or "").strip():
-        return {"status": "error", "message": "unknown port"}
-    mon, err = _resolve_port(port, reclaim_released=False)
-    if err:
-        return {"status": "error", "message": "unknown port"}
-    mon.released.set()
-    mon.absent_scans = 0
-    if mon.reader is not None:
-        mon.reader.force_disconnect("뷰어 release — 사용자 양보")
-    return {"status": "ok", "port": mon.port, "released": True}
+    """웹 뷰어 /api/release — 포트 인자와 무관하게 세션 전체 소유권을 반납."""
+    _release_owner("뷰어 release — 사용자 양보")
+    return {"status": "ok", "released": True}
 
 
 def _parse_dedup(env: Mapping[str, str]) -> int:
@@ -994,25 +1142,25 @@ def _parse_maxlen(env: Mapping[str, str]) -> int:
     return n
 
 
-def _parse_web(env: Mapping[str, str]) -> Optional[int]:
-    """SERIAL_WEB 파싱 — 기본 8743(켜짐). 0/false/no/off → 비활성(None), 정수 → 포트.
+def _parse_web(env: Mapping[str, str]) -> tuple[int, bool]:
+    """SERIAL_WEB 파싱 — 기본 8743(켜짐). 0/false/no/off → 8743 잠금만, UI 미서빙.
 
     1~65535 밖이면 기본값으로 — 범위 밖 포트는 socket.bind에서 OverflowError로
     서버 기동 자체를 죽일 수 있다(뷰어 실패는 본체에 영향 없어야 한다는 불변식).
     """
     raw = env.get("SERIAL_WEB", "").strip()
     if raw == "":
-        return 8743
+        return 8743, True
     if raw.lower() in ("0", "false", "no", "off"):
-        return None
+        return 8743, False
     try:
         n = int(raw)
         if 1 <= n <= 65535:
-            return n
+            return n, True
     except ValueError:
         pass
     _log(f"환경변수 SERIAL_WEB={raw!r} 해석 실패(1~65535 필요) → 기본 포트 8743 사용")
-    return 8743
+    return 8743, True
 
 
 def _parse_hotplug(env: Mapping[str, str]) -> Optional[float]:
@@ -1081,6 +1229,7 @@ def _load_config(env: Mapping[str, str]) -> dict:
     main()이 이 결과로 LineBuffer/SerialReader를 구성한다. I/O·스레드 시작과
     분리돼 있어 환경변수 계약(SPEC §3/§4)을 단독 테스트할 수 있다.
     """
+    web_port, web_ui = _parse_web(env)
     return {
         "ports": parse_port_list(env.get("SERIAL_PORT", "")),   # [] = USB 자동 스캔
         "names": parse_names(env.get("SERIAL_NAMES", "")),
@@ -1091,7 +1240,8 @@ def _load_config(env: Mapping[str, str]) -> dict:
         "include": env.get("SERIAL_INCLUDE", "").strip() or None,
         "maxlen": _parse_maxlen(env),
         "dedup": _parse_dedup(env),
-        "web": _parse_web(env),
+        "web": web_port,
+        "web_ui": web_ui,
         "hotplug": _parse_hotplug(env),
         "write": _parse_flag(env, "SERIAL_WRITE"),
         "write_confirm": _parse_flag(env, "SERIAL_WRITE_CONFIRM"),
@@ -1132,8 +1282,7 @@ def _make_monitor(
     mon.reader = SerialReader(port=port, baud=baud, buffer=buf,
                               tee_path=_tee_path_for(cfg["tee"], name or port),
                               feed=feed, on_line=on_line,
-                              char_delay=cfg["char_delay"],
-                              reconnect_paused=mon.released)
+                              char_delay=cfg["char_delay"])
     return mon
 
 
@@ -1162,9 +1311,6 @@ def _hotplug_scan_once(allow_add: bool = True) -> list[str]:
     # 1) 좀비 해제 — 부재 카운터는 이 스레드만 갱신한다
     present = {p.device.upper() for p in com}
     for mon in _monitors.values():
-        if mon.released.is_set():
-            mon.absent_scans = 0
-            continue
         if mon.reader.connected and mon.port.upper() not in present:
             mon.absent_scans += 1
             if mon.absent_scans >= 2:
@@ -1205,72 +1351,21 @@ def _hotplug_loop(interval: float, stop: threading.Event, allow_add: bool = True
 
 
 def main() -> None:
-    """엔트리포인트. USB 자동 스캔(또는 SERIAL_PORT 목록)으로 포트별 모니터를
-    띄우고 stdio 로 MCP 서버 구동."""
-    global _config, _viewer, _autoname_rules
+    """엔트리포인트. 기동 시엔 휴면, 첫 시리얼 도구 호출 때 owner를 획득한다."""
+    global _config, _autoname_rules
 
     cfg = _load_config(os.environ)
     _config = cfg
     _autoname_rules = compile_autoname(cfg["autoname"], log=_log)
 
-    com = list(list_ports.comports())
-    specs = cfg["ports"]
-    if not specs:
-        specs = [(dev, None) for dev in auto_usb_ports(com)]
-        _log(f"자동 스캔: USB 시리얼 {len(specs)}개 발견")
-    sn_map = {p.device.upper(): getattr(p, "serial_number", None) for p in com}
-
-    # 1패스: 모니터 전부 생성·등록 (리더 시작 전 — 리더 스레드의 _autoname_check가
-    # _monitors를 순회하므로, 순회 중 dict 변경이 없도록 등록을 먼저 끝낸다)
-    for port, baud_override in specs:
-        if port.upper() in _monitors:
-            _log(f"중복 포트 무시: {port}")
-            continue
-        _monitors[port.upper()] = _make_monitor(port, baud_override, sn_map, cfg)
-
-    # 2패스: 등록이 끝난 뒤 리더 일괄 시작
-    for mon in _monitors.values():
-        mon.reader.start()
-        _log(f"모니터 시작: {mon.label} @ {mon.reader.baud}")
-
-    watch_on = cfg["hotplug"] is not None
-    allow_add = not cfg["ports"]      # 고정 포트 모드에선 좀비 해제만, 추가 없음
-    if not _monitors:
-        if watch_on and allow_add:
-            _log("경고: 모니터링할 포트 없음 — USB 장비를 연결하면 핫플러그 스캔이 자동 추가한다.")
-        else:
-            _log("경고: 모니터링할 포트 없음 — USB 시리얼이 안 보이고 SERIAL_PORT 도 "
-                 "비어 있다. 장비 연결 후 서버를 재시작하라(핫플러그 꺼짐).")
-
-    if watch_on:
-        threading.Thread(target=_hotplug_loop,
-                         args=(cfg["hotplug"], _hotplug_stop, allow_add),
-                         name="hotplug-scan", daemon=True).start()
-        if allow_add:
-            _log(f"포트 감시 켜짐 ({cfg['hotplug']:g}초 간격 — 새 포트 추가 + 좀비 핸들 해제)")
-        else:
-            _log(f"포트 감시 켜짐 ({cfg['hotplug']:g}초 간격 — SERIAL_PORT 고정 모드, "
-                 "좀비 핸들 해제만 수행(늦은 연결은 재연결 루프가 잡음))")
+    if cfg["web_ui"]:
+        _log(f"휴면 시작 — 첫 시리얼 도구 호출 때 {_owner_url(cfg['web'])} 소유권을 획득한다")
     else:
-        _log("포트 감시 꺼짐 (SERIAL_HOTPLUG=0)")
-
-    if cfg["web"] is not None:
-        _viewer = ViewerServer(
-            ports_info=_viewer_ports_info,
-            feed_for=_viewer_feed_for,
-            buffer_info=_viewer_buffer_info,
-            status_info=_viewer_status_info,
-            release_port=_viewer_release_port,
-            port=cfg["web"],
-        )
-        _viewer.start()   # 실패해도 예외 없음 — url이 None으로 남을 뿐
-        _log(f"웹 뷰어: {_viewer.url or '기동 실패'}")
-    else:
-        _log("웹 뷰어 꺼짐 (SERIAL_WEB=0)")
-
-    _log(f"시작 (포트 {len(_monitors)}개, dedup={cfg['dedup']}, "
-         f"buffer={cfg['maxlen']}, tee={cfg['tee'] or '없음'})")
-    mcp.run()  # stdio transport(기본)
+        _log(f"휴면 시작 — SERIAL_WEB=0: 첫 시리얼 도구 호출 때 {_owner_url(cfg['web'])} 잠금만 획득한다")
+    try:
+        mcp.run()  # stdio transport(기본)
+    finally:
+        _release_owner("stdio 종료")
 
 
 if __name__ == "__main__":

@@ -31,6 +31,7 @@ def single(monkeypatch):
     mon = make_monitor("COM_A")
     monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
     monkeypatch.setattr(srv, "_viewer", None)
+    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
     return mon
 
 
@@ -41,6 +42,7 @@ def dual(monkeypatch):
     b = make_monitor("COM_B", connected=False, last_error="포트 열기 실패(COM_B): busy")
     monkeypatch.setattr(srv, "_monitors", {"COM_A": a, "COM_B": b})
     monkeypatch.setattr(srv, "_viewer", None)
+    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
     return a, b
 
 
@@ -78,6 +80,7 @@ def test_unknown_port_lists_available(dual):
 
 def test_no_monitors_reports_error(monkeypatch):
     monkeypatch.setattr(srv, "_monitors", {})
+    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
     out = srv.get_recent_logs()
     assert out["status"] == "error"
     assert out["ports"] == []
@@ -108,10 +111,9 @@ def test_status_includes_viewer_url(monkeypatch, single):
     assert srv.get_serial_status()["viewer_url"] == "http://127.0.0.1:8743"
 
 
-def test_viewer_status_includes_session_hw_board_and_released(monkeypatch, dual):
+def test_viewer_status_includes_session_hw_board_without_released(monkeypatch, dual):
     a, b = dual
     a.name = "SB-STM"
-    b.released.set()
     monkeypatch.setattr(srv, "_session_label", "claude-code", raising=False)
 
     out = srv._viewer_status_info()
@@ -119,8 +121,8 @@ def test_viewer_status_includes_session_hw_board_and_released(monkeypatch, dual)
     assert out["session"] == "claude-code"
     assert out["ports"][0]["hw"] == "SB"
     assert out["ports"][0]["board"] == "STM"
-    assert out["ports"][0]["released"] is False
-    assert out["ports"][1]["released"] is True
+    assert "released" not in out["ports"][0]
+    assert "released" not in out["ports"][1]
 
 
 def test_session_label_captured_from_first_tool_context(monkeypatch, single):
@@ -141,31 +143,15 @@ def test_session_label_captured_from_first_tool_context(monkeypatch, single):
     assert srv._viewer_status_info()["session"] == "claude-code"
 
 
-def test_viewer_release_port_sets_flag_and_disconnects(monkeypatch, single):
+def test_viewer_release_port_releases_whole_session(monkeypatch, single):
     calls = []
 
-    def force_disconnect(reason):
-        calls.append(reason)
-
-    single.reader.force_disconnect = force_disconnect
+    monkeypatch.setattr(srv, "_release_owner", lambda reason: calls.append(reason))
 
     out = srv._viewer_release_port("COM_A")
 
-    assert out == {"status": "ok", "port": "COM_A", "released": True}
-    assert single.released.is_set()
+    assert out == {"status": "ok", "released": True}
     assert "release" in calls[0]
-
-
-def test_resolve_reclaims_released_port_on_explicit_tool_call(single):
-    calls = []
-    single.released.set()
-    single.reader.resume_reconnect = lambda: calls.append("resume")
-
-    out = srv.get_recent_logs(port="COM_A")
-
-    assert out["status"] == "ok"
-    assert not single.released.is_set()
-    assert calls == ["resume"]
 
 
 # ---- get_recent_logs / query_serial_logs / get_log_buffer_info ----

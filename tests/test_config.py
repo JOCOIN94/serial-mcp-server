@@ -32,7 +32,7 @@ def test_load_config_defaults_when_empty():
     assert _load_config({}) == {
         "ports": [], "names": {}, "autoname": [], "baud": 115200, "tee": None,
         "exclude": None, "include": None, "maxlen": 2000, "dedup": 5, "web": 8743,
-        "hotplug": 5.0, "write": True, "write_confirm": True, "char_delay": 0.01,
+        "web_ui": True, "hotplug": 5.0, "write": True, "write_confirm": True, "char_delay": 0.01,
     }
 
 
@@ -50,7 +50,7 @@ def test_load_config_reads_all_vars():
         "ports": [("COM4", None), ("COM13", 9600)], "names": {"COM4": "SSM"},
         "autoname": [("SB1", "STM32")],
         "baud": 57600, "tee": "log.txt", "exclude": "DEBUG", "include": "ERROR",
-        "maxlen": 500, "dedup": 0, "web": 9000, "hotplug": 10.0,
+        "maxlen": 500, "dedup": 0, "web": 9000, "web_ui": True, "hotplug": 10.0,
         "write": False, "write_confirm": False, "char_delay": 0.025,
     }
 
@@ -87,11 +87,15 @@ def test_load_config_web_default_on():
 
 @pytest.mark.parametrize("val", ["0", "false", "no", "off", "OFF"])
 def test_load_config_web_disabled(val):
-    assert _load_config({"SERIAL_WEB": val})["web"] is None
+    cfg = _load_config({"SERIAL_WEB": val})
+    assert cfg["web"] == 8743
+    assert cfg["web_ui"] is False
 
 
 def test_load_config_web_custom_port():
-    assert _load_config({"SERIAL_WEB": "9000"})["web"] == 9000
+    cfg = _load_config({"SERIAL_WEB": "9000"})
+    assert cfg["web"] == 9000
+    assert cfg["web_ui"] is True
 
 
 def test_load_config_web_invalid_falls_back_to_default():

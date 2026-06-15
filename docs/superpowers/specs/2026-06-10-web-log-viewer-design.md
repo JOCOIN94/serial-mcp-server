@@ -1,6 +1,8 @@
 # 웹 로그 뷰어 설계 (SPEC §10 후보)
 
 > 2026-06-10 브레인스토밍 산출물. 승인된 설계이며, writing-plans의 입력이 된다.
+> 상태(2026-06-15): 포트 폴백과 per-port release 설명은
+> `2026-06-15-single-owner-port-lock.md`의 whole-session 8743 bind 잠금 모델로 대체됐다.
 
 ## 1. 목적·배경
 
@@ -17,7 +19,7 @@ serial-mcp가 시리얼 포트를 점유하면 테라텀 등 다른 프로그램
 | 진입 | 도구 응답에 localhost 링크 자동 포함 → 클릭 → 브라우저 |
 | 뷰 | 탭 2개 — ① 실시간 스트림(수신 원본, 테라텀 대체) ② 링버퍼(접힘·필터 적용된 가공 뷰) |
 | 컬러 | 레벨 키워드 + ANSI 해석 + 메타 dim + JSON 절제 하이라이트. "색은 신호" 원칙으로 어지러움 방지 |
-| 활성화 | 기본 켜짐, 고정 포트 8743 → 점유 시 임시 포트 폴백. `SERIAL_WEB=0`으로 끔 |
+| 활성화 | 기본 켜짐. 첫 시리얼 도구 호출 때 고정 포트 8743을 whole-session 소유권 잠금으로 bind. 점유 시 임시 포트 폴백 없이 휴면/안내. `SERIAL_WEB=0`은 UI만 끄고 8743 잠금은 유지 |
 | 접근 | `127.0.0.1` 바인딩만(외부 접속 불가). 인증 없음(localhost 한정으로 충분) |
 | 구현 | A안 — stdlib `http.server` 내장 데몬 스레드. SSE 수동 구현 |
 
@@ -53,21 +55,21 @@ RawFeed 허브. 시리얼 I/O·HTTP 의존성 없음(`ring_buffer.py`와 같은 
 
 `ViewerServer` 클래스 — stdlib `ThreadingHTTPServer`를 데몬 스레드로 구동.
 
-- 바인딩: `127.0.0.1` 고정. 포트: 설정값(기본 8743) → `OSError`(점유) 시 포트 0(임시)으로 재시도 → 그래도 실패하면 뷰어 비활성(서버는 계속 동작).
+- 바인딩: `127.0.0.1` 고정. 포트: 설정값(기본 8743) 단일 시도. `OSError`(점유) 시 이 프로세스는 비소유 휴면 상태를 유지하고 시리얼 포트에 접근하지 않는다.
 - `url` 속성: `http://127.0.0.1:{실제포트}` 또는 `None`(비활성/실패).
 - 라우트(조회는 GET 읽기 전용. 2026-06-15 층2 소유권 백엔드에서 `GET /api/release`가 명시적 상태 변경 예외로 추가됨):
   - `GET /` — 단일 HTML 페이지(CSS/JS 인라인 문자열, 외부 CDN 없음 → 오프라인 동작, 패키징 추가 설정 불필요)
   - `GET /api/stream` — SSE. RawFeed 구독, 이벤트 `data: {"ts":"HH:MM:SS.mmm","text":"..."}` 1줄당 1이벤트. 15초마다 하트비트 코멘트(`: ping`). 클라이언트 끊김 감지 시 구독 해지.
   - `GET /api/buffer` — `{"status":"ok","entries":[snapshot()...],"capacity":N,"total_received":N,"total_stored":N,"dedup":bool}`
-  - `GET /api/status` — `{"session":str|null,"ports":[{"port":str,"label":str,"connected":bool,"baud":int,"last_error":str|null,"hw":str|null,"board":str|null,"released":bool,...}]}` (헤더·소유권 보드 표시용)
-  - `GET /api/release?port=COM4` — 해당 포트 핸들을 닫고 재연결을 억제한다. 같은 MCP 세션이 해당 포트를 다시 도구로 호출하면 자동 재점유한다.
+  - `GET /api/status` — `{"session":str|null,"ports":[{"port":str,"label":str,"connected":bool,"baud":int,"last_error":str|null,"hw":str|null,"board":str|null,...}]}` (헤더·소유권 보드 표시용)
+  - `GET /api/release` — owner 세션의 전체 COM 핸들, 뷰어, 8743 잠금을 반납한다. `port=` 인자가 있어도 하위호환 입력으로만 받고 전체 반납으로 처리한다.
 - `log_message` 오버라이드 → `_log`(stderr)로 우회. **stdout 금지 유지**.
 
 ### 4.4 `server.py` 변경 (기존 파일)
 
 - `_ingest()`: `feed.publish(ts, text)` 한 줄 추가(버퍼 add·tee와 같은 위치, 예외 격리).
-- `_load_config()`: `SERIAL_WEB` 파싱 추가 — 기본 `8743`(켜짐). `0`/`false`/`no`/`off` → 비활성(`None`). 정수 → 해당 포트. 그 외 → 기본값 + 경고 로그.
-- `main()`: ViewerServer 기동(리더와 독립 — SERIAL_PORT 미설정이어도 뷰어는 뜸), 시작 로그에 URL 포함.
+- `_load_config()`: `SERIAL_WEB` 파싱 추가 — 기본 `8743`(켜짐). `0`/`false`/`no`/`off` → 8743 잠금 유지, UI 미서빙. 정수 → 해당 포트. 그 외 → 기본값 + 경고 로그.
+- `main()`: ViewerServer/리더를 기동하지 않고 휴면으로 stdio 대기. 첫 시리얼 도구 호출이 8743 bind에 성공하면 뷰어와 리더를 시작한다.
 - 도구 반환 확장(§5 계약 변경): `get_serial_status`·`get_log_buffer_info` 응답에 `viewer_url: str|null` 추가. docstring에 "사람이 로그를 직접 보고 싶어 하면 이 링크를 안내하라" 한 줄 추가.
 
 ## 5. UI·컬러 명세
@@ -89,7 +91,7 @@ RawFeed 허브. 시리얼 I/O·HTTP 의존성 없음(`ring_buffer.py`와 같은 
 ## 6. 에러·엣지 처리
 
 - 뷰어 기동 실패 → MCP 서버는 정상 동작, `viewer_url: null`, stderr 로그. 뷰어는 어떤 경우에도 서버 생존에 영향 없음.
-- 다중 인스턴스(세션 2개가 각자 서버 스폰) → 8743 점유된 쪽은 임시 포트 폴백. 각자 자기 URL을 도구로 보고.
+- 다중 인스턴스(세션 2개가 각자 서버 스폰) → 8743 bind에 성공한 1개만 owner. 패자는 임시 포트 폴백 없이 휴면하며 "다른 세션에서 해제 먼저" 안내를 반환한다.
 - SSE 클라이언트 끊김 → write 예외 잡아 구독 해지(좀비 구독자 방지).
 - 하트비트로 프록시/브라우저 타임아웃 방지.
 - 빈 줄도 스트림에는 그대로(테라텀 충실도). 버퍼 탭에는 §4.3 규칙대로 없음.
@@ -98,7 +100,7 @@ RawFeed 허브. 시리얼 I/O·HTTP 의존성 없음(`ring_buffer.py`와 같은 
 
 - `tests/test_viewer_feed.py` — 발행/구독/다중 구독/overflow drop-oldest/해지 후 미수신 (순수)
 - `tests/test_ring_buffer.py` — `snapshot()` 구조·접힘 반영·빈 버퍼 (순수)
-- `tests/test_web_viewer.py` — 임시 포트로 실제 기동: `/`(200·HTML), `/api/buffer`·`/api/status`(JSON 계약), SSE 첫 이벤트 수신, 포트 점유 시 폴백, `url` 속성
+- `tests/test_web_viewer.py` — 임시 포트로 실제 기동: `/`(200·HTML), `/api/buffer`·`/api/status`(JSON 계약), SSE 첫 이벤트 수신, 포트 점유 시 폴백 없음, `url` 속성
 - `tests/test_serial_reader.py` — `_ingest` → feed 발행 연결
 - `tests/test_config.py` — `SERIAL_WEB` 파싱(기본 8743/끔/정수/이상값)
 - `tests/test_tools.py` — `viewer_url` 필드 계약

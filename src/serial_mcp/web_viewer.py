@@ -32,7 +32,7 @@ def _log(msg: str) -> None:
 class _ViewerHTTPServer(ThreadingHTTPServer):
     daemon_threads = True        # SSE 핸들러 스레드가 프로세스 종료를 막지 않게
     block_on_close = False       # server_close()가 장수 SSE 핸들러를 기다리지 않게
-    allow_reuse_address = False  # Windows에서 점유 포트 중복 바인딩 방지(점유 감지가 정확해야 폴백이 동작)
+    allow_reuse_address = False  # Windows에서도 8743 bind가 whole-session 소유권 잠금으로 동작해야 한다
 
     ports_info: Callable[[], list]
     feed_for: Callable[[str], Optional[RawFeed]]
@@ -116,7 +116,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 class ViewerServer:
-    """뷰어 HTTP 서버 래퍼 — 기동/포트 폴백/URL 보고. 예외를 밖으로 내지 않는다."""
+    """뷰어 HTTP 서버 래퍼 — localhost 고정 포트 bind/URL 보고. 예외를 밖으로 내지 않는다."""
 
     def __init__(
         self,
@@ -138,16 +138,14 @@ class ViewerServer:
         self._httpd: Optional[_ViewerHTTPServer] = None
         self.url: Optional[str] = None   # 기동 성공 시 http://127.0.0.1:{port}, 실패 시 None
 
-    def start(self) -> None:
-        for port in (self._preferred_port, 0):   # 선호 포트 점유/이상 시 임시 포트로 폴백
-            try:
-                self._httpd = _ViewerHTTPServer(("127.0.0.1", port), _Handler)
-                break
-            except (OSError, OverflowError) as e:   # OverflowError: 0~65535 범위 밖 포트
-                _log(f"웹 뷰어 포트 {port} 바인딩 실패: {e}")
+    def start(self) -> bool:
+        try:
+            self._httpd = _ViewerHTTPServer(("127.0.0.1", self._preferred_port), _Handler)
+        except (OSError, OverflowError) as e:   # OverflowError: 0~65535 범위 밖 포트
+            _log(f"웹 뷰어 포트 {self._preferred_port} 바인딩 실패: {e}")
         if self._httpd is None:
-            _log("웹 뷰어 비활성 — 포트 바인딩 전부 실패")
-            return
+            _log("웹 뷰어 비활성 — 포트 바인딩 실패")
+            return False
         self._httpd.ports_info = self._ports_info
         self._httpd.feed_for = self._feed_for
         self._httpd.buffer_info = self._buffer_info
@@ -157,11 +155,14 @@ class ViewerServer:
         threading.Thread(
             target=self._httpd.serve_forever, name="serial-web", daemon=True
         ).start()
+        return True
 
     def stop(self) -> None:
         if self._httpd is not None:
             self._httpd.shutdown()
             self._httpd.server_close()
+            self._httpd = None
+        self.url = None
 
 
 # ---- 단일 페이지(인라인 CSS/JS, 외부 CDN 없음 → 오프라인 동작) ----
@@ -536,9 +537,7 @@ kbd {
         padding: 5px 7px; border-radius: 4px; cursor: pointer; }
 .prow:hover { background: var(--bg-hover); }
 .prow.active { background: var(--accent-bg); }
-.prow.released { opacity: .55; }
 .prow .dot { width: 9px; height: 9px; animation: none; }
-.prow.released .dot { background: var(--muted); box-shadow: none; }
 .pb-board { font: 13px var(--mono); color: var(--fg-bright);
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .prow.active .pb-board { color: var(--accent); font-weight: 600; }
@@ -720,7 +719,7 @@ body.rhythm-relaxed { --row-pad: 6px; --lh: 1.9; }
 
   function sig(ports, session, active) {
     return active + "|" + (session || "") + "|" + ports.map(p =>
-      [p.port, p.hw, p.board, p.label, p.connected, p.released, p.baud, p.last_error].join(",")
+      [p.port, p.hw, p.board, p.label, p.connected, p.baud, p.last_error].join(",")
     ).join(";");
   }
 
@@ -754,9 +753,9 @@ body.rhythm-relaxed { --row-pad: 6px; --lh: 1.9; }
 
   // 포트 한 행:  ● dot   board   COM
   function buildRow(p, active, onSelect) {
-    const row = el("div", "prow" + (p.port === active ? " active" : "") + (p.released ? " released" : ""));
-    row.title = p.released ? "release 상태 — MCP 도구 호출 시 재점유" : "클릭 — 이 포트 로그 보기";
-    row.appendChild(el("span", "dot " + (p.released ? "" : (p.connected ? "on" : "fail"))));
+    const row = el("div", "prow" + (p.port === active ? " active" : ""));
+    row.title = "클릭 — 이 포트 로그 보기";
+    row.appendChild(el("span", "dot " + (p.connected ? "on" : "fail")));
     row.appendChild(txt("span", chipFamily(boardOf(p) || p.port), "pb-board"));
     row.appendChild(txt("span", p.port, "pb-com"));
     row.onclick = () => onSelect(p.port);
@@ -802,7 +801,7 @@ body.rhythm-relaxed { --row-pad: 6px; --lh: 1.9; }
     head.appendChild(txt("span", session, "sess-name"));
     const btn = el("button", "btn release");
     btn.textContent = "해제";
-    btn.title = "이 AI 세션이 점유한 포트를 모두 해제 — 사람·TeraTerm가 쓸 수 있게";
+    btn.title = "이 AI 세션의 전체 소유권 해제 — 사람·TeraTerm가 쓸 수 있게";
     btn.onclick = (e) => { e.stopPropagation(); onRelease(ports.map(p => p.port), session); };
     head.appendChild(btn);
     card.appendChild(head);
@@ -815,12 +814,11 @@ body.rhythm-relaxed { --row-pad: 6px; --lh: 1.9; }
     if (s === lastSig) return;
     lastSig = s;
     root.innerHTML = "";
+    root.appendChild(buildSession(session, ports, onRelease));
     if (!ports.length) {
       root.appendChild(txt("div", "감지된 시리얼 포트가 없습니다.", "sess-meta"));
       return;
     }
-    // 맨 위: AI 세션 + 해제
-    root.appendChild(buildSession(session, ports, onRelease));
     // 그 아래: H.W 유닛별 박스 (연속 같은 유닛 묶기 — p.hw 우선, 없으면 label 별칭에서 추론)
     const boxes = el("div", "hwboxes");
     const hasUnit = ports.some(p => unitOf(p));
@@ -1190,8 +1188,9 @@ function selectPort(port) {
   refreshBuffer();
 }
 async function releaseSession(ports, session) {
-  if (!confirm((session || "이 세션") + "\n이 AI 세션의 포트 점유를 해제할까요?\n(" + ports.join(", ") + ")")) return;
-  for (const p of ports) { try { await fetch("/api/release?port=" + encodeURIComponent(p)); } catch (e) {} }
+  const label = ports.length ? ports.join(", ") : "전체 세션";
+  if (!confirm((session || "이 세션") + "\n이 AI 세션의 소유권을 해제할까요?\n(" + label + ")")) return;
+  try { await fetch("/api/release"); } catch (e) {}
   resetPortBoardSig();
   refreshStatus();
 }

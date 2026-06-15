@@ -22,7 +22,7 @@ def viewer():
     def release_port(port):
         release_calls.append(port)
         if port == "COM_A":
-            return {"status": "ok", "port": port, "released": True}
+            return {"status": "ok", "released": True}
         return {"status": "error", "message": "unknown port"}
 
     v = ViewerServer(
@@ -33,10 +33,10 @@ def viewer():
         status_info=lambda: {"session": "codex", "ports": [
             {"port": "COM_A", "label": "SSM (COM_A)", "connected": True, "baud": 115200,
              "last_error": None, "buffer_entries": 3, "buffer_capacity": 2000,
-             "hw": "SSM", "board": None, "released": False},
+             "hw": "SSM", "board": None},
             {"port": "COM_B", "label": "COM_B", "connected": False, "baud": 115200,
              "last_error": "busy", "buffer_entries": 0, "buffer_capacity": 2000,
-             "hw": None, "board": None, "released": True},
+             "hw": None, "board": None},
         ]},
         release_port=release_port,
         port=0,   # 테스트는 임시 포트
@@ -75,9 +75,9 @@ def test_api_status_returns_port_array(viewer):
     assert d["ports"][0]["connected"] is True
     assert d["ports"][0]["hw"] == "SSM"
     assert d["ports"][0]["board"] is None
-    assert d["ports"][0]["released"] is False
     assert d["ports"][1]["last_error"] == "busy"
-    assert d["ports"][1]["released"] is True
+    assert "released" not in d["ports"][0]
+    assert "released" not in d["ports"][1]
 
 
 def test_api_buffer_routes_by_port(viewer):
@@ -88,8 +88,23 @@ def test_api_buffer_routes_by_port(viewer):
 def test_api_release_routes_to_backend_callback(viewer):
     v, _, release_calls = viewer
     d = _get_json(v.url + "/api/release?port=COM_A")
-    assert d == {"status": "ok", "port": "COM_A", "released": True}
+    assert d == {"status": "ok", "released": True}
     assert release_calls == ["COM_A"]
+
+
+def test_api_release_without_port_routes_to_backend_callback():
+    calls = []
+    v = ViewerServer(ports_info=lambda: [], feed_for=lambda p: None,
+                     buffer_info=lambda p: {}, status_info=lambda: {"ports": []},
+                     release_port=lambda p: calls.append(p) or {"status": "ok", "released": True},
+                     port=0)
+    v.start()
+    try:
+        d = _get_json(v.url + "/api/release")
+    finally:
+        v.stop()
+    assert d == {"status": "ok", "released": True}
+    assert calls == [""]
 
 
 def test_api_release_unknown_port_returns_404(viewer):
@@ -128,7 +143,7 @@ def test_unknown_path_returns_404(viewer):
     assert exc.value.code == 404
 
 
-def test_port_fallback_when_preferred_busy():
+def test_no_port_fallback_when_preferred_busy():
     blocker = socket.socket()
     blocker.bind(("127.0.0.1", 0))
     blocker.listen(1)
@@ -139,21 +154,20 @@ def test_port_fallback_when_preferred_busy():
                          port=busy_port)
         v.start()
         try:
-            assert v.url is not None
-            assert v.url != f"http://127.0.0.1:{busy_port}"
+            assert v.url is None
         finally:
             v.stop()
     finally:
         blocker.close()
 
 
-def test_start_with_out_of_range_port_falls_back_not_crash():
-    # SERIAL_WEB 오타(99999)가 OverflowError로 본체를 죽이면 안 된다 — 임시 포트 폴백
+def test_start_with_out_of_range_port_fails_closed_not_crash():
+    # SERIAL_WEB 오타(99999)는 _load_config에서 걸러야 한다. ViewerServer 자체는 폴백하지 않는다.
     v = ViewerServer(ports_info=lambda: [], feed_for=lambda p: None,
                      buffer_info=lambda p: {}, status_info=lambda: {"ports": []},
                      port=99999)
     v.start()
     try:
-        assert v.url is not None
+        assert v.url is None
     finally:
         v.stop()
