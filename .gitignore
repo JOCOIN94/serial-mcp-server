@@ -7,6 +7,8 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+.pytest_cache_codex/
+_pyt*.txt
 
 # 가상환경 / uv (uv.lock은 앱이므로 추적 — 검증된 의존성 조합 기록)
 .venv/
