@@ -224,6 +224,112 @@ def test_send_routes_by_port_and_errors_on_ambiguous(monkeypatch, dual):
     assert b.reader.writes == [(b"AT\n", "[TX] AT")]
 
 
+@pytest.mark.parametrize("tool", ["send", "reset"])
+def test_write_tools_reject_unknown_port_before_approval(monkeypatch, single, tool):
+    calls = []
+
+    async def confirm_spy(ctx, summary):
+        calls.append(summary)
+        return None
+
+    monkeypatch.setattr(srv, "_confirm_write", confirm_spy)
+
+    if tool == "send":
+        out = run(srv.send_serial_command("AT", port="UNKNOWN", wait_ms=0, ctx=FakeContext("accept")))
+    else:
+        out = run(srv.reset_board(port="UNKNOWN", wait_ms=0, ctx=FakeContext("accept")))
+
+    assert out["status"] == "error"
+    assert "UNKNOWN" in out["message"]
+    assert calls == []
+    assert single.reader.writes == []
+    assert single.reader.pulses == 0
+
+
+@pytest.mark.parametrize("tool", ["send", "reset"])
+def test_write_tools_reject_ambiguous_default_before_approval(monkeypatch, dual, tool):
+    calls = []
+
+    async def confirm_spy(ctx, summary):
+        calls.append(summary)
+        return None
+
+    monkeypatch.setattr(srv, "_confirm_write", confirm_spy)
+
+    if tool == "send":
+        out = run(srv.send_serial_command("AT", wait_ms=0, ctx=FakeContext("accept")))
+    else:
+        out = run(srv.reset_board(wait_ms=0, ctx=FakeContext("accept")))
+
+    assert out["status"] == "error"
+    assert out["ports"] == ["SSM (COM_A)", "SB (COM_B)"]
+    assert calls == []
+    assert dual[0].reader.writes == []
+    assert dual[1].reader.writes == []
+    assert dual[0].reader.pulses == 0
+    assert dual[1].reader.pulses == 0
+
+
+@pytest.mark.parametrize("tool", ["send", "reset"])
+def test_write_tools_decline_releases_owner_acquired_for_call(monkeypatch, tool):
+    mon = make_monitor()
+    ensure_calls = []
+    confirm_calls = []
+
+    def fake_ensure_owner(ctx=None, *, for_status=False):
+        ensure_calls.append((ctx, for_status))
+        srv._owner_active = True
+        srv._monitors = {"COM_A": mon}
+        return None
+
+    async def decline_spy(ctx, summary):
+        confirm_calls.append(summary)
+        return {"status": "declined", "message": "거부"}
+
+    monkeypatch.setattr(srv, "_monitors", {})
+    monkeypatch.setattr(srv, "_owner_active", False, raising=False)
+    monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
+    monkeypatch.setattr(srv, "_ensure_owner", fake_ensure_owner)
+    monkeypatch.setattr(srv, "_confirm_write", decline_spy)
+
+    if tool == "send":
+        out = run(srv.send_serial_command("AT", port="SSM", wait_ms=0, ctx=FakeContext("decline")))
+    else:
+        out = run(srv.reset_board(port="SSM", wait_ms=0, ctx=FakeContext("decline")))
+
+    assert out["status"] == "declined"
+    assert len(ensure_calls) == 1
+    assert confirm_calls and "SSM (COM_A)" in confirm_calls[0]
+    assert srv._owner_active is False
+    assert srv._monitors == {}
+    assert mon.reader.writes == []
+    assert mon.reader.pulses == 0
+
+
+@pytest.mark.parametrize("tool", ["send", "reset"])
+def test_write_tools_decline_keeps_existing_owner(monkeypatch, single, tool):
+    calls = []
+
+    async def decline_spy(ctx, summary):
+        calls.append(summary)
+        return {"status": "declined", "message": "거부"}
+
+    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    monkeypatch.setattr(srv, "_confirm_write", decline_spy)
+
+    if tool == "send":
+        out = run(srv.send_serial_command("AT", port="SSM", wait_ms=0, ctx=FakeContext("decline")))
+    else:
+        out = run(srv.reset_board(port="SSM", wait_ms=0, ctx=FakeContext("decline")))
+
+    assert out["status"] == "declined"
+    assert calls and "SSM (COM_A)" in calls[0]
+    assert srv._owner_active is True
+    assert srv._monitors == {"COM_A": single}
+    assert single.reader.writes == []
+    assert single.reader.pulses == 0
+
+
 def test_send_write_exception_returns_error_dict(monkeypatch):
     monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": False})
     reader = RecordingReader(write_exc=srv.serial.SerialException("boom"))

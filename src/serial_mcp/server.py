@@ -389,12 +389,15 @@ def _owner_url(port: Optional[int] = None) -> str:
 
 def _probe_owner_info(port: int) -> dict:
     """다른 owner의 /api/status를 짧게 조회해 안내에 쓸 세션명을 얻는다."""
-    info = {"owner_url": _owner_url(port), "owner_session": None}
+    info = {"owner_url": _owner_url(port), "owner_session": None, "reachable": False}
     try:
         with urlopen(info["owner_url"] + "/api/status", timeout=0.3) as response:
+            if getattr(response, "status", 200) != 200:
+                return info
             payload = json.loads(response.read().decode("utf-8"))
     except (OSError, URLError, TimeoutError, json.JSONDecodeError):
         return info
+    info["reachable"] = True
     session = payload.get("session")
     if isinstance(session, str) and session.strip():
         info["owner_session"] = session.strip()
@@ -405,10 +408,11 @@ def _owner_busy_result(*, for_status: bool = False) -> dict:
     port = _owner_port()
     info = _probe_owner_info(port)
     who = f"({info['owner_session']})" if info["owner_session"] else ""
-    message = (
-        f"다른 serial-mcp 세션{who}이 점유 중입니다. "
-        f"먼저 해제하세요. 웹뷰어: {info['owner_url']}"
-    )
+    prefix = f"다른 serial-mcp 세션{who}이 점유 중입니다. 먼저 해제하세요."
+    if info["reachable"]:
+        message = f"{prefix} 웹뷰어: {info['owner_url']}"
+    else:
+        message = f"{prefix} owner 세션을 종료하거나 그 세션 뷰어에서 해제하세요."
     out = {
         "status": "busy" if for_status else "error",
         "message": message,
@@ -554,7 +558,13 @@ def _release_owner_locked(reason: str) -> None:
     global _monitors, _viewer, _lock_socket, _owner_active, _hotplug_thread
 
     had_owner = _owner_active or bool(_monitors) or _viewer is not None or _lock_socket is not None
+    hotplug_thread = _hotplug_thread
     _hotplug_stop.set()
+    if hotplug_thread is not None and hotplug_thread is not threading.current_thread():
+        try:
+            hotplug_thread.join(timeout=1.0)
+        except RuntimeError:
+            pass
 
     for mon in list(_monitors.values()):
         reader = mon.reader
@@ -959,20 +969,22 @@ async def send_serial_command(
     if command == "" and eol == "":
         return {"status": "error", "message": "빈 페이로드는 전송하지 않는다.", "count": 0, "lines": []}
     wait_ms = _clamp_wait_ms(wait_ms)
-    payload = (command + eol).encode("utf-8")
-    target = (port or "").strip() or "기본/단일 포트"
-    block = await _confirm_write(
-        ctx,
-        f"{target} 대상으로 시리얼 명령 전송 승인 요청\n명령: {command!r} (eol={eol!r}, {len(payload)}바이트)",
-    )
-    if block:
-        return {**block, "count": 0, "lines": []}
+    was_owner = _owner_active or bool(_monitors)
     busy = _ensure_owner(ctx)
     if busy:
         return {**busy, "count": 0, "lines": []}
     mon, err = _resolve_port(port)
     if err:
         return {**err, "count": 0, "lines": []}
+    payload = (command + eol).encode("utf-8")
+    block = await _confirm_write(
+        ctx,
+        f"{mon.label} 대상으로 시리얼 명령 전송 승인 요청\n명령: {command!r} (eol={eol!r}, {len(payload)}바이트)",
+    )
+    if block:
+        if not was_owner:
+            _release_owner("쓰기 승인 차단 — 새 owner 반납")
+        return {**block, "count": 0, "lines": []}
     t0 = datetime.now()
     try:
         mon.reader.write(payload, audit=f"[TX] {command}")
@@ -1013,19 +1025,21 @@ async def reset_board(port: str = "", wait_ms: int = 2000, ctx: Optional[Context
     if not _config.get("write", True):
         return _write_disabled_result()
     wait_ms = _clamp_wait_ms(wait_ms)
-    target = (port or "").strip() or "기본/단일 포트"
-    block = await _confirm_write(
-        ctx,
-        f"{target} 보드를 DTR/RTS 펄스로 하드웨어 리셋합니다. 승인하시겠습니까?",
-    )
-    if block:
-        return {**block, "count": 0, "lines": []}
+    was_owner = _owner_active or bool(_monitors)
     busy = _ensure_owner(ctx)
     if busy:
         return {**busy, "count": 0, "lines": []}
     mon, err = _resolve_port(port)
     if err:
         return {**err, "count": 0, "lines": []}
+    block = await _confirm_write(
+        ctx,
+        f"{mon.label} 보드를 DTR/RTS 펄스로 하드웨어 리셋합니다. 승인하시겠습니까?",
+    )
+    if block:
+        if not was_owner:
+            _release_owner("리셋 승인 차단 — 새 owner 반납")
+        return {**block, "count": 0, "lines": []}
     t0 = datetime.now()
     try:
         mon.reader.pulse_reset()
