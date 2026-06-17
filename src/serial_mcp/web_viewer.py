@@ -1166,6 +1166,18 @@ async function refreshBuffer() {
 setInterval(refreshBuffer, 2000);
 
 /* ============================ 상태 폴링 ============================ */
+// 기본 표시 포트: 저장된 선택 > 데이터 들어오는 포트 > 연결된 포트 > 첫 포트.
+// 맹목적 ports[0] 은 유휴 포트(예: SSM 이 COM13 으로 옮겨가 비어버린 COM4)에 착지해
+// 스트림·버퍼가 둘 다 빈 화면이 되고 '로그 없음'으로 오인된다.
+function pickDefaultPort(ports) {
+  const saved = localStorage.getItem("sv_port");
+  if (saved && ports.some(p => p.port === saved)) return saved;
+  const withData = ports.find(p => (p.buffer_entries || 0) > 0);
+  if (withData) return withData.port;
+  const conn = ports.find(p => p.connected);
+  if (conn) return conn.port;
+  return ports[0].port;
+}
 async function refreshStatus() {
   let d;
   try { d = await (await fetch("/api/status")).json(); }
@@ -1173,7 +1185,7 @@ async function refreshStatus() {
   const ports = d.ports || [];
   state.ports = ports;
   state.session = d.session || null;
-  if (!state.port && ports.length) connectStream(ports[0].port);
+  if (!state.port && ports.length) connectStream(pickDefaultPort(ports));
   if (window.renderPortBoard) renderPortBoard(ports, state.session, state.port, selectPort, releaseSession);
   const p = ports.find(x => x.port === state.port) || ports[0];
   if (p) $("cBuffer").textContent = (p.buffer_entries ?? 0) + "/" + (p.buffer_capacity ?? "?");
@@ -1183,6 +1195,7 @@ setInterval(refreshStatus, 5000);
 /* 포트 전환 · 소유권 종료 (상태 보드는 항상 표시) */
 function selectPort(port) {
   if (port !== state.port) connectStream(port);
+  localStorage.setItem("sv_port", port);   // 사용자가 고른 포트를 기억(새로고침 후에도)
   resetPortBoardSig();
   refreshStatus();
   refreshBuffer();
@@ -1359,10 +1372,8 @@ document.addEventListener("keydown", e => {
 
 /* ============================ 부팅 ============================ */
 async function init() {
-  try {
-    const d = await (await fetch("/api/ports")).json();
-    if (!state.port && (d.ports || []).length) connectStream(d.ports[0].port);
-  } catch (e) { /* 포트 목록 조회 실패 — 좌측 portboard 가 빈 상태를 표시(board.js) */ }
+  // 기본 포트 선택은 refreshStatus 가 담당한다 — /api/status 는 connected·buffer_entries 를
+  // 실어 주므로 pickDefaultPort 가 '데이터 있는 포트'로 착지할 수 있다(/api/ports 는 빈약).
   await refreshStatus();
   recount();
 }
