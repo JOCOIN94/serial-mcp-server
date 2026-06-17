@@ -4,6 +4,7 @@
 @mcp.tool()은 원본 함수를 반환하므로 직접 호출.
 """
 
+import threading
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -16,10 +17,17 @@ from serial_mcp.viewer_feed import RawFeed
 BASE = datetime(2026, 6, 9, 14, 0, 0, 0)
 
 
-def make_monitor(port="COM_T", name=None, connected=True, last_error=None, opened_at=None):
-    """실제 LineBuffer/RawFeed + 가짜 reader로 PortMonitor 구성."""
+def make_monitor(port="COM_T", name=None, connected=True, last_error=None, opened_at=None,
+                 first_open_done=True):
+    """실제 LineBuffer/RawFeed + 가짜 reader로 PortMonitor 구성.
+
+    first_open_done: 첫 open 결판 여부(기본 True=결판남). False면 '여는 중'(opening) 재현."""
+    ev = threading.Event()
+    if first_open_done:
+        ev.set()
     reader = SimpleNamespace(connected=connected, port=port, baud=115200,
-                             last_error=last_error, opened_at=opened_at)
+                             last_error=last_error, opened_at=opened_at,
+                             _first_open_done=ev)
     return srv.PortMonitor(port=port, name=name,
                            buffer=LineBuffer(maxlen=100, dedup=1),
                            feed=RawFeed(), reader=reader)
@@ -276,3 +284,89 @@ def test_tee_path_for_inserts_tag_and_sanitizes():
     assert srv._tee_path_for("log.txt", "SB1 (COM13)") == "log.SB1__COM13_.txt"
     assert srv._tee_path_for("noext", "A") == "noext.A"
     assert srv._tee_path_for(None, "SSM") is None
+
+
+# ---- #2: 첫 open self-trigger race 가드 (opening 플래그 + 바운드 대기) ----
+
+def test_status_reports_opening_when_first_open_unresolved(monkeypatch):
+    """첫 open 미결판(Event 미set, connected=false) → opening=true, message '응답 없음'.
+    '꺼짐'이 아니라 '여는 중'으로 읽혀야 한다."""
+    mon = make_monitor("COM_O", connected=False, first_open_done=False)
+    monkeypatch.setattr(srv, "_monitors", {"COM_O": mon})
+    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    monkeypatch.setattr(srv, "_STATUS_FIRST_OPEN_WAIT_S", 0)   # 대기 건너뜀(테스트 속도)
+
+    out = srv.get_serial_status(port="COM_O")
+    assert out["connected"] is False
+    assert out["opening"] is True
+    assert "응답 없음" in out["message"]
+
+
+def test_status_dead_port_reads_as_failed_not_opening(monkeypatch):
+    """죽은 포트(첫 open 실패로 결판: Event set + last_error) → opening=false,
+    message '안 됨: ...'. 사용자 합의 규칙: '연결 중'이 아니라 '안 됨'."""
+    mon = make_monitor("COM_D", connected=False, last_error="포트 열기 실패(COM_D): busy",
+                        first_open_done=True)
+    monkeypatch.setattr(srv, "_monitors", {"COM_D": mon})
+    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+
+    out = srv.get_serial_status(port="COM_D")
+    assert out["connected"] is False
+    assert out["opening"] is False
+    assert out["message"].startswith("안 됨")
+    assert "busy" in out["message"]
+
+
+def test_status_waits_for_first_open_then_reports_connected(monkeypatch):
+    """바운드 대기: 호출 시점엔 미결판이어도 대기 창 안에 첫 open 이 끝나면
+    (Event set + connected=true) status 는 connected=true 를 본다(거짓 false 안 뱉음)."""
+    mon = make_monitor("COM_W", connected=False, first_open_done=False)
+    monkeypatch.setattr(srv, "_monitors", {"COM_W": mon})
+    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    monkeypatch.setattr(srv, "_STATUS_FIRST_OPEN_WAIT_S", 1.0)
+
+    def finish_open():
+        mon.reader.connected = True
+        mon.reader._first_open_done.set()
+    threading.Timer(0.05, finish_open).start()
+
+    out = srv.get_serial_status(port="COM_W")
+    assert out["connected"] is True
+    assert out["opening"] is False
+    assert out["message"] == "연결됨"
+
+
+def test_status_open_wait_returns_immediately_when_resolved(monkeypatch):
+    """이미 결판난(Event set) 포트들만이면 대기는 0 — 둘째 호출부터 지연 없음."""
+    import time as _time
+    a = make_monitor("COM_A", name="SSM")                       # 기본 first_open_done=True
+    b = make_monitor("COM_B", connected=False, last_error="x")  # 결판된 실패
+    monkeypatch.setattr(srv, "_monitors", {"COM_A": a, "COM_B": b})
+    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    monkeypatch.setattr(srv, "_STATUS_FIRST_OPEN_WAIT_S", 5.0)  # 크게 잡아도 안 기다려야 함
+
+    t0 = _time.monotonic()
+    out = srv.get_serial_status()
+    assert _time.monotonic() - t0 < 0.5
+    assert out["status"] == "ok"
+
+
+def test_status_includes_opening_field_in_aggregate(monkeypatch):
+    """집계 경로도 포트별 opening 필드를 싣는다."""
+    a = make_monitor("COM_A", name="SSM")
+    monkeypatch.setattr(srv, "_monitors", {"COM_A": a})
+    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    out = srv.get_serial_status()
+    assert "opening" in out["ports"][0]
+    assert out["ports"][0]["opening"] is False
+
+
+# ---- #1: 뷰어 기본포트 선택이 의존하는 백엔드 계약 가드 ----
+
+def test_viewer_status_ports_carry_connected_and_buffer_entries(dual):
+    """뷰어 JS pickDefaultPort 가 의존하는 계약: 각 포트가 connected·buffer_entries 를
+    싣는다. 이게 조용히 사라지면 뷰어 기본포트 선택이 깨진다."""
+    out = srv._viewer_status_info()
+    for p in out["ports"]:
+        assert "connected" in p
+        assert "buffer_entries" in p

@@ -89,6 +89,9 @@ class SerialReader:
         self._thread = threading.Thread(target=self._run, name="serial-reader", daemon=True)
         self._stop = threading.Event()
         self._wake = threading.Event()
+        # 첫 open 시도가 결판(성공/실패)나면 set — get_serial_status 의 바운드 대기가
+        # 이걸 기다려 lazy 기동 직후의 self-trigger race(전 포트 일시 false)를 막는다.
+        self._first_open_done = threading.Event()
         self._ser: Optional[serial.Serial] = None
         self._ser_lock = threading.Lock()
         self._tee = None
@@ -143,6 +146,10 @@ class SerialReader:
             self.last_error = f"포트 열기 예외({self.port}): {e!r}"
             _log(self.last_error)
             return False
+        finally:
+            # 첫 시도가 성공이든 실패든 '결판났음'을 신호한다(status 바운드 대기를 깨움).
+            # 멱등 — 재연결 루프의 후속 _open 호출도 무해. 죽은 포트는 즉시 실패→즉시 set.
+            self._first_open_done.set()
 
     def _wait_retry(self) -> None:
         self._wake.wait(self.reconnect_interval)
@@ -739,6 +746,48 @@ def list_serial_ports(ctx: Optional[Context] = None) -> dict:
     }
 
 
+# get_serial_status 의 '첫 open' 동기화 -----------------------------------------
+# 서버는 첫 시리얼 도구 호출 때 owner/reader 를 lazy 기동하고, reader.start() 는
+# 스레드만 띄운 뒤 즉시 반환한다(_open 은 백그라운드). 동기화 없이 곧장 스냅샷하면,
+# 그 첫 호출 스스로가 띄운 reader 가 포트를 열기 전이라 전 포트가 connected=false 로
+# 보이는 self-trigger race 가 난다(과거 'AI가 보드 꺼짐 오판'의 코드 원인).
+# → status 는 '첫 open 결판'을 최대 _STATUS_FIRST_OPEN_WAIT_S 초 기다린 뒤 스냅샷한다.
+_STATUS_FIRST_OPEN_WAIT_S = 1.5   # 상한(보통 1초 미만 결판). 테스트는 0 으로 낮춘다.
+
+
+def _await_first_open(budget_s: float) -> None:
+    """모니터들의 '첫 open 시도'가 결판날 때까지 최대 budget_s 동안 기다린다.
+
+    공유 예산(여러 포트가 함께 그 안에 결판). _first_open_done 신호가 오면 즉시 깨고,
+    이미 결판난 포트는 대기 0 — 둘째 호출부터는 사실상 지연이 없다. 죽은 포트는 첫
+    _open 이 즉시 실패하며 Event 를 set 하므로 여기 매달리지 않는다.
+    """
+    if budget_s <= 0:
+        return
+    deadline = time.monotonic() + budget_s
+    for m in list(_monitors.values()):
+        ev = getattr(m.reader, "_first_open_done", None)
+        if ev is None:
+            continue
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        ev.wait(remaining)
+
+
+def _status_message(d: dict) -> str:
+    """단일 포트 status 의 사람용 message. 과도기 '연결 중'은 노출하지 않는다 —
+    연결 안 된 모든 경우는 '안 됨'으로 읽히되, 첫 open 이 대기 후에도 안 끝난 지연/먹통은
+    '응답 없음', 실패 이유(last_error)가 있으면 그 이유를 붙인다."""
+    if d["connected"]:
+        return "연결됨"
+    if d.get("opening"):
+        return "안 됨(응답 없음 — 여는 중)"
+    if d.get("last_error"):
+        return f"안 됨: {d['last_error']}"
+    return "안 됨"
+
+
 @mcp.tool()
 def get_serial_status(port: str = "", ctx: Optional[Context] = None) -> dict:
     """[언제 호출] 로그가 안 들어올 때 '어느 보드가 연결돼 있는지'부터 확인할 때.
@@ -749,20 +798,32 @@ def get_serial_status(port: str = "", ctx: Optional[Context] = None) -> dict:
     connected 가 false 이고 last_error 에 점유/권한 에러가 있으면 사람에게 같은
     포트를 쓰는 다른 프로그램(테라텀 등) 종료를 요청하라.
 
-    사람이 로그를 직접 눈으로 보고 싶어 하면 viewer_url 링크를 안내하라(웹 뷰어).
+    [필수] 세션에서 이 도구를 처음 호출하면, 사용자가 요청하지 않아도 응답의
+    viewer_url(웹 뷰어) 링크를 사용자에게 안내하라 — 사용자가 같은 실시간 스트림을
+    눈으로 교차검증하게 하기 위함. URL 포트는 서버 재시작마다 바뀌니 하드코딩 말고
+    매번 응답에서 새로 읽어라(없으면 SERIAL_WEB=0 — 링크 없이 진행).
+
+    [상태 해석] connected=false 라도 opening=true(message '응답 없음')면 '꺼짐'이
+    아니라 첫 연결 시도 지연이다. 실제 미연결/실패는 last_error 로 판단하라 —
+    last_error 없이 connected=false 면 보통 막 lazy 기동해 여는 중이니 잠시 후 재확인.
     [루프 단계] 문제 진단.
     """
     busy = _ensure_owner(ctx, for_status=True)
     if busy:
         return busy
 
+    # 첫 open 결판을 잠깐 기다려 self-trigger race 를 없앤다(둘째 호출부터는 지연 0).
+    _await_first_open(_STATUS_FIRST_OPEN_WAIT_S)
+
     def one(m: PortMonitor) -> dict:
         r = m.reader
+        ev = getattr(r, "_first_open_done", None)
         return {
             "name": m.name,
             "label": m.label,
             "port": m.port,
             "connected": bool(r and r.connected),
+            "opening": bool(r) and ev is not None and not ev.is_set(),
             "baud": r.baud if r else None,
             "last_error": r.last_error if r else None,
             "opened_at": r.opened_at.isoformat() if r and r.opened_at else None,
@@ -774,7 +835,7 @@ def get_serial_status(port: str = "", ctx: Optional[Context] = None) -> dict:
             return {**err, "connected": False, "viewer_url": _viewer_url()}
         d = one(mon)
         d["status"] = "ok"
-        d["message"] = "연결됨" if d["connected"] else "연결 안 됨"
+        d["message"] = _status_message(d)
         d["viewer_url"] = _viewer_url()
         return d
     if not _monitors:

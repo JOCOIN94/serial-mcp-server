@@ -64,7 +64,7 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 각 도구는 `status`와 `message`를 포함한 dict를 반환한다. `status`는 기본적으로 `ok|error`이며, 사용자가 쓰기 승인을 거부한 경우 `declined`를 반환한다(시스템 오류가 아니므로 AI는 같은 요청을 반복하지 말고 사람과 다음 행동을 합의한다). docstring은 사람을 위한 설명이 아니라 AI를 위한 사용 지침으로 작성하며, AI가 해당 도구를 언제·어떤 목적으로 호출하는지 명확히 기술한다. 반환 dict는 AI가 파싱·추론하기 좋은 구조로 구성한다. 다중 포트에서는 모든 조회/쓰기 도구가 `port` 인자(별칭/포트명/라벨 `SSM (COM4)` 형태 모두 허용, 대소문자 무관)를 받는다 — 에러 응답의 `ports` 목록 항목을 그대로 되돌려 호출해도 해석된다 — 미지정 시 포트 1개면 그 포트, 복수면 에러와 함께 `ports` 목록을 반환한다(`get_serial_status` 미지정은 전 포트 상태 배열, `clear_log_buffer` 미지정은 전체 비우기).
 
 - `list_serial_ports` : 사용 가능한 포트 목록 + VID/PID·description(어댑터 칩 식별용, 예: CH343, CP210x) + 별칭 `name`·`monitored_ports`(보드 식별은 별칭으로).
-- `get_serial_status` : 현재 연결 상태, 포트, 보드레이트. (웹 뷰어 활성 시 `viewer_url` 포함 — `get_log_buffer_info`도 동일. 사람이 로그를 직접 보고 싶어 하면 AI가 이 링크를 안내한다.)
+- `get_serial_status` : 현재 연결 상태(`connected`/`opening`), 포트, 보드레이트. (웹 뷰어 활성 시 `viewer_url` 포함 — `get_log_buffer_info`도 동일. AI는 세션 첫 호출 시 사용자 요청이 없어도 이 링크를 안내한다.) 첫 호출은 reader 의 첫 open 결판을 짧게(기본 1.5초) 기다려 lazy 기동 직후의 self-trigger race(전 포트 일시 `connected=false`)를 막는다. `opening=true`는 '꺼짐'이 아니라 첫 연결 진행/지연이며, 실제 미연결은 `last_error`로 판단한다.
 - `get_recent_logs(lines=200)` : 최근 N줄(접힌 묶음 반복 횟수 표기 포함).
 - `query_serial_logs(pattern, max_results=100)` : 정규식으로 버퍼 검색.
 - `get_log_buffer_info` : 버퍼 크기 / 최신·최오래 항목.
