@@ -718,6 +718,13 @@ def list_serial_ports(ctx: Optional[Context] = None) -> dict:
     별칭 name 이 붙는다. monitored_ports 는 현재 모니터링 목록(별칭 표기).
     VID/PID·description 으로 칩(CH343, CP210x 등)을 추론하라.
 
+    [주의] 이 도구는 OS 포트 나열만 한다 — owner 획득/모니터링을 시작하지 않는다.
+    monitored 가 전부 false(0개 모니터링)인데 USB 포트가 보이면 '모니터 대상이 없다'가
+    아니라 아직 owner 미획득일 뿐이다. get_serial_status 를 호출하면 owner 를 잡고 USB
+    포트를 자동으로 모니터링한다 — 모니터 대상은 서버가 자동 결정하므로 **어느 포트를
+    잡을지 사람에게 묻지 마라**(SSM 등 별칭도 AI가 아니라 SERIAL_NAMES/AUTONAME 이 만든다).
+    응답의 hint 도 같은 안내다.
+
     [루프 단계] 사전 점검 — 보통 한 번만.
     """
     _capture_session(ctx)
@@ -738,12 +745,21 @@ def list_serial_ports(ctx: Optional[Context] = None) -> dict:
                 "name": mon.name if mon else None,
             }
         )
-    return {
+    result = {
         "status": "ok",
         "message": f"{len(ports)}개 포트 발견, {len(_monitors)}개 모니터링 중",
         "monitored_ports": [m.label for m in _monitors.values()],
         "ports": ports,
     }
+    if not _monitors and any(p["vid"] is not None for p in ports):
+        # owner 미획득 + USB 포트 존재 → 모니터링이 아직 안 시작된 것일 뿐.
+        # AI가 'list 의 0개'를 보고 사람에게 포트 선택을 묻는 오작동을 막는 런타임 안내.
+        result["hint"] = (
+            "0개 모니터링 중 — 아직 owner 미획득 상태다. get_serial_status 를 호출하면 owner 를 "
+            "잡고 USB 포트를 자동 모니터링한다(모니터 대상은 서버가 자동 결정 — 어느 포트를 잡을지 "
+            "사람에게 묻지 마라). 0개가 계속되면 다른 세션이 점유 중일 수 있으니 웹 뷰어 release 를 안내하라."
+        )
+    return result
 
 
 # get_serial_status 의 '첫 open' 동기화 -----------------------------------------

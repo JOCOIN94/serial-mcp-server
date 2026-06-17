@@ -370,3 +370,36 @@ def test_viewer_status_ports_carry_connected_and_buffer_entries(dual):
     for p in out["ports"]:
         assert "connected" in p
         assert "buffer_entries" in p
+
+
+# ---- #4: list_serial_ports 의 '0개 모니터링' → get_serial_status 유도 hint ----
+
+def test_list_ports_hints_get_status_when_unmonitored(monkeypatch):
+    """owner 미획득(0 monitored)인데 USB 포트가 보이면 get_serial_status 로 획득하라는
+    hint 를 실어, AI가 '어느 포트 잡을지'를 사람에게 묻는 오작동을 막는다."""
+    monkeypatch.setattr(srv, "_monitors", {})
+    fake = [SimpleNamespace(device="COM4", description="CH343", hwid="USB VID:PID=1A86:55D3",
+                            vid=0x1A86, pid=0x55D3, manufacturer="wch.cn", serial_number="x")]
+    monkeypatch.setattr(srv.list_ports, "comports", lambda: fake)
+    out = srv.list_serial_ports()
+    assert "hint" in out
+    assert "get_serial_status" in out["hint"]
+
+
+def test_list_ports_no_hint_when_monitoring(monkeypatch, dual):
+    """모니터링 중이면 hint 를 싣지 않는다."""
+    fake = [SimpleNamespace(device="COM_A", description="x", hwid="USB VID:PID=1:1",
+                            vid=1, pid=1, manufacturer="m", serial_number="s")]
+    monkeypatch.setattr(srv.list_ports, "comports", lambda: fake)
+    out = srv.list_serial_ports()
+    assert "hint" not in out
+
+
+def test_list_ports_no_hint_when_only_bluetooth(monkeypatch):
+    """USB가 없고 블루투스 가상 포트(vid=None)만 있으면 hint 없음(잘못된 유도 방지)."""
+    monkeypatch.setattr(srv, "_monitors", {})
+    fake = [SimpleNamespace(device="COM5", description="Bluetooth", hwid="BTHENUM",
+                            vid=None, pid=None, manufacturer="Microsoft", serial_number=None)]
+    monkeypatch.setattr(srv.list_ports, "comports", lambda: fake)
+    out = srv.list_serial_ports()
+    assert "hint" not in out
