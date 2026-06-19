@@ -1,6 +1,6 @@
 [project]
 name = "serial-mcp-server"
-version = "1.2.0"
+version = "1.2.1"
 description = "Headless MCP server that lets an AI read embedded-board serial logs (ESP32/STM32 etc.) during firmware debugging."
 readme = "README.md"
 requires-python = ">=3.10"

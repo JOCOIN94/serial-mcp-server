@@ -754,7 +754,9 @@ def list_serial_ports(ctx: Optional[Context] = None) -> dict:
     [무엇을 반환] 현재 PC의 시리얼 포트 목록. 각 포트의 device/description/vid/pid/
     manufacturer/serial_number 에 더해, 이 서버가 모니터링 중이면 monitored=true 와
     별칭 name 이 붙는다. monitored_ports 는 현재 모니터링 목록(별칭 표기).
-    VID/PID·description 으로 칩(CH343, CP210x 등)을 추론하라.
+    VID/PID·description 은 어댑터 칩(CH343, CP210x 등) 식별용일 뿐 보드 종류를
+    단정하지 마라(칩≠보드). 보드 식별은 별칭 name 이며, 별칭이 없으면 로그 내용으로
+    식별하거나 사람에게 포트↔보드 매핑을 물어라.
 
     [주의] 이 도구는 OS 포트 나열만 한다 — owner 획득/모니터링을 시작하지 않는다.
     monitored 가 전부 false(0개 모니터링)인데 USB 포트가 보이면 '모니터 대상이 없다'가
@@ -854,8 +856,9 @@ def get_serial_status(port: str = "", ctx: Optional[Context] = None) -> dict:
 
     [필수] 세션에서 이 도구를 처음 호출하면, 사용자가 요청하지 않아도 응답의
     viewer_url(웹 뷰어) 링크를 사용자에게 안내하라 — 사용자가 같은 실시간 스트림을
-    눈으로 교차검증하게 하기 위함. URL 포트는 서버 재시작마다 바뀌니 하드코딩 말고
-    매번 응답에서 새로 읽어라(없으면 SERIAL_WEB=0 — 링크 없이 진행).
+    눈으로 교차검증하게 하기 위함. URL 포트는 기본 8743 고정이며 SERIAL_WEB 으로만
+    바뀐다(재시작으로는 안 바뀜) — 하드코딩 말고 매번 응답에서 읽되 값은 안정적이다
+    (없으면 SERIAL_WEB=0 — 링크 없이 진행).
 
     [상태 해석] connected=false 라도 opening=true(message '응답 없음')면 '꺼짐'이
     아니라 첫 연결 시도 지연이다. 실제 미연결/실패는 last_error 로 판단하라 —
@@ -1021,6 +1024,9 @@ def clear_log_buffer(port: str = "", ctx: Optional[Context] = None) -> dict:
 
     [port 규약] 다른 도구와 달리 **미지정 = 전체 포트 비우기**(시험 시작 시 모든
     보드를 함께 리셋 관측하는 게 보통이므로). 특정 보드만 비우려면 port 지정.
+    단 기존 문제의 원인을 분석 중이면 비우기 전에 먼저 get_recent_logs/query_serial_logs
+    로 snapshot 하라 — 원인 로그가 지워진다. 다른 보드의 맥락 로그를 보존하려면
+    반드시 port 를 지정해 선택 비우기.
 
     [무엇을 반환] cleared(총 비운 항목 수)와 ports(포트별 내역).
 
