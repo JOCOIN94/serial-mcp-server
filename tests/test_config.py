@@ -32,7 +32,7 @@ def test_load_config_defaults_when_empty():
     assert _load_config({}) == {
         "ports": [], "names": {}, "autoname": [], "baud": 115200, "tee": None,
         "exclude": None, "include": None, "maxlen": 2000, "dedup": 5, "web": 8743,
-        "web_ui": True, "hotplug": 5.0, "write": True, "write_confirm": True, "char_delay": 0.01,
+        "web_ui": True, "hotplug": 5.0, "write": True, "write_confirm": "all", "char_delay": 0.01,
     }
 
 
@@ -51,7 +51,7 @@ def test_load_config_reads_all_vars():
         "autoname": [("SB1", "STM32")],
         "baud": 57600, "tee": "log.txt", "exclude": "DEBUG", "include": "ERROR",
         "maxlen": 500, "dedup": 0, "web": 9000, "web_ui": True, "hotplug": 10.0,
-        "write": False, "write_confirm": False, "char_delay": 0.025,
+        "write": False, "write_confirm": "off", "char_delay": 0.025,
     }
 
 
@@ -141,16 +141,18 @@ def test_load_config_hotplug_invalid_falls_back(val):
 @pytest.mark.parametrize(
     "env,expected",
     [
-        ({}, (True, True)),
-        ({"SERIAL_WRITE": "off", "SERIAL_WRITE_CONFIRM": "off"}, (False, False)),
-        ({"SERIAL_WRITE": "0", "SERIAL_WRITE_CONFIRM": "0"}, (False, False)),
-        ({"SERIAL_WRITE": "false", "SERIAL_WRITE_CONFIRM": "false"}, (False, False)),
-        ({"SERIAL_WRITE": "no", "SERIAL_WRITE_CONFIRM": "no"}, (False, False)),
-        ({"SERIAL_WRITE": "on", "SERIAL_WRITE_CONFIRM": "on"}, (True, True)),
-        ({"SERIAL_WRITE": "1", "SERIAL_WRITE_CONFIRM": "1"}, (True, True)),
-        ({"SERIAL_WRITE": "true", "SERIAL_WRITE_CONFIRM": "true"}, (True, True)),
-        ({"SERIAL_WRITE": "yes", "SERIAL_WRITE_CONFIRM": "yes"}, (True, True)),
-        ({"SERIAL_WRITE": "abc", "SERIAL_WRITE_CONFIRM": "abc"}, (True, True)),
+        ({}, (True, "all")),
+        ({"SERIAL_WRITE": "off", "SERIAL_WRITE_CONFIRM": "off"}, (False, "off")),
+        ({"SERIAL_WRITE": "0", "SERIAL_WRITE_CONFIRM": "0"}, (False, "off")),
+        ({"SERIAL_WRITE": "false", "SERIAL_WRITE_CONFIRM": "false"}, (False, "off")),
+        ({"SERIAL_WRITE": "no", "SERIAL_WRITE_CONFIRM": "no"}, (False, "off")),
+        ({"SERIAL_WRITE": "on", "SERIAL_WRITE_CONFIRM": "on"}, (True, "all")),
+        ({"SERIAL_WRITE": "1", "SERIAL_WRITE_CONFIRM": "1"}, (True, "all")),
+        ({"SERIAL_WRITE": "true", "SERIAL_WRITE_CONFIRM": "true"}, (True, "all")),
+        ({"SERIAL_WRITE": "yes", "SERIAL_WRITE_CONFIRM": "yes"}, (True, "all")),
+        ({"SERIAL_WRITE": "abc", "SERIAL_WRITE_CONFIRM": "abc"}, (True, "all")),
+        ({"SERIAL_WRITE_CONFIRM": "r3"}, (True, "r3")),
+        ({"SERIAL_WRITE_CONFIRM": "risky"}, (True, "r3")),
     ],
 )
 def test_load_config_write_flags(env, expected):

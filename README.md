@@ -69,12 +69,12 @@ claude mcp add --scope user serial-mcp \
 | `SERIAL_WEB` | `8743` | 웹 뷰어이자 whole-session 소유권 잠금 포트. 점유 시 임시 포트 폴백 없이 휴면/안내로 동작한다. `0`/`false`/`no`/`off`는 UI만 끄고 8743 잠금은 유지 |
 | `SERIAL_HOTPLUG` | `5` | 포트 감시 간격(초, 소수 허용). 자동 스캔 모드: 서버 실행 중 꽂은 보드를 자동 추가(연속 2회 스캔 확인 후 — 드라이버 정착 유예). 모든 모드: 열거 목록에서 연속 2회 사라진 포트의 좀비 핸들 강제 해제(플래키 어댑터 대응). `0`/`false`/`no`/`off`로 끄면 시작 시 1회 스캔만 |
 | `SERIAL_WRITE` | `true` | 쓰기 도구 전면 스위치. `0`/`false`/`no`/`off`면 `send_serial_command`/`reset_board`가 등록은 유지하되 전송하지 않고 에러 반환 |
-| `SERIAL_WRITE_CONFIRM` | `true` | 쓰기 도구의 서버측 elicitation 승인 게이트. `0`/`false`/`no`/`off`면 승인 팝업을 생략하고 클라이언트의 일반 도구 권한 게이트에 위임 |
+| `SERIAL_WRITE_CONFIRM` | `all` (서버 기본) | 쓰기 도구의 서버측 elicitation 승인 범위(3-state). `all`(=`true`/`1`/`on`/`yes`)=모든 쓰기 승인, `r3`(=`risky`)=R3 파괴 명령(reflash/format/download/파일삭제/임의 JSON 주입 + boot-menu `D`)만 승인하고 그 외(조회·복원 가능한 설정·재부팅)는 통과, `off`(=`0`/`false`/`no`)=승인 생략 후 클라이언트 권한 게이트에 위임. Silotek 플러그인 설치 경로는 실장비 표준값으로 `r3`을 주입하며, 직접 실행하거나 값을 비우면 서버 기본값 `all`을 쓴다 |
 | `SERIAL_CHAR_DELAY` | `10` (서버 기본) | `send_serial_command` 전송 시 문자 간 지연(ms, 소수 허용, 상한 100). 폴링 수신 펌웨어(STM32 등)가 기계 속도 연속 바이트를 흘리는 문자 유실 방지 — 모든 보드에 공통 적용. Silotek 플러그인 설치 경로는 실장비 표준값으로 `100`을 환경변수에 주입하며, 직접 실행하거나 값을 비워 두면 서버 기본값 `10`을 쓴다. `0`/`false`/`no`/`off`로 끄면 통짜 전송 |
 
 ### 쓰기 승인 동작
 
-`send_serial_command`와 `reset_board`는 기본적으로 매 호출 사용자 승인을 요구한다. 클라이언트가 elicitation(승인 팝업)을 지원하지 않으면 전송하지 않고 `SERIAL_WRITE_CONFIRM=off` 안내가 포함된 에러를 반환한다. 사용자가 거절하거나 취소하면 `status="declined"`이며, AI는 같은 명령을 반복 호출하지 않고 사람과 다음 행동을 합의해야 한다.
+`send_serial_command`와 `reset_board`는 기본(`SERIAL_WRITE_CONFIRM=all`)으로 매 호출 사용자 승인을 요구한다. `SERIAL_WRITE_CONFIRM=r3`이면 R3 파괴 명령(reflash/format/download/파일삭제/임의 JSON 주입 + boot-menu `D`)에만 승인 팝업을 띄우고, 조회·복원 가능한 설정·재부팅(`reset_board` 포함)은 승인 없이 통과한다. `all`/`r3`에서 승인이 필요한 호출인데 클라이언트가 elicitation(승인 팝업)을 지원하지 않으면 전송하지 않고 `SERIAL_WRITE_CONFIRM=off` 안내가 포함된 에러를 반환한다. 사용자가 거절하거나 취소하면 `status="declined"`이며, AI는 같은 명령을 반복 호출하지 않고 사람과 다음 행동을 합의해야 한다.
 
 송신 감사 마커는 `[TX] ...` 또는 `[RST] ...`로 기록된다. 웹 스트림과 tee 파일에는 항상 남고, 링버퍼에는 include/exclude 필터가 적용된다. 포트를 여는 순간 일부 자동리셋 보드가 리셋될 수 있는데, 이는 pyserial open 시 DTR/RTS 상태 변화로 생기는 기존 동작이며 명시적 `reset_board` 호출과 구분된다.
 

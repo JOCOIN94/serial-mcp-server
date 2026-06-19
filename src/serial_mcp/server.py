@@ -8,8 +8,9 @@ AI(Claude Code)는 6개의 조회 도구로 버퍼를 읽으며, 승인 게이�
 - stdout 으로 MCP JSON-RPC 가 흐른다. stdout 에 절대 print/로그 금지.
   모든 진단은 stderr 또는 tee 파일로만(_log 헬퍼 사용).
 - 버퍼는 LineBuffer 내부 Lock 으로 보호된다(리더 스레드 ↔ 도구 호출 동시 접근).
-- 쓰기는 send_serial_command/reset_board 두 도구로만 제공하며, 기본값은 매 호출
-  서버측 elicitation 승인이다. SERIAL_WRITE=off로 전면 차단할 수 있다.
+- 쓰기는 send_serial_command/reset_board 두 도구로만 제공한다. 승인 범위는
+  SERIAL_WRITE_CONFIRM=all(기본·모두)/r3(파괴 명령만)/off(클라이언트 위임)로 정하며,
+  SERIAL_WRITE=off로 전면 차단할 수 있다.
 """
 
 from __future__ import annotations
@@ -686,9 +687,46 @@ def _approval_unavailable_result() -> dict:
     }
 
 
-async def _confirm_write(ctx: Optional[Context], summary: str) -> Optional[dict]:
-    """매 호출 사용자 승인 게이트. 통과하면 None, 차단하면 도구 반환 dict."""
-    if not _config.get("write_confirm", True):
+# R3(파괴·임의 주입) 명령 — 3개 보드(SSM·SB-ESP·SB-STM) command-surface 합집합.
+# reflash/format/firmware-download/파일삭제/임의 JSON 주입. 어느 보드서든 파괴적이라 보드-무관 union.
+# SERIAL_WRITE_CONFIRM="r3"일 때 이 목록의 명령만 승인 팝업을 띄운다.
+# 단일 진실원은 플러그인 command-surface/atlas다 — 거기가 바뀌면 여기도 동기화하라.
+_R3_COMMANDS = frozenset({
+    "REFLASH", "REFLASHESP", "REFLASHSTM", "ALLREFLASH",
+    "DOWNBIN", "CDOWNBIN", "DOWNBINWEB", "REMFILE",
+    "FORMAT", "KSFFORMAT", "WFORMAT",
+    "VIRWEBCMD", "BYPASSCMD",
+})
+
+
+def _is_r3(command: str) -> bool:
+    """전송 명령이 R3(파괴적)인지 판정. confirm 모드 "r3"에서 이것만 승인 팝업.
+
+    첫 공백구분 토큰을 대문자화해 _R3_COMMANDS와 대조한다("REMFILE foo.txt"도
+    첫 토큰으로 잡힘). boot-menu 단독키 'D'(다운로드/리플래시)도 R3로 취급.
+    """
+    cmd = command.strip()
+    if cmd.upper() == "D":
+        return True
+    parts = cmd.split()
+    token = parts[0].upper() if parts else ""
+    return token in _R3_COMMANDS
+
+
+async def _confirm_write(
+    ctx: Optional[Context], summary: str, is_risky: bool = True
+) -> Optional[dict]:
+    """매 호출 사용자 승인 게이트. 통과하면 None, 차단하면 도구 반환 dict.
+
+    승인 범위는 _config["write_confirm"](SERIAL_WRITE_CONFIRM) 3-state로 정한다:
+      - "all"(기본): 모든 쓰기에 elicitation 승인.
+      - "r3": R3(파괴) 명령만 승인 — is_risky=False면 elicitation 생략·통과.
+      - "off": 승인 생략 후 클라이언트 권한 게이트에 위임.
+    """
+    mode = _config.get("write_confirm", "all")
+    if mode == "off":
+        return None
+    if mode == "r3" and not is_risky:
         return None
     capability = ClientCapabilities(elicitation=ElicitationCapability())
     if ctx is None or not ctx.session.check_client_capability(capability):
@@ -1021,8 +1059,9 @@ async def send_serial_command(
 ) -> dict:
     """[언제 호출] 보드 CLI/AT 명령을 전송하고 직후 응답 로그를 한 번에 회수할 때.
 
-    매 호출 사용자 승인 팝업이 뜬다. 거부되면 status="declined"를 반환하므로 같은
-    명령을 반복 재시도하지 말고 사람과 다음 행동을 합의하라.
+    승인이 필요한 호출(SERIAL_WRITE_CONFIRM=all, 또는 r3 모드의 R3 파괴 명령)이면
+    사용자 승인 팝업이 뜬다. 거부되면 status="declined"를 반환하므로 같은 명령을
+    반복 재시도하지 말고 사람과 다음 행동을 합의하라.
 
     [port 규약] get_recent_logs 와 동일 — 별칭("SSM")/포트명("COM4")/라벨("SSM (COM4)")
     모두 허용. 복수 포트에서 미지정이면 ports 목록과 함께 에러.
@@ -1057,6 +1096,7 @@ async def send_serial_command(
     block = await _confirm_write(
         ctx,
         f"{mon.label} 대상으로 시리얼 명령 전송 승인 요청\n명령: {command!r} (eol={eol!r}, {len(payload)}바이트)",
+        is_risky=_is_r3(command),
     )
     if block:
         if not was_owner:
@@ -1112,6 +1152,7 @@ async def reset_board(port: str = "", wait_ms: int = 2000, ctx: Optional[Context
     block = await _confirm_write(
         ctx,
         f"{mon.label} 보드를 DTR/RTS 펄스로 하드웨어 리셋합니다. 승인하시겠습니까?",
+        is_risky=False,  # 리셋은 R2 — "r3" 모드에선 승인 없이 통과
     )
     if block:
         if not was_owner:
@@ -1314,6 +1355,23 @@ def _parse_flag(env: Mapping[str, str], name: str, default: bool = True) -> bool
     return default
 
 
+def _parse_confirm_mode(env: Mapping[str, str], name: str) -> str:
+    """SERIAL_WRITE_CONFIRM 3-state 파싱 → "all" | "r3" | "off".
+
+    off/false/0/no → "off"(확인 생략·클라이언트 게이트 위임),
+    r3/risky/risk  → "r3"(R3 파괴 명령만 확인),
+    그 외(true/1/on/yes/미설정/해석불가) → "all"(모든 쓰기 확인 — 안전 기본).
+    """
+    raw = env.get(name, "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return "off"
+    if raw in ("r3", "risky", "risk"):
+        return "r3"
+    if raw not in ("", "1", "true", "yes", "on"):
+        _log(f"환경변수 {name}={raw!r} 해석 실패 → 기본값 'all' 사용")
+    return "all"
+
+
 def _load_config(env: Mapping[str, str]) -> dict:
     """환경변수 매핑에서 서버 설정을 파싱해 dict로 반환(부작용 없음, 순수 함수).
 
@@ -1335,7 +1393,7 @@ def _load_config(env: Mapping[str, str]) -> dict:
         "web_ui": web_ui,
         "hotplug": _parse_hotplug(env),
         "write": _parse_flag(env, "SERIAL_WRITE"),
-        "write_confirm": _parse_flag(env, "SERIAL_WRITE_CONFIRM"),
+        "write_confirm": _parse_confirm_mode(env, "SERIAL_WRITE_CONFIRM"),
         "char_delay": _parse_char_delay(env),
     }
 

@@ -81,8 +81,8 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 
 **5.2 쓰기 승인·감사 계약**
 - `send_serial_command`와 `reset_board`는 도구 등록 자체는 항상 유지하되, `_config.get("write", True)`가 false(`SERIAL_WRITE=off`)이면 전송하지 않고 즉시 `status="error"`를 반환한다.
-- 기본값은 매 호출 서버측 elicitation 승인이다(`SERIAL_WRITE_CONFIRM` 미설정/true). 클라이언트가 elicitation capability를 지원하지 않거나 capability를 광고했지만 요청이 `McpError`로 실패하면 전송하지 않고 `SERIAL_WRITE_CONFIRM=off` 안내를 포함한 에러를 반환한다. 이 fail-safe 때문에 클라이언트 허용목록만으로 서버측 승인을 우회할 수 없다.
-- `SERIAL_WRITE_CONFIRM=off`는 서버측 elicitation을 생략하고 클라이언트의 일반 도구 권한 게이트에 위임한다. 안전 정책 변경이므로 사용자가 명시적으로 설정해야 한다.
+- 승인 범위는 `SERIAL_WRITE_CONFIRM` 3-state로 정한다: `all`(기본·미설정/true)=모든 쓰기에 매 호출 서버측 elicitation 승인, `r3`=R3 파괴 명령만 승인(비-R3·`reset_board`는 통과), `off`=승인 생략. `all`/`r3`에서 승인이 필요한 호출인데 클라이언트가 elicitation capability를 지원하지 않거나 capability를 광고했지만 요청이 `McpError`로 실패하면 전송하지 않고 `SERIAL_WRITE_CONFIRM=off` 안내를 포함한 에러를 반환한다. 이 fail-safe 때문에 클라이언트 허용목록만으로 서버측 승인을 우회할 수 없다.
+- `SERIAL_WRITE_CONFIRM=off`는 서버측 elicitation을 생략하고 클라이언트의 일반 도구 권한 게이트에 위임한다. `r3`은 R3 파괴 명령(`_R3_COMMANDS` — reflash/format/download/파일삭제/임의 JSON 주입 + boot-menu `D`)만 승인하고 나머지는 통과한다. R3 목록의 단일 진실원은 플러그인 command-surface/atlas이며 서버 `_R3_COMMANDS`는 그 증류본이다(동기화 유지). 둘 다 안전 정책 변경이므로 사용자가 명시적으로 설정해야 한다.
 - 사용자가 승인 팝업에서 decline/cancel하면 `status="declined"`를 반환한다. AI는 같은 명령이나 리셋을 반복 호출하지 말고 사람에게 이유를 묻고 다음 행동을 합의한다.
 - 송신 감사 기록은 `[TX] {command}` 또는 `[RST] DTR/RTS 하드웨어 리셋 펄스` 마커로 남긴다. tee 파일과 웹 feed에는 항상 남고, ring buffer에는 include/exclude 필터가 적용된다. `send_serial_command`의 응답 회수는 쓰기 직전 `t0` 이후 `LineBuffer.entries_since(t0)` 기반이라 dedup으로 기존 항목에 접힌 응답도 `last_ts` 갱신으로 회수된다.
 - 포트를 여는 순간 DTR/RTS 어서트로 일부 자동리셋 보드가 리셋될 수 있다. 이는 기존 pyserial open 동작이며 `reset_board` 도입과 별개다. 리셋 도구는 명시적 DTR/RTS 펄스만 감사 마커로 남긴다.
