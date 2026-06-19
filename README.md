@@ -59,7 +59,7 @@ claude mcp add --scope user serial-mcp \
 |---|---|---|
 | `SERIAL_PORT` | (없음=자동) | 미설정이면 USB 시리얼 전부 자동 모니터링(실행 중 꽂은 포트도 핫플러그로 자동 추가). 지정 시 그 목록만: `COM4` 또는 `COM4,COM13@9600`. COM10 이상도 `COM10` 그대로(pyserial이 `\\.\` 접두를 자동 처리 — `\\.\` 표기는 별칭 매칭이 깨질 수 있어 비권장) |
 | `SERIAL_NAMES` | (없음) | 포트→보드 별칭. `COM4=SSM,COM13=SB1` 또는 USB 시리얼넘버 키 `5909024173=SSM`(포트 번호가 바뀌어도 유지). 표기·도구 port 인자에 별칭 사용 가능 |
-| `SERIAL_AUTONAME` | (없음) | **로그 내용으로 보드 자동 식별**: `이름=정규식;…`(세미콜론 구분, 순서=우선순위). 첫 매칭에서 1회 확정, `SERIAL_NAMES`가 우선. 예: `SSM=\[Proc-;SB1=Send to the STM32` |
+| `SERIAL_AUTONAME` | (없음) | **로그 내용으로 보드 자동 식별**: `이름=정규식;…`(세미콜론 구분, 순서=우선순위). 첫 매칭에서 1회 확정, `SERIAL_NAMES`가 우선. 예: `SSM=FW Ver:SSM|\[IOc\];SB1=Send to the STM32`(**모든 동작 상태**에서 나오는 패턴을 고를 것 — 아래 §다중 포트·별칭 주의) |
 | `SERIAL_BAUD` | `115200` | 보드레이트 |
 | `SERIAL_TEE` | (없음) | 로그 영구 기록 경로 — 포트별 파일로 분리(`log.txt`→`log.SSM.txt`). 버퍼에서 밀려난 줄도 보존 |
 | `SERIAL_EXCLUDE` | (없음) | 이 정규식에 매칭되는 줄은 저장하지 않음 |
@@ -85,7 +85,10 @@ claude mcp add --scope user serial-mcp \
 - **Windows** (PowerShell): `setx SERIAL_NAMES "COM4=SSM,COM13=SB1"`  (새 터미널부터 적용)
 - **macOS / Linux**: `export SERIAL_NAMES="COM4=SSM"`
 - 특정 포트만 보려면: `setx SERIAL_PORT "COM4,COM13@9600"` (`@N`=포트별 보드레이트)
-- **포트 번호가 자주 바뀌는 어댑터**(시리얼넘버 없는 클론 등)는 로그 내용 기반 자동 식별이 편하다: `setx SERIAL_AUTONAME "SSM=\[Proc-;SB1=Send to the STM32"`. 단 **그 보드 로그에서만 나오는 패턴**이어야 한다 — 상대 보드 이름이 로그에 인용되는 경우(예: SSM 로그 속 "SB1") 오인 주의.
+- **포트 번호가 자주 바뀌는 어댑터**(시리얼넘버 없는 클론 등)는 로그 내용 기반 자동 식별이 편하다: `setx SERIAL_AUTONAME "SSM=FW Ver:SSM|\[IOc\];SB1=Send to the STM32"`. 패턴 고를 때 두 가지 함정:
+  - ① **그 보드 로그에서만 나오는 패턴**이어야 한다 — 상대 보드 이름이 로그에 인용되는 경우(예: SSM 로그 속 "SB1") 오인 주의.
+  - ② **모든 동작 상태에서 나오는 패턴**이어야 한다 — 정상 동작 중에만 나오는 줄(예: 하위장비 패킷 처리 `\[Proc-`)을 고르면 **고장·유휴 상태에서 식별이 안 된다**(WiFi 끊긴 SSM은 `\[Proc-` 대신 `[IOc] Disconnected!`만 뱉음). 부팅 배너(`FW Ver:…`)나 상태 무관 상시 마커(`\[IOc\]` 등)가 안전하다.
+- **별칭의 `유닛-칩` 규칙**: 웹 뷰어는 별칭의 첫 `-` 앞을 유닛, 뒤를 칩으로 묶는다(`SB-ESP`·`SB-STM`→유닛 "SB", `SSM-ESP`→유닛 "SSM"·칩 "ESP"). 한 유닛에 칩이 여러 개면 한 박스로 묶여 보인다.
 
 AI 도구는 보드가 여러 개면 `port` 인자(별칭/포트명/`SSM (COM4)` 라벨)를 지정해 호출한다. 미지정 시 예외는 둘 — `get_serial_status`는 전 포트 상태 배열을 반환하고, `clear_log_buffer`는 전체 버퍼를 비운다.
 
