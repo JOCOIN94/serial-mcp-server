@@ -637,10 +637,10 @@ body.rhythm-relaxed { --row-pad: 6px; --lh: 1.9; }
   <header>
   <div class="bar tools">
     <div class="tabs">
-      <button id="tabStream" class="active" title="이 화면을 연 뒤 수신한 원본 줄 (테라텀 대체)">
+      <button id="tabStream" class="active" title="실시간 원본 — 수신한 그대로. 접기 토글로 반복 압축 가능(테라텀 대체)">
         스트림 <span class="count" id="cStream">0/5000</span>
       </button>
-      <button id="tabBuffer" title="서버가 보관 중인 가공 로그 — AI가 보는 것과 동일 (접힘·필터 적용)">
+      <button id="tabBuffer" title="AI가 보는 것 — 서버 버퍼 그대로(클라 재가공 없음). 교차검증용">
         버퍼 <span class="count" id="cBuffer">0/2000</span>
       </button>
     </div>
@@ -1338,8 +1338,11 @@ function currentView() {
 /* ============================ 라인 노드 빌드 ============================ */
 const CAT_CLASS = { error: "err", warning: "warn", boot: "boot", noise: "noise", success: "ok" };
 
-function badgeHtml(cls, text, title) {
-  return '<span class="badge ' + cls + '" title="' + SV.escapeHtml(title) + '">' + SV.escapeHtml(text) + "</span>";
+// correlation 추적 칩 — 본문 복제가 아니라 행동 도구. 클릭 시 같은 값 줄로 검색(아래 클릭 위임 참고).
+function corrChip(key, val) {
+  const v = String(val);
+  return '<span class="badge corr" data-corr="' + SV.escapeHtml(v) +
+    '" title="클릭 — 같은 ' + SV.escapeHtml(String(key)) + ' 줄만 검색">' + SV.escapeHtml(key + " " + v) + "</span>";
 }
 
 // entry: {ts, text, count, firstTs, lastTs}. → {node, model, cls, sig}
@@ -1365,19 +1368,13 @@ function buildLineNode(entry) {
 
   let body = SV.renderBodyHTML(model, cls, view);
 
-  // 보조 badge (구조 신호; 색이 아니라 칩). 색 강도 Off 에서는 생략.
+  // 보조 badge: 본문에 이미 보이는 정보(JSON·net·time·success·source)는 칩으로 복제하지 않는다.
+  // correlation(추적 ID)만 남기되 — 클릭하면 같은 값 줄로 검색되는 '추적 도구'로 노출한다.
   let badges = "";
-  if (view.intensity !== "off") {
-    if (cls.payload) badges += badgeHtml("json", "{}", "JSON payload");
-    if (view.semantic && cls.badges.indexOf("net") >= 0) badges += badgeHtml("net", "net", "network/IO");
-    if (view.semantic && cls.badges.indexOf("time") >= 0) badges += badgeHtml("time", "ms", "timing");
-    if (view.semantic && primary === "success") badges += badgeHtml("ok", "ok", "success");
-    if (cls.payload) {
-      const corr = SV.correlationBadges(cls.payload.value);
-      for (const c of corr) badges += badgeHtml("corr", c.key + ":" + c.val, "correlation key");
-    }
+  if (view.intensity !== "off" && view.semantic && cls.payload) {
+    const corr = SV.correlationBadges(cls.payload.value);
+    for (const c of corr) badges += corrChip(c.key, c.val);
   }
-  if (state.multiSource && model.source) badges = badgeHtml("corr", model.source, "source") + badges;
 
   // 반복 배지(서버 count 또는 클라 접기). 클릭 시 variants 펼침.
   let rep = "";
@@ -1424,7 +1421,7 @@ function sectionDivider(text) {
 }
 
 /* 한 entry 를 box 에 추가. ctx 는 이전 줄 상태(fold·divider 판정용)를 들고 다닌다. */
-function appendEntry(box, entry, ctx) {
+function appendEntry(box, entry, ctx, opts) {
   const view = currentView();
   const built = buildLineNode(entry);
   const model = built.model;
@@ -1443,8 +1440,8 @@ function appendEntry(box, entry, ctx) {
       if (state.matcher) sd.style.display = "none";
       box.appendChild(sd); ctx.prevSig = null; ctx.prevNode = null;
     }
-    // fold (연속 같은 signature)
-    if (view.fold && built.sig != null && built.sig === ctx.prevSig && ctx.prevNode) {
+    // fold (연속 같은 signature) — 버퍼(서버 가공 완료분)에서는 클라 재접기 금지(AI parity·이중 접기 방지)
+    if (!(opts && opts.noFold) && view.fold && built.sig != null && built.sig === ctx.prevSig && ctx.prevNode) {
       foldInto(ctx.prevNode, model);
       if (ms != null) ctx.prevMs = SV.tsToMs(model.lastTs) || ms;
       return null;
@@ -1638,7 +1635,7 @@ async function refreshBuffer() {
   box.innerHTML = "";
   const ctx = {};
   for (const e of d.entries || []) {
-    appendEntry(box, { ts: e.first_ts, text: e.text, count: e.count, firstTs: e.first_ts, lastTs: e.last_ts }, ctx);
+    appendEntry(box, { ts: e.first_ts, text: e.text, count: e.count, firstTs: e.first_ts, lastTs: e.last_ts }, ctx, { noFold: true });
   }
   $("cBuffer").textContent = (d.entries || []).length + "/" + (d.capacity != null ? d.capacity : "?");
   scheduleRecount();
@@ -1744,6 +1741,14 @@ document.addEventListener("click", ev => {
     const lit = "[" + t.dataset.tag + "]";
     const box = $("search");
     box.value = box.value.trim() === lit ? "" : lit;
+    setSearch(box.value);
+    return;
+  }
+  const cc = ev.target.closest(".badge.corr");   // correlation 칩 클릭 → 같은 값 줄 추적
+  if (cc) {
+    const v = cc.dataset.corr;
+    const box = $("search");
+    box.value = box.value.trim() === v ? "" : v;
     setSearch(box.value);
   }
 }, true);
