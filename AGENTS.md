@@ -22,6 +22,14 @@ AI가 임베디드 보드(ESP32/STM32 등)의 시리얼 텍스트 로그를 읽�
 - 로컬 실행: `$env:SERIAL_PORT="COM4"; uv run serial-mcp`
 - 실장비 검증 기준 장비: ESP32-S3(SSM 펌웨어), COM4(CH343), 115200.
 
+## 릴리스·배포
+
+버전을 올릴 땐 **두 레포를 함께** 올린다(한쪽만 하면 사용자에게 반영 안 됨). 메커니즘·함정 상세는 `silotek-plugin-marketplace` 레포 `AGENTS.md` "버전 관리"가 소유한다 — 여기엔 진입점만 둔다.
+
+1. **이 레포(serial-mcp-server)** — `pyproject.toml` version bump → `uv lock` → 커밋 → **`git tag vX.Y.Z` + `git push origin main vX.Y.Z`**. uvx가 받는 건 **태그**다(main push만으론 반영 안 됨). `src/serial_mcp/__init__.py`의 `__version__`도 함께 맞춘다.
+2. **`silotek-plugin-marketplace` 레포** — 그 레포 `AGENTS.md` "버전 관리"의 serial-mcp 목록을 **전부** 동기화한다. 특히 루트 `.claude-plugin/marketplace.json`의 serial-mcp entry `version` — **빠뜨리면 실행(서버 태그)은 최신이어도 `/plugin` browse 목록이 옛 버전으로 남는다.** push 전 `plugins/serial-mcp/scripts/check-version-sync.ps1`로 핀 정합성을 검증한다(불일치 시 실패).
+3. **사용자측 반영** — `/plugin marketplace update silotek` → `/plugin update serial-mcp@silotek` → **Claude Code 재시작**(MCP 태그 핀 재파싱). Codex는 `install-codex.ps1` 재실행.
+
 ## 아키텍처·코드 원칙
 
 - **클린 코드·클린 아키텍처·일관된 패턴**(SPEC §2). 스타일이 제각각 되지 않게 한다.
