@@ -51,6 +51,7 @@ from .ports import (
     parse_port_list,
 )
 from .ring_buffer import LineBuffer
+from .topology import build_roster
 from .viewer_feed import RawFeed
 from .web_viewer import ViewerServer
 
@@ -521,6 +522,7 @@ def _acquire_owner_locked() -> Optional[dict]:
                 feed_for=_viewer_feed_for,
                 buffer_info=_viewer_buffer_info,
                 status_info=_viewer_status_info,
+                topology_info=_viewer_topology_info,
                 release_port=_viewer_release_port,
                 port=port,
             )
@@ -1244,6 +1246,30 @@ def _viewer_status_info() -> dict:
             "board": board,
         })
     return {"session": _session_label, "ports": plist}
+
+
+def _viewer_topology_info() -> dict:
+    """웹 뷰어 /api/topology — 포트별 정체 자동발견 → SSM별 그룹·배치 로스터.
+
+    각 포트의 최근 수신 줄(별칭 우선)로 장비(SSM/REP/APU/SB·ESP/STM)를 식별해
+    topology.build_roster 가 그래프 노드(row/col/ports)를 만든다. 좌측 토폴로지
+    그래프가 이 로스터를 그대로 그린다(노드 클릭 = 그 포트 로그 보기, SB 는 ESP/STM 분할).
+    읽기 전용·실패 안전(예외 시 빈 로스터 — 뷰어 보조기능이 MCP 코어를 막지 않는다).
+    """
+    try:
+        entries = []
+        for m in _monitors.values():
+            r = m.reader
+            entries.append({
+                "port": m.port,
+                "alias": m.name,
+                "lines": m.buffer.get_recent(300),   # 분류용 최근 줄(가벼운 render)
+                "connected": bool(r and r.connected),
+            })
+        return build_roster(entries)
+    except Exception as e:   # noqa: BLE001 - 뷰어 보조기능: 어떤 실패도 코어로 전파 금지
+        _log(f"토폴로지 로스터 생성 실패: {e}")
+        return {"groups": [], "unplaced": []}
 
 
 def _viewer_release_port(port: str) -> dict:

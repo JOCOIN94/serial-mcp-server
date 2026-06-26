@@ -38,6 +38,7 @@ class _ViewerHTTPServer(ThreadingHTTPServer):
     feed_for: Callable[[str], Optional[RawFeed]]
     buffer_info: Callable[[str], dict]
     status_info: Callable[[], dict]
+    topology_info: Callable[[], dict]
     release_port: Callable[[str], dict]
 
 
@@ -66,6 +67,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(self.server.buffer_info(port))
         elif path == "/api/status":
             self._send_json(self.server.status_info())
+        elif path == "/api/topology":
+            self._send_json(self.server.topology_info())
         elif path == "/api/release":
             out = self.server.release_port(port)
             self._send_json(out, status=404 if out.get("status") == "error" else 200)
@@ -124,6 +127,7 @@ class ViewerServer:
         feed_for: Callable[[str], Optional[RawFeed]],
         buffer_info: Callable[[str], dict],
         status_info: Callable[[], dict],
+        topology_info: Optional[Callable[[], dict]] = None,
         release_port: Optional[Callable[[str], dict]] = None,
         port: int = 8743,
     ) -> None:
@@ -131,6 +135,7 @@ class ViewerServer:
         self._feed_for = feed_for
         self._buffer_info = buffer_info
         self._status_info = status_info
+        self._topology_info = topology_info or (lambda: {"groups": [], "unplaced": []})
         self._release_port = release_port or (
             lambda _port: {"status": "error", "message": "unknown port"}
         )
@@ -150,6 +155,7 @@ class ViewerServer:
         self._httpd.feed_for = self._feed_for
         self._httpd.buffer_info = self._buffer_info
         self._httpd.status_info = self._status_info
+        self._httpd.topology_info = self._topology_info
         self._httpd.release_port = self._release_port
         self.url = f"http://127.0.0.1:{self._httpd.server_address[1]}"
         threading.Thread(
@@ -225,32 +231,13 @@ body {
 
 /* ===== 좌측 네비게이션 (세션 + 포트 상태) ===== */
 #nav {
-  flex: 0 0 256px; box-sizing: border-box;
+  flex: 0 0 600px; box-sizing: border-box;
   position: sticky; top: 0; align-self: flex-start; height: 100vh; overflow-y: auto;
   background: var(--bg-raised); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 11px; padding: 10px;
   font-family: var(--ui); transition: flex-basis .16s ease;
 }
 #content { flex: 1 1 auto; min-width: 0; }
-.nav-toggle {
-  align-self: flex-end; appearance: none; cursor: pointer; width: 26px; height: 26px; flex: none;
-  border: 1px solid var(--border-2); border-radius: 6px; background: var(--bg); color: var(--muted);
-  display: grid; place-items: center;
-}
-.nav-toggle:hover { color: var(--fg); border-color: #3a4350; }
-.nav-toggle svg { width: 15px; height: 15px; transition: transform .16s; }
-body.nav-collapsed #nav { flex: 0 0 90px !important; width: 90px; min-width: 0; padding: 10px 5px; overflow: hidden; }
-body.nav-collapsed .nav-toggle { align-self: center; }
-body.nav-collapsed .nav-toggle svg { transform: rotate(180deg); }
-/* 접으면 간소화: 세션이름·COM 숨김, 라벨·행 가운데 정렬 (❛[해제]·점·보드명은 유지) */
-body.nav-collapsed .sess-name { display: none; }
-body.nav-collapsed .free-tag { display: none; }
-body.nav-collapsed .sess-head { justify-content: center; gap: 6px; }
-body.nav-collapsed .btn.release { padding: 4px 7px; }
-body.nav-collapsed .pb-com { display: none; }
-body.nav-collapsed .hwbox { padding: 2px; }
-body.nav-collapsed .hwbox-label { padding: 3px 2px 4px; }
-body.nav-collapsed .prow { grid-template-columns: auto auto; justify-content: center; gap: 6px; padding: 5px 3px; }
 
 /* ============================ HEADER ============================ */
 header {
@@ -532,7 +519,6 @@ kbd {
   body { flex-direction: column; }
   #nav { flex: 0 0 auto; height: auto; position: static; max-height: 42vh;
          border-right: 0; border-bottom: 1px solid var(--border); }
-  body.nav-collapsed #nav { flex-basis: auto; }
 }
 
 /* ============================ 포트 상태 보드 ============================ */
@@ -594,6 +580,40 @@ kbd {
 .btn.release:hover { border-color: var(--err); background: rgba(240,120,111,.2); }
 .sess-card.free .free-tag { font: 11.5px var(--ui); color: var(--ok); }
 
+/* ===================== 토폴로지 그래프(좌측 통합 사이드바) =====================
+   멀티홉 메시 시각화. 노드 = 직접 연결된 포트(SB 만 ESP+STM 2포트 → [ESP|STM] 분할).
+   노드/칩 클릭 = 그 포트 로그로 뷰 전환(기존 좌측 슬라이드 동작 흡수). 배치(row/col)는
+   백엔드 /api/topology 가 주고, 프론트는 절대배치로 그린다(추론 안 함). */
+.topo { display: flex; flex-direction: column; gap: 13px; }
+
+.tgroup { background: var(--bg); border: 1px solid var(--border-2); border-radius: 10px; padding: 12px 12px 14px; }
+.tgroup-num { font: 700 10px var(--ui); letter-spacing: .08em; color: var(--muted); margin: 0 0 6px 2px; }
+.tcanvas { position: relative; }   /* width/height 인라인 — 절대배치 노드 컨테이너 */
+
+/* 노드 = 라벨(밖·위) + 박스(색). 단일 MCU(SSM/REP/APU)는 박스에 ESP 한 칸,
+   SB 는 박스를 좌우로 나눠 ESP|STM 두 칸(각 칸이 포트 클릭 타깃·자체 상태점). */
+.tnode { position: absolute; box-sizing: border-box; display: flex; flex-direction: column;
+         align-items: stretch; user-select: none; }
+.tn-name { font: 700 11px var(--ui); color: var(--fg-bright); letter-spacing: .3px;
+           text-align: center; margin-bottom: 3px; white-space: nowrap;
+           overflow: hidden; text-overflow: ellipsis; }
+.tn-box { flex: 1; display: flex; border: 1.5px solid var(--border-2); border-radius: 8px;
+          overflow: hidden; transition: box-shadow .12s; }
+.tn-box.active { box-shadow: 0 0 0 1px var(--accent), 0 0 8px rgba(91,155,216,.35); }
+.tn-cell { position: relative; flex: 1; display: flex; align-items: center; justify-content: center;
+           cursor: pointer; font: 600 12px var(--ui); color: var(--fg); }
+.tn-cell:hover { background: var(--bg-hover); }
+.tn-cell.active { background: var(--accent-bg); color: var(--accent); }
+.tn-cell + .tn-cell { border-left: 1px solid var(--border-2); }   /* SB 좌/우 칸 구분선 */
+.tn-stat { position: absolute; top: 5px; right: 6px; width: 6px; height: 6px; border-radius: 50%; }
+
+/* 미분류 존 — 자동발견 안 된 포트를 COMx 뱃지만 담백하게 나열(라벨·테두리 박스 없음). */
+.tunclassified { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 0 2px; }
+.uport { font: 600 10.5px var(--mono); padding: 2px 8px; border: 1px solid var(--border-2);
+         border-radius: 6px; color: var(--fg-bright); background: var(--bg); cursor: pointer; }
+.uport:hover { border-color: #3a4350; }
+.uport.active { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+
 /* ===================== 색 강도(Off/Min/Normal/Vivid) =====================
    "색은 신호" 의 강약. Off=거의 원문, Normal=기본(약한 틴트), Vivid=강조 강화. */
 
@@ -627,9 +647,6 @@ body.rhythm-relaxed { --row-pad: 6px; --lh: 1.9; }
 <body class="int-normal rhythm-normal">
 
 <aside id="nav">
-  <button id="navToggle" class="nav-toggle" title="네비게이션 접기/펼치기" aria-label="네비게이션 접기/펼치기">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 6-6 6 6 6"/></svg>
-  </button>
   <section class="portboard" id="portboard"></section>
 </aside>
 
@@ -1177,49 +1194,97 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
   function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
   function txt(tag, t, cls) { const e = el(tag, cls); e.textContent = t; return e; }
 
-  function sig(ports, session, active) {
-    return active + "|" + (session || "") + "|" + ports.map(p =>
-      [p.port, p.hw, p.board, p.label, p.connected, p.baud, p.last_error].join(",")
-    ).join(";");
+  // 장비 타입 색·배지·상태 색 (디자인 토큰)
+  var TYPE_COLOR = { SSM: "#56d4dd", REP: "#e3b341", APU: "#3fb950", SB: "#6ab7ff" };
+  var STATUS_COLOR = { good: "#3fb950", live: "#3fb950", checking: "#e3b341", bad: "#f0786f", stale: "#707b88" };
+
+  function tint(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
   }
 
-  // 보드 이름 담백하게: ESP32-S3 → ESP32, STM32F4 → STM32 (칩 패밀리만)
-  function chipFamily(name) {
-    const m = String(name || "").match(/^[A-Za-z]+\d+/);
-    return m ? m[0] : (name || "");
+  // 그룹 노드 배치 — 디자인 layout() 포팅. 타입 행을 band 로 묶어 빈 행은 접는다.
+  // 반환 { w, h, placed:[{n,x,y,w,h}] }. UI 는 백엔드가 준 row/col 만 받아 절대배치(추론 안 함).
+  function layoutGroup(nodes) {
+    const SW = 108, SH = 66, GX = 16, RG = 14, BG = 26;
+    const bands = [[0], [1], [2, 3], [4, 5]];
+    const rows = new Set(nodes.map(n => n.row));
+    const rowY = {}; let y = 0, prev = false;
+    for (const band of bands) {
+      const vis = band.filter(r => rows.has(r));
+      if (!vis.length) continue;
+      if (prev) y += BG;
+      vis.forEach((r, i) => { rowY[r] = y; y += SH; if (i < vis.length - 1) y += RG; });
+      prev = true;
+    }
+    let maxCol = 0;
+    for (const n of nodes) maxCol = Math.max(maxCol, n.col || 0);
+    const w = (maxCol + 1) * (SW + GX) - GX, h = y;
+    const placed = nodes.map(n => ({ n: n, x: (n.col || 0) * (SW + GX), y: rowY[n.row] || 0, w: SW, h: SH }));
+    return { w: w, h: h, placed: placed };
   }
 
-  // hw/board 미제공 또는 구버전 응답일 때 label(별칭)에서 유닛/칩을 역추론한다.
-  //   "SB-STM (COM8)" → 유닛 "SB"·칩 "STM",  "SSM (COM4)" → 유닛 "SSM"·칩 없음,
-  //   "COM8"(별칭 미부여) → null(미분류). 별칭은 서버 autoname/SERIAL_NAMES 산출.
-  function aliasOf(p) {
-    const m = String(p.label || "").match(/^(.+?)\s*\(/);   // 괄호 앞 = 별칭, 괄호 없으면 미부여
-    return m ? m[1].trim() : null;
-  }
-  function unitOf(p) {
-    if (p.hw) return p.hw;
-    const a = aliasOf(p);
-    if (!a) return null;
-    const d = a.indexOf("-");
-    return d >= 0 ? a.slice(0, d) : a;       // "SB-STM"→"SB", "SSM"→"SSM"
-  }
-  function boardOf(p) {
-    if (p.board) return p.board;
-    const a = aliasOf(p);
-    if (!a) return null;
-    const d = a.indexOf("-");
-    return d >= 0 ? a.slice(d + 1) : null;   // "SB-STM"→"STM", "SSM"→null
+  // 노드: 라벨(밖·위) + 박스. 단일 MCU=박스에 한 칸, SB=좌우 두 칸(ESP|STM, 각 칸 클릭·상태점).
+  function renderNode(p, active, onSelect) {
+    const n = p.n, tc = TYPE_COLOR[n.type] || "#8b949e";
+    const wrap = el("div", "tnode");
+    wrap.style.left = p.x + "px"; wrap.style.top = p.y + "px";
+    wrap.style.width = p.w + "px"; wrap.style.height = p.h + "px";
+    wrap.appendChild(txt("div", n.label, "tn-name"));        // 타입/식별 라벨은 노드 밖(위)
+    const box = el("div", "tn-box");
+    box.style.borderColor = tint(tc, .55);
+    box.style.background = "linear-gradient(0deg," + tint(tc, .1) + "," + tint(tc, .1) + "),var(--bg-raised)";
+    const ports = n.ports || [];
+    if (ports.some(pt => pt.port === active)) box.classList.add("active");
+    for (const pt of ports) {                                // 단일=1칸, SB=2칸(ESP|STM)
+      const cell = el("div", "tn-cell" + (pt.port === active ? " active" : ""));
+      cell.title = "클릭 — " + pt.port + " 로그 보기";
+      const stat = el("span", "tn-stat");
+      stat.style.background = pt.connected ? STATUS_COLOR.good : STATUS_COLOR.stale;
+      cell.appendChild(stat);
+      cell.appendChild(txt("span", pt.mcu || "?"));          // 박스 안 = MCU(ESP/STM)
+      cell.onclick = () => onSelect(pt.port);
+      box.appendChild(cell);
+    }
+    wrap.appendChild(box);
+    return wrap;
   }
 
-  // 포트 한 행:  ● dot   board   COM
-  function buildRow(p, active, onSelect) {
-    const row = el("div", "prow" + (p.port === active ? " active" : ""));
-    row.title = "클릭 — 이 포트 로그 보기";
-    row.appendChild(el("span", "dot " + (p.connected ? "on" : "fail")));
-    row.appendChild(txt("span", chipFamily(boardOf(p) || p.port), "pb-board"));
-    row.appendChild(txt("span", p.port, "pb-com"));
-    row.onclick = () => onSelect(p.port);
-    return row;
+  // 그룹 = "그룹 N" 순번(밖·위) + 박스(노드 절대배치). 그룹↔SSM 1:1.
+  function renderGroup(g, idx, active, onSelect) {
+    const wrap = el("div");
+    wrap.appendChild(txt("div", "그룹 " + (idx + 1), "tgroup-num"));
+    const box = el("div", "tgroup");
+    const lay = layoutGroup(g.nodes || []);
+    box.style.width = (lay.w + 26) + "px";   // 콘텐츠 크기로 좌측 정렬
+    const canvas = el("div", "tcanvas");
+    canvas.style.width = lay.w + "px"; canvas.style.height = lay.h + "px";
+    for (const pl of lay.placed) canvas.appendChild(renderNode(pl, active, onSelect));
+    box.appendChild(canvas);
+    wrap.appendChild(box);
+    return wrap;
+  }
+
+  // 미분류 존 — 자동발견 안 된 포트를 COMx 뱃지만 담백하게. 클릭=그 포트 로그.
+  function renderUnclassified(unplaced, active, onSelect) {
+    const box = el("div", "tunclassified");
+    for (const port of unplaced) {
+      const b = txt("span", port, "uport" + (port === active ? " active" : ""));
+      b.title = "클릭 — " + port + " 로그 보기";
+      b.onclick = () => onSelect(port);
+      box.appendChild(b);
+    }
+    return box;
+  }
+
+  // [해제] 카드 onRelease 라벨용 — 로스터의 모든 포트를 {port} 객체로.
+  function allPorts(roster) {
+    const out = [];
+    for (const g of (roster.groups || []))
+      for (const n of (g.nodes || []))
+        for (const pt of (n.ports || [])) out.push({ port: pt.port });
+    for (const port of (roster.unplaced || [])) out.push({ port: port });
+    return out;
   }
 
   // AI 벤더 시그니처 배지 — 상표 로고 대신 식별용 색상+글리프(세션 문자열로 판별)
@@ -1268,31 +1333,25 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     return card;
   }
 
-  window.renderPortBoard = function (ports, session, active, onSelect, onRelease) {
+  // 좌측 통합 사이드바: [AI 세션 + 해제] 카드 위, 그 아래 SSM 그룹별 토폴로지 그래프.
+  // app.js 가 /api/topology 로스터로 호출: renderTopology(roster, session, active, onSelect, onRelease).
+  window.renderTopology = function (roster, session, active, onSelect, onRelease) {
+    roster = roster || { groups: [], unplaced: [] };
     const root = document.getElementById("portboard");
-    const s = sig(ports, session, active);
+    const s = JSON.stringify(roster) + "|" + (session || "") + "|" + (active || "");
     if (s === lastSig) return;
     lastSig = s;
     root.innerHTML = "";
-    root.appendChild(buildSession(session, ports, onRelease));
-    if (!ports.length) {
-      root.appendChild(txt("div", "감지된 시리얼 포트가 없습니다.", "sess-meta"));
-      return;
+    root.appendChild(buildSession(session, allPorts(roster), onRelease));
+    const groups = roster.groups || [], unplaced = roster.unplaced || [];
+    const wrap = el("div", "topo");
+    if (unplaced.length) wrap.appendChild(renderUnclassified(unplaced, active, onSelect));   // 있을 때만
+    if (!groups.length) {
+      wrap.appendChild(txt("div", "감지된 그룹 없음", "sess-meta"));
+    } else {
+      groups.forEach((g, i) => wrap.appendChild(renderGroup(g, i, active, onSelect)));
     }
-    // 그 아래: H.W 유닛별 박스 (연속 같은 유닛 묶기 — p.hw 우선, 없으면 label 별칭에서 추론)
-    const boxes = el("div", "hwboxes");
-    const hasUnit = ports.some(p => unitOf(p));
-    let i = 0;
-    while (i < ports.length) {
-      let j = i;
-      while (j < ports.length && unitOf(ports[j]) === unitOf(ports[i])) j++;
-      const box = el("div", "hwbox");
-      if (hasUnit) box.appendChild(txt("div", unitOf(ports[i]) || "—", "hwbox-label"));
-      for (let x = i; x < j; x++) box.appendChild(buildRow(ports[x], active, onSelect));
-      boxes.appendChild(box);
-      i = j;
-    }
-    root.appendChild(boxes);
+    root.appendChild(wrap);
   };
 
   window.resetPortBoardSig = function () { lastSig = ""; };
@@ -1316,6 +1375,7 @@ const state = {
   ports: [],
   session: null,
   multiSource: false,
+  topology: { groups: [], unplaced: [] },   // /api/topology 로스터 캐시(그래프 렌더원)
   streamLines: 0,
   streamItems: [],         // 재렌더용 원본 보관(설정 변경 시 다시 그림)
   newCount: 0,
@@ -1662,16 +1722,31 @@ async function refreshStatus() {
   state.multiSource = ports.length > 1;
   state.session = d.session || null;
   if (!state.port && ports.length) connectStream(pickDefaultPort(ports));
-  if (window.renderPortBoard) renderPortBoard(ports, state.session, state.port, selectPort, releaseSession);
+  renderTopologyNow();   // 세션·active 갱신 반영(로스터는 캐시 사용)
   const p = ports.find(x => x.port === state.port) || ports[0];
   if (p) $("cBuffer").textContent = (p.buffer_entries != null ? p.buffer_entries : 0) + "/" + (p.buffer_capacity != null ? p.buffer_capacity : "?");
 }
 setInterval(refreshStatus, 5000);
 
+/* 토폴로지 그래프 — 로스터(/api/topology)는 천천히 변하므로 별도 폴링, 렌더는 캐시+현재 active. */
+function renderTopologyNow() {
+  if (window.renderTopology)
+    renderTopology(state.topology, state.session, state.port, selectPort, releaseSession);
+}
+async function refreshTopology() {
+  let d;
+  try { d = await (await fetch("/api/topology")).json(); }
+  catch (e) { return; }
+  state.topology = d || { groups: [], unplaced: [] };
+  renderTopologyNow();
+}
+setInterval(refreshTopology, 5000);
+
 function selectPort(port) {
   if (port !== state.port) connectStream(port);
   localStorage.setItem("sv_port", port);
   resetPortBoardSig();
+  renderTopologyNow();     // 즉시 active 하이라이트(폴링 대기 없이)
   refreshStatus();
   refreshBuffer();
 }
@@ -1870,14 +1945,6 @@ wireToggle("tgFocus", "sv_focus", () => state.focus, v => state.focus = v, () =>
 /* 단축키 도움말 */
 $("tgHelp").onclick = () => $("help").classList.toggle("open");
 
-/* 네비게이션 접기/펼치기 (기억) */
-function setNav(collapsed) {
-  document.body.classList.toggle("nav-collapsed", collapsed);
-  localStorage.setItem("sv_nav", collapsed ? "1" : "0");
-}
-$("navToggle").onclick = () => setNav(!document.body.classList.contains("nav-collapsed"));
-setNav(localStorage.getItem("sv_nav") === "1");
-
 $("help").onclick = e => { if (e.target === $("help")) $("help").classList.remove("open"); };
 
 document.addEventListener("keydown", e => {
@@ -1898,6 +1965,7 @@ document.addEventListener("keydown", e => {
 /* ============================ 부팅 ============================ */
 async function init() {
   await refreshStatus();
+  await refreshTopology();
   recount();
 }
 init();
