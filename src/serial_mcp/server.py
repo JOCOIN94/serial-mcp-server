@@ -1251,7 +1251,7 @@ def _viewer_status_info() -> dict:
 def _viewer_topology_info() -> dict:
     """웹 뷰어 /api/topology — 포트별 정체 자동발견 → SSM별 그룹·배치 로스터.
 
-    각 포트의 최근 수신 줄(별칭 우선)로 장비(SSM/REP/APU/SB·ESP/STM)를 식별해
+    각 포트의 최근 수신 줄(별칭 우선)로 장비(SSM/REPEAT/APU/APU_C/SB·ESP/STM)를 식별해
     topology.build_roster 가 그래프 노드(row/col/ports)를 만든다. 좌측 토폴로지
     그래프가 이 로스터를 그대로 그린다(노드 클릭 = 그 포트 로그 보기, SB 는 ESP/STM 분할).
     읽기 전용·실패 안전(예외 시 빈 로스터 — 뷰어 보조기능이 MCP 코어를 막지 않는다).

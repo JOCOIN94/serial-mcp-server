@@ -1,6 +1,6 @@
 """topology.py — 시리얼 포트 → 메시 토폴로지 로스터(순수 로직, I/O 비의존).
 
-각 포트의 수신 로그(또는 별칭)로 장비를 식별(SSM/REP/APU/SB·ESP/STM)하고, SSM별
+각 포트의 수신 로그(또는 별칭)로 장비를 식별(SSM/REPEAT/APU/APU_C/SB·ESP/STM)하고, SSM별
 그룹·행(타입)·열(번호)로 배치한 로스터를 만든다. 웹 뷰어 좌측 토폴로지 그래프가 이
 로스터(groups[].nodes[].{row,col,...})를 그대로 절대배치로 그린다 — UI는 배치를 추론하지
 않는다.
@@ -18,23 +18,36 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Optional
 
-# 메시 계층 → 그래프 행. SSM(게이트웨이)=0, REP(리피터)=1, APU=2, SB(베이)=4.
-# (디자인의 bands [[0],[1],[2,3],[4,5]] 와 호환 — 빈 행은 프론트 layout 이 접는다.)
-ROW_BY_TYPE = {"SSM": 0, "REP": 1, "APU": 2, "SB": 4}
-TYPE_RANK = {"SSM": 0, "REP": 1, "APU": 2, "SB": 3}   # 그룹 내 정렬용
+# 펌웨어 장비타입 enum(SSM_esp32.h:468-472·repeater 헤더): dTSSM=1·dTAPU=2·dTAPU_C_SLIM=3·
+# dTSBB=4·dTRPT=5. 각 장비의 자기 보고 [Tx - my INFO] 의 INFO[0] 이 이 타입숫자다. 문자열
+# 토큰(별칭·SSM INFO 테이블)도 함께 정규화한다. 주의: SSM simplevInfoBuffer 는 5(Repeater)를
+# 문자열 변환 없이 숫자로 흘리므로 "5"→REPEAT 매핑이 반드시 있어야 한다.
+DEVICE_TYPE = {
+    "1": "SSM", "2": "APU", "3": "APU_C", "4": "SB", "5": "REPEAT",
+    "SSM": "SSM", "APU": "APU", "APU_C": "APU_C", "APUC": "APU_C",
+    "SB": "SB", "REPEAT": "REPEAT", "REP": "REPEAT",
+}
 
-# 로그 내용 식별 시그니처: (type, mcu, weight, regex). 점수 합산 — 단일 whitelist 아님.
-# SSM/SB 는 실측 검증, REP/APU 는 실측 캡처 전이라 '명시 별칭 우선'으로 보수 운영.
+# 메시 계층 → 그래프 행. SSM(게이트웨이)=0, REPEAT=1, APU=2, APU_C=3, SB(베이)=4.
+# (빈 행은 프론트 layout 이 접는다.)
+ROW_BY_TYPE = {"SSM": 0, "REPEAT": 1, "APU": 2, "APU_C": 3, "SB": 4}
+TYPE_RANK = {"SSM": 0, "REPEAT": 1, "APU": 2, "APU_C": 3, "SB": 4}   # 그룹 내 정렬용
+
+# 로그 내용 식별 시그니처(약한 폴백 증거, conf 0.6): (type, mcu, weight, regex). 점수 합산.
+# 고유 수동(passive) 패턴이 있는 보드만 등록한다: SSM(Proc-*/Route)·SB-STM(BayID 등).
+# 리프 ESP(SB/APU/APU_C/REPEAT)는 [Tx - my INFO]/[WiFi_Rx]/Save 등 태그를 전부 공유해(펌웨어
+# 검증: Repeat/APU/APU_C 도 활성 출력) 수동 시그니처로 서로 못 가르므로, 타입 판별은
+# classify_device ②단계 INFO[0] enum 이 전담한다(SB-ESP 도 INFO[0]=4 로만 식별). over-broad
+# 패턴을 SB 로 등록하면 INFO 없는 윈도의 APU/REPEAT 를 SB 로 오분류하므로 두지 않는다(§7-1 미확정=UNKNOWN).
 _SIGNATURES = [
     # SSM-ESP(게이트웨이): Proc-* 는 WiFi 활성 시만 나오므로 Route/From SB/REPRSSI 도 함께.
     ("SSM", "ESP", 3, re.compile(r"\[Proc-WiFiRx\]|\[Proc-Raw Packet\]|\[Proc_WiFiTx\]|\[Proc-WebRTx\]")),
     ("SSM", "ESP", 3, re.compile(r"\[Route\] Link|<<<\s*From\s+SB|REPRSSI")),
-    # SB-ESP: 자기 INFO 송신 + WiFi 수신.
-    ("SB", "ESP", 3, re.compile(r"\[Tx - my INFO\]|\[WiFi_Rx\]|Save a new Reved-Packet")),
-    # SB-STM: 베이 컨트롤러(카드·가격·베이설정).
+    # SB-STM: 베이 컨트롤러(카드·가격·베이설정) — SB 고유.
     ("SB", "STM", 3, re.compile(r"\bBayID\s*:|<\s*MasterCard\s*>|BayConfig Info|minCoinSensingTime|Price1st")),
 ]
 
@@ -43,7 +56,18 @@ _RE_BAYID = re.compile(r"\bBayID\s*:\s*(\d+)")          # SB-STM
 _RE_UNID = re.compile(r'"UnID"\s*:\s*(\d+)')            # SB-ESP(자기 패킷의 UnID=자기 BayID)
 
 # 별칭(SERIAL_NAMES/AUTONAME) 파싱: 'SB1-ESP'→type SB·num 1·mcu ESP, 'SSM'→type SSM.
-_RE_ALIAS_UNIT = re.compile(r"^(SSM|SB|REP|APU)\s*0*(\d+)?$", re.IGNORECASE)
+_RE_ALIAS_UNIT = re.compile(r"^(SSM|SB|REPEAT|REP|APU_C|APUC|APU)\s*0*(\d+)?$", re.IGNORECASE)
+
+# 자기 보고 [Tx - my INFO] 의 INFO[0](장비타입 enum). '[Tx - my INFO]' 컨텍스트를 요구해
+# SSM [Proc-WiFiRx] 가 남의 INFO를 중계 인용한 줄을 오인하지 않는다(README 경고).
+_RE_INFO_TYPE = re.compile(r'\[Tx - my INFO\][^\n{]*\{[^\n}]*?"INFO"\s*:\s*\[\s*"?(\d+)"?')
+# STM32(SB 베이 컨트롤러) 부팅 배너 — SSM 없이 SB 단독 연결(standalone) 시 분류 근거.
+_RE_STM_BANNER = re.compile(r"SmartBay\s*FW", re.IGNORECASE)
+# SSM INFO 명령(simplevInfoBuffer) 전체 장비 테이블 헤더.
+_RE_SSM_TABLE = re.compile(r"Information on the entire equipment")
+
+# 분류 신뢰도(높을수록 강한 증거).
+_CONF = {"manual": 1.0, "info_json": 0.95, "stm32_banner": 0.9, "ssm_table": 0.9, "signature": 0.6}
 
 
 def _norm_mcu(chip: Optional[str]) -> Optional[str]:
@@ -71,7 +95,8 @@ def parse_alias(alias: Optional[str]) -> tuple[Optional[str], Optional[int], Opt
     m = _RE_ALIAS_UNIT.match(unit.strip())
     if not m:
         return (None, None, mcu)
-    typ = m.group(1).upper()
+    raw = m.group(1).upper()
+    typ = DEVICE_TYPE.get(raw, raw)                    # REP→REPEAT, APUC→APU_C 정규화
     num = int(m.group(2)) if m.group(2) else None
     return (typ, num, mcu)
 
@@ -82,7 +107,7 @@ def classify_lines(lines) -> tuple[Optional[str], Optional[str]]:
     여러 시그니처 점수를 합산해 최고 (type, mcu)를 고른다. 각 보드 고유 패턴만 등록해
     상대 보드명 인용(SSM 로그 속 'SB1' 등) 오인을 억제한다.
     """
-    blob = "\n".join(lines) if isinstance(lines, (list, tuple)) else str(lines or "")
+    blob = _blob(lines)
     scores: dict[tuple[str, str], int] = {}
     for typ, mcu, weight, rx in _SIGNATURES:
         n = len(rx.findall(blob))
@@ -93,29 +118,115 @@ def classify_lines(lines) -> tuple[Optional[str], Optional[str]]:
     return max(scores.items(), key=lambda kv: kv[1])[0]
 
 
+def _blob(lines) -> str:
+    """줄 리스트/문자열을 단일 문자열로 합친다(분류·추출용)."""
+    return "\n".join(lines) if isinstance(lines, (list, tuple)) else str(lines or "")
+
+
+def _extract_info_type(blob: str) -> Optional[str]:
+    """자기 보고 '[Tx - my INFO]' 줄에서 INFO[0](장비타입 토큰)을 추출. 없으면 None.
+
+    줄의 첫 '{' 부터 JSON 으로 파싱(필드 순서·중첩 객체 무관, plan §7-2 '첫 {/[ 부터 파싱'),
+    실패 시 정규식 폴백. '[Tx - my INFO]' 태그를 요구해 SSM 의 중계 인용(남의 INFO)은 잡지
+    않는다(README 경고). [Tx - my INFO] 는 전 리프(SB/APU/APU_C/REPEAT) 공통이라 타입 판별은
+    INFO[0] enum 으로만 한다.
+    """
+    for line in blob.split("\n"):
+        if "[Tx - my INFO]" not in line:
+            continue
+        i = line.find("{")
+        if i >= 0:
+            try:
+                obj, _ = json.JSONDecoder().raw_decode(line[i:])   # 첫 JSON 값만, 후행 무시
+                info = obj.get("INFO") if isinstance(obj, dict) else None
+                if isinstance(info, list) and info:
+                    return str(info[0])
+            except (ValueError, TypeError):
+                pass
+        m = _RE_INFO_TYPE.search(line)     # JSON 파싱 실패 시 정규식 폴백
+        if m:
+            return m.group(1)
+    return None
+
+
+def classify_device(lines, alias: Optional[str] = None) -> dict:
+    """포트 1개의 장비 정체를 추정. 반환 {type, mcu, number, confidence, source}.
+
+    명시 별칭(manual)이 최우선, 없으면 4단계 로그 자동발견: ②자기 보고 [Tx - my INFO] 의
+    INFO[0] 장비타입 enum(info_json) ③STM32 'SmartBay FW' 배너(stm32_banner — SSM 없는 SB
+    단독 분류) ④SSM INFO 테이블 헤더(ssm_table) ⑤시그니처 점수 합산(signature, 약). 못 정하면
+    type=None·confidence 0.0. INFO[0] 은 자기 보고 줄에서만 읽어 SSM 의 중계 인용(남의 INFO)을
+    오분류하지 않고, 자기 보고했으나 미지 enum 이면 over-broad 시그니처로 SB 단정하지 않고 미상.
+    number 는 별칭 번호만(로그 기반 번호 보강은 identify_port 가 담당).
+    mcu 기본값('ESP') 부여는 이 함수가 단일 소유한다(identify_port 는 재보정하지 않음).
+    """
+    # ① 명시 별칭 — 최우선
+    typ, num, mcu = parse_alias(alias)
+    if typ:
+        if mcu is None and typ != "SB":
+            mcu = "ESP"                    # SSM/REPEAT/APU/APU_C 는 단일 ESP
+        return {"type": typ, "mcu": mcu, "number": num, "confidence": _CONF["manual"], "source": "manual"}
+
+    blob = _blob(lines)
+    # ② 자기 보고 [Tx - my INFO] 의 INFO[0] = 장비타입 enum (강한 증거)
+    info0 = _extract_info_type(blob)
+    if info0 is not None:                  # 자기 보고함 → 리프 장비(SSM/SB-STM 아님)
+        t = DEVICE_TYPE.get(info0)
+        if t:
+            return {"type": t, "mcu": "ESP", "number": None, "confidence": _CONF["info_json"], "source": "info_json"}
+        # 미지/미래 enum 자기 보고 → over-broad 시그니처로 SB 단정 금지, 미상 처리
+        return {"type": None, "mcu": None, "number": None, "confidence": 0.0, "source": None}
+    # ③ STM32 배너 → SB/STM (standalone 포함)
+    if _RE_STM_BANNER.search(blob):
+        return {"type": "SB", "mcu": "STM", "number": None, "confidence": _CONF["stm32_banner"], "source": "stm32_banner"}
+    # ④ SSM INFO 테이블 헤더
+    if _RE_SSM_TABLE.search(blob):
+        return {"type": "SSM", "mcu": "ESP", "number": None, "confidence": _CONF["ssm_table"], "source": "ssm_table"}
+    # ⑤ 시그니처 점수(약한 증거) — Phase A 합산 재사용
+    t, mc = classify_lines(lines)
+    if t:
+        if mc is None and t != "SB":
+            mc = "ESP"
+        return {"type": t, "mcu": mc, "number": None, "confidence": _CONF["signature"], "source": "signature"}
+    # ⑥ 미상
+    return {"type": None, "mcu": None, "number": None, "confidence": 0.0, "source": None}
+
+
 def _number_from_lines(typ: Optional[str], mcu: Optional[str], lines) -> Optional[int]:
-    """SB 의 자기 번호(BayID/UnID) 추출 — ESP/STM 짝을 묶는 키. SSM/REP/APU 는 None."""
+    """SB 의 자기 번호(BayID/UnID) 추출 — ESP/STM 짝을 묶는 키. SB 외(SSM/REPEAT/APU/APU_C)는 None.
+
+    mcu=STM→BayID, ESP→UnID. mcu 미상(예: 칩 미표기 SB 별칭)이면 둘 다 시도한다 — 한 포트
+    로그는 ESP/STM 한쪽 포맷이라 충돌하지 않는다.
+    """
     if typ != "SB":
         return None
-    blob = "\n".join(lines) if isinstance(lines, (list, tuple)) else str(lines or "")
-    rx = _RE_BAYID if mcu == "STM" else _RE_UNID
-    m = rx.search(blob)
-    return int(m.group(1)) if m else None
+    blob = _blob(lines)
+    if mcu == "STM":
+        rxes = (_RE_BAYID,)
+    elif mcu == "ESP":
+        rxes = (_RE_UNID,)
+    else:
+        rxes = (_RE_BAYID, _RE_UNID)
+    for rx in rxes:
+        m = rx.search(blob)
+        if m:
+            return int(m.group(1))
+    return None
 
 
 def identify_port(port: str, alias: Optional[str], lines, connected: bool = True) -> dict:
-    """포트 1개의 정체 추정. 별칭 우선, 없으면 로그 자동발견.
+    """포트 1개의 정체 추정. 별칭 우선, 없으면 로그 자동발견(classify_device 4단계).
 
-    반환: {port, type, mcu, number, connected}. type 미상이면 type=None(미분류).
+    반환: {port, type, mcu, number, connected, type_confidence, type_source}.
+    type 미상이면 type=None(미분류).
     """
-    typ, num, mcu = parse_alias(alias)
-    if typ is None:                                   # 별칭으로 못 정하면 로그로 발견
-        typ, mcu = classify_lines(lines)
-    if num is None:                                   # 번호는 로그(BayID/UnID)로 보강
+    info = classify_device(lines, alias)              # 별칭 우선 → 로그 자동발견(mcu 기본값 포함)
+    typ, mcu = info["type"], info["mcu"]
+    num = info["number"]                              # 명시 별칭 번호(있으면)
+    if num is None:                                   # 없으면 로그(BayID/UnID)로 보강
         num = _number_from_lines(typ, mcu, lines)
-    if mcu is None and typ in ("SSM", "REP", "APU"):  # 이들은 단일 ESP MCU(도메인 사실)
-        mcu = "ESP"                                   # — 노드 내부 라벨용 기본값
-    return {"port": port, "type": typ, "mcu": mcu, "number": num, "connected": bool(connected)}
+    return {"port": port, "type": typ, "mcu": mcu, "number": num, "connected": bool(connected),
+            "type_confidence": info["confidence"], "type_source": info["source"]}
 
 
 def _status_of(connected: bool) -> str:

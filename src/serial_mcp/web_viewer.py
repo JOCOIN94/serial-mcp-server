@@ -590,7 +590,7 @@ kbd {
 .tgroup-num { font: 700 10px var(--ui); letter-spacing: .08em; color: var(--muted); margin: 0 0 6px 2px; }
 .tcanvas { position: relative; }   /* width/height 인라인 — 절대배치 노드 컨테이너 */
 
-/* 노드 = 라벨(밖·위) + 박스(색). 단일 MCU(SSM/REP/APU)는 박스에 ESP 한 칸,
+/* 노드 = 라벨(밖·위) + 박스(색). 단일 MCU(SSM/REPEAT/APU/APU_C)는 박스에 ESP 한 칸,
    SB 는 박스를 좌우로 나눠 ESP|STM 두 칸(각 칸이 포트 클릭 타깃·자체 상태점). */
 .tnode { position: absolute; box-sizing: border-box; display: flex; flex-direction: column;
          align-items: stretch; user-select: none; }
@@ -1195,7 +1195,7 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
   function txt(tag, t, cls) { const e = el(tag, cls); e.textContent = t; return e; }
 
   // 장비 타입 색·배지·상태 색 (디자인 토큰)
-  var TYPE_COLOR = { SSM: "#56d4dd", REP: "#e3b341", APU: "#3fb950", SB: "#6ab7ff" };
+  var TYPE_COLOR = { SSM: "#56d4dd", REPEAT: "#e3b341", APU: "#3fb950", APU_C: "#2ea043", SB: "#6ab7ff" };
   var STATUS_COLOR = { good: "#3fb950", live: "#3fb950", checking: "#e3b341", bad: "#f0786f", stale: "#707b88" };
 
   function tint(hex, a) {
