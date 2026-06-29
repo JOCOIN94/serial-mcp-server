@@ -3,10 +3,11 @@
 > **▶ 핸드오프 (2026-06-26 재작성)** — 이 문서는 GPT 리뷰 + cbm 펌웨어 검증 + SSM-부재 케이스까지 반영한 **단일 진실원 총정리본**이다.
 > - **Phase A 완료·커밋·push** (main `3cdcbbf`, origin 동기화).
 > - **Phase B 진행(2026-06-29, ultracode 자율 — 모듈별 TDD→Workflow 적대리뷰→수정→커밋)**:
->   ✅모듈1 classifier `9f23da9` · ✅모듈2 events `464e7d2` · ✅모듈3 correlator `9f83ca7`. **303 테스트 그린, 미push.**
->   남은: 모듈4 routing(Rt토큰맵·[Route]Link 링크그래프·RSSI ladder) → 5 roster(standalone그룹·edges)
+>   ✅모듈1 classifier `9f23da9` · ✅모듈2 events `464e7d2` · ✅모듈3 correlator `9f83ca7`
+>   · ✅모듈4 routing `f31a097`(링크그래프·토큰맵·RSSI ladder, 예약토큰 '00'/'FF' 가드). **332 테스트 그린, 미push.**
+>   남은: 5 roster(standalone그룹·edges, build_roster 확장)
 >   → 6 engine(server.py observe탭·bootstrap INFO·sweep) → 7 routes(/api/topology[/stream]) → 8 front → Phase C.
->   신규 모듈은 flat 파일(topology_events.py·topology_correlator.py)로 두었고 향후 topology/ 패키지화 가능.
+>   신규 모듈은 flat 파일(topology_events.py·topology_correlator.py·topology_routing.py)로 두었고 향후 topology/ 패키지화 가능.
 >   상관기 핵심: (UnID,Unique) 1차키·실패vs unconfirmed 는 'SSM이 들은 UnID' 단위 스코프(전역래치 아님).
 > - **Phase B/C 설계 확정** = 이 문서. 상관기·분류기·경로 모델이 v1(단일키)에서 **대폭 개정**됐다(§5 펌웨어 사실이 근거).
 > - **범위 = A(뷰어) + B(엔진) + C(`get_topology` MCP)**, 모두 확정.
