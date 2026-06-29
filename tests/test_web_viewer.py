@@ -129,6 +129,38 @@ def test_stream_sse_isolated_per_port(viewer):
         resp.close()
 
 
+def test_topology_stream_sse_publishes_hop():
+    feed = RawFeed()
+    v = ViewerServer(
+        ports_info=lambda: [],
+        feed_for=lambda p: None,
+        buffer_info=lambda p: {},
+        status_info=lambda: {"ports": []},
+        topology_feed=feed,
+        port=0,
+    )
+    v.start()
+    try:
+        resp = urllib.request.urlopen(v.url + "/api/topology/stream", timeout=5)
+        try:
+            assert "text/event-stream" in resp.headers["Content-Type"]
+            hop = {
+                "id": "hop-1",
+                "ts": 12.5,
+                "kind": "info",
+                "path": ["node:SB5", "node:SSM"],
+                "ok": True,
+            }
+            feed.publish(BASE, hop)
+            line = resp.readline().decode("utf-8")
+            payload = json.loads(line[len("data: "):])
+            assert payload == hop
+        finally:
+            resp.close()
+    finally:
+        v.stop()
+
+
 def test_stream_unknown_port_404(viewer):
     v, _, _ = viewer
     with pytest.raises(urllib.error.HTTPError) as exc:

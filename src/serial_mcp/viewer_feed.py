@@ -12,23 +12,23 @@ from __future__ import annotations
 import threading
 from collections import deque
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 
 class Subscription:
     """구독자 하나의 수신 큐. RawFeed.subscribe()가 만들어 준다."""
 
     def __init__(self, maxlen: int) -> None:
-        self._q: deque[tuple[datetime, str]] = deque(maxlen=maxlen)
+        self._q: deque[tuple[datetime, Any]] = deque(maxlen=maxlen)
         self._cond = threading.Condition()
 
-    def _put(self, ts: datetime, text: str) -> None:
+    def _put(self, ts: datetime, payload: Any) -> None:
         with self._cond:
-            self._q.append((ts, text))   # maxlen 초과 시 deque가 oldest를 자동으로 버림
+            self._q.append((ts, payload))   # maxlen 초과 시 deque가 oldest를 자동으로 버림
             self._cond.notify()
 
-    def get(self, timeout: float = 1.0) -> Optional[tuple[datetime, str]]:
-        """다음 (ts, text)를 반환. timeout까지 없으면 None."""
+    def get(self, timeout: float = 1.0) -> Optional[tuple[datetime, Any]]:
+        """다음 (ts, payload)를 반환. timeout까지 없으면 None."""
         with self._cond:
             if not self._q:
                 self._cond.wait(timeout)
@@ -38,7 +38,7 @@ class Subscription:
 
 
 class RawFeed:
-    """구독자들에게 수신 라인을 분배하는 허브. 스레드 안전."""
+    """구독자들에게 payload를 분배하는 허브. 스레드 안전."""
 
     def __init__(self, queue_maxlen: int = 1000) -> None:
         self._subs: list[Subscription] = []
@@ -56,9 +56,9 @@ class RawFeed:
             if sub in self._subs:
                 self._subs.remove(sub)
 
-    def publish(self, ts: datetime, text: str) -> None:
+    def publish(self, ts: datetime, payload: Any) -> None:
         """리더 스레드가 호출. 논블로킹 — 구독자가 없으면 no-op."""
         with self._lock:
             subs = list(self._subs)
         for sub in subs:
-            sub._put(ts, text)
+            sub._put(ts, payload)

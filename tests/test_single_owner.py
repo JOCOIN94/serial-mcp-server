@@ -131,6 +131,54 @@ def test_owner_acquire_starts_topology_lifecycle_before_readers(monkeypatch):
     assert lock_socket.closed is True
 
 
+def test_topology_observe_publishes_hops_to_topology_feed(monkeypatch):
+    hop = {"id": "observed-hop", "kind": "info", "path": ["node:SB5", "node:SSM"]}
+    feed = srv.RawFeed()
+    sub = feed.subscribe()
+
+    class Engine:
+        def observe(self, port, ts, text):
+            assert port == "COM_A"
+            assert text == "[Proc-WiFiRx] {}"
+            return [hop]
+
+    monkeypatch.setattr(srv, "_topology_engine", Engine(), raising=False)
+    monkeypatch.setattr(srv, "_topology_feed", feed, raising=False)
+
+    srv._topology_observe("COM_A", "[Proc-WiFiRx] {}")
+
+    item = sub.get(timeout=1.0)
+    assert item is not None
+    assert item[1] == hop
+
+
+def test_topology_loop_publishes_swept_hops(monkeypatch):
+    hop = {"id": "timeout-hop", "kind": "inferred_timeout", "ok": False}
+    feed = srv.RawFeed()
+    sub = feed.subscribe()
+
+    class Engine:
+        def sweep(self, now):
+            return [hop]
+
+    class StopAfterOneTick:
+        def __init__(self):
+            self.calls = 0
+
+        def wait(self, interval):
+            self.calls += 1
+            return self.calls > 1
+
+    monkeypatch.setattr(srv, "_topology_engine", Engine(), raising=False)
+    monkeypatch.setattr(srv, "_topology_feed", feed, raising=False)
+
+    srv._topology_loop(0.0, StopAfterOneTick(), bootstrap_enabled=False)
+
+    item = sub.get(timeout=1.0)
+    assert item is not None
+    assert item[1] == hop
+
+
 def test_occupied_lock_reports_busy_without_creating_monitors(monkeypatch):
     blocker = socket.socket()
     blocker.bind(("127.0.0.1", 0))

@@ -9,7 +9,8 @@
 >   · ✅모듈6-a `topology_engine.py` TopologyEngine(observe·sweep·roster·recent_hops, 순수 상태+Lock)
 >   · ✅모듈6-b server.py 배선 `a32693c`(on_line observe탭·sweep 데몬·engine.roster·bootstrap INFO[기본 OFF opt-in])
 >   · ✅모듈6-b 후속 owner 생애주기 통합 테스트 보완(엔진 생성·sweep thread·release join·engine None 정리). **365 테스트 그린, 미push.**
->   남은: 7 routes(/api/topology 는 이미 engine.roster 로 배선됨 — `/api/topology/stream` 홉 SSE 추가) → 8 front(홉 애니메이션·디테일 패널) → Phase C(get_topology MCP).
+>   · ✅모듈7 routes `/api/topology/stream` 홉 SSE(RawFeed payload 일반화·observe/sweep hop publish·ViewerServer 배선). **368 테스트 그린, 미push.**
+>   남은: 8 front(홉 애니메이션·디테일 패널) → Phase C(get_topology MCP).
 >
 > **▶ 모듈7-8 핸드오프(routes·front)**:
 >   - **7 routes**: `/api/topology` 는 이미 `_viewer_topology_info`→`engine.roster` 로 동작(모듈6-b). 남은 건

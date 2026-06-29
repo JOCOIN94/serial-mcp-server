@@ -318,6 +318,7 @@ _session_lock = threading.Lock()
 
 # ---- 토폴로지 엔진 (Phase B) ----
 _topology_engine: Optional[TopologyEngine] = None
+_topology_feed = RawFeed()                    # /api/topology/stream 홉 SSE feed
 _topology_stop = threading.Event()            # sweep 타이머 종료 신호
 _topology_thread: Optional[threading.Thread] = None
 _topology_owner_ts: float = 0.0               # owner 획득 monotonic(부팅 window 기준점)
@@ -525,9 +526,21 @@ def _topology_observe(port: str, text: str) -> None:
     if eng is None:
         return
     try:
-        eng.observe(port, time.monotonic(), text)
+        _publish_topology_hops(eng.observe(port, time.monotonic(), text))
     except Exception as e:  # noqa: BLE001 - 토폴로지 실패는 코어로 전파 금지
         _log(f"topology observe 오류({port}): {e!r}")
+
+
+def _publish_topology_hops(hops) -> None:
+    """TopologyEngine hop 결과를 뷰어 SSE feed로 발행한다(논블로킹·실패 격리)."""
+    if not hops:
+        return
+    try:
+        ts = datetime.now()
+        for hop in hops:
+            _topology_feed.publish(ts, hop)
+    except Exception as e:  # noqa: BLE001 - 뷰어 보조기능 실패가 관측 경로를 막으면 안 됨
+        _log(f"topology stream publish 오류: {e!r}")
 
 
 def _bootstrap_due(now: float, owner_ts: float, boot_window_s: float, sent: set,
@@ -579,7 +592,7 @@ def _topology_loop(interval: float, stop: threading.Event, bootstrap_enabled: bo
         try:
             eng = _topology_engine
             if eng is not None:
-                eng.sweep(time.monotonic())
+                _publish_topology_hops(eng.sweep(time.monotonic()))
             if bootstrap_enabled:
                 _topology_bootstrap_tick()
         except Exception as e:  # noqa: BLE001 - 데몬 루프 보호
@@ -604,7 +617,7 @@ def _start_topology_locked(cfg: dict) -> None:
 def _acquire_owner_locked() -> Optional[dict]:
     """8743/SERIAL_WEB bind를 시도해 성공 시 whole-session owner 리소스를 시작한다."""
     global _viewer, _lock_socket, _owner_active
-    global _topology_engine, _topology_owner_ts, _topology_bootstrapped
+    global _topology_engine, _topology_feed, _topology_owner_ts, _topology_bootstrapped
 
     if _owner_active or _monitors:
         return None
@@ -614,6 +627,7 @@ def _acquire_owner_locked() -> Optional[dict]:
     web_ui = bool(cfg.get("web_ui", True))
 
     try:
+        _topology_feed = RawFeed()
         if web_ui:
             viewer = ViewerServer(
                 ports_info=_viewer_ports_info,
@@ -621,6 +635,7 @@ def _acquire_owner_locked() -> Optional[dict]:
                 buffer_info=_viewer_buffer_info,
                 status_info=_viewer_status_info,
                 topology_info=_viewer_topology_info,
+                topology_feed=_topology_feed,
                 release_port=_viewer_release_port,
                 port=port,
             )

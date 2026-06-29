@@ -39,6 +39,7 @@ class _ViewerHTTPServer(ThreadingHTTPServer):
     buffer_info: Callable[[str], dict]
     status_info: Callable[[], dict]
     topology_info: Callable[[], dict]
+    topology_feed: Optional[RawFeed]
     release_port: Callable[[str], dict]
 
 
@@ -69,6 +70,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(self.server.status_info())
         elif path == "/api/topology":
             self._send_json(self.server.topology_info())
+        elif path == "/api/topology/stream":
+            self._serve_topology_stream()
         elif path == "/api/release":
             out = self.server.release_port(port)
             self._send_json(out, status=404 if out.get("status") == "error" else 200)
@@ -89,6 +92,18 @@ class _Handler(BaseHTTPRequestHandler):
         if feed is None:
             self.send_error(404, "unknown port")
             return
+        self._serve_feed(feed, lambda item: {"ts": _fmt_ts(item[0]), "text": item[1]})
+
+    def _serve_topology_stream(self) -> None:
+        """SSE — 토폴로지 Hop dict를 한 이벤트씩 흘려보낸다."""
+        feed = self.server.topology_feed
+        if feed is None:
+            self.send_error(404, "topology stream unavailable")
+            return
+        self._serve_feed(feed, lambda item: item[1])
+
+    def _serve_feed(self, feed: RawFeed, encode_item) -> None:
+        """RawFeed 구독을 SSE data 이벤트로 변환한다."""
         # 구독을 헤더 전송보다 먼저: 클라이언트가 응답 헤더를 받은 시점에는
         # 이미 구독이 살아 있어야 발행 누락이 없다(테스트·실사용 레이스 방지).
         sub = feed.subscribe()
@@ -108,8 +123,7 @@ class _Handler(BaseHTTPRequestHandler):
                         idle = 0.0
                     continue
                 idle = 0.0
-                ts, text = item
-                data = json.dumps({"ts": _fmt_ts(ts), "text": text}, ensure_ascii=False)
+                data = json.dumps(encode_item(item), ensure_ascii=False)
                 self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionError, OSError):
@@ -128,6 +142,7 @@ class ViewerServer:
         buffer_info: Callable[[str], dict],
         status_info: Callable[[], dict],
         topology_info: Optional[Callable[[], dict]] = None,
+        topology_feed: Optional[RawFeed] = None,
         release_port: Optional[Callable[[str], dict]] = None,
         port: int = 8743,
     ) -> None:
@@ -136,6 +151,7 @@ class ViewerServer:
         self._buffer_info = buffer_info
         self._status_info = status_info
         self._topology_info = topology_info or (lambda: {"groups": [], "unplaced": []})
+        self._topology_feed = topology_feed
         self._release_port = release_port or (
             lambda _port: {"status": "error", "message": "unknown port"}
         )
@@ -156,6 +172,7 @@ class ViewerServer:
         self._httpd.buffer_info = self._buffer_info
         self._httpd.status_info = self._status_info
         self._httpd.topology_info = self._topology_info
+        self._httpd.topology_feed = self._topology_feed
         self._httpd.release_port = self._release_port
         self.url = f"http://127.0.0.1:{self._httpd.server_address[1]}"
         threading.Thread(
