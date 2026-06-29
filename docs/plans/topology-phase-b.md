@@ -5,9 +5,27 @@
 > - **Phase B 진행(2026-06-29, ultracode 자율 — 모듈별 TDD→Workflow 적대리뷰→수정→커밋)**:
 >   ✅모듈1 classifier `9f23da9` · ✅모듈2 events `464e7d2` · ✅모듈3 correlator `9f83ca7`
 >   · ✅모듈4 routing `f31a097`(링크그래프·토큰맵·RSSI ladder, 예약토큰 '00'/'FF' 가드)
->   · ✅모듈5 roster `a365786`(standalone 그룹·링크 edges·원격 mesh 노드·노드 enrich, build_roster 확장). **347 테스트 그린, 미push.**
->   남은: 6 engine(server.py: SerialReader._run observe탭·TopologyEngine 상태·bootstrap INFO(SSM한정·서버발신·boot-window guard)·sweep 타이머·홉 feed)
->   → 7 routes(/api/topology[/stream] SSE) → 8 front → Phase C(get_topology MCP).
+>   · ✅모듈5 roster `a365786`(standalone 그룹·링크 edges·원격 mesh 노드·노드 enrich, build_roster 확장)
+>   · ✅모듈6-a `topology_engine.py` TopologyEngine(observe·sweep·roster·recent_hops, 순수 상태+Lock). **355 테스트 그린, 미push.**
+>   남은: **6-b server.py 배선** → 7 routes(/api/topology[/stream] SSE) → 8 front → Phase C(get_topology MCP).
+>
+> **▶ 모듈6-b 배선 핸드오프(server.py, 표면 이미 정찰함)**:
+>   1. 전역 `_topology_engine: Optional[TopologyEngine]=None`. `_acquire_owner_locked`(server.py:507~)에서
+>      `_start_monitors_locked` **앞**에 생성, `_release_owner_locked`(:566~)에서 None 으로 정리.
+>   2. **observe 탭 = 기존 on_line 훅 재사용**(신규 _run 수정 불필요). `_make_monitor`(:1442~)의 on_line 은
+>      이미 autoname 용이라 **합성**해야 함: autoname(있으면) + `_topology_engine.observe(port, time.monotonic(), text)`
+>      (예외 삼킴, engine None 가드 — test_hotplug/test_single_owner 가 engine 없이 _make_monitor 호출).
+>      ts 는 **time.monotonic()**(단조, datetime 아님 — 윈도 클럭).
+>   3. **sweep 타이머 스레드**: `_hotplug_loop`(:1522~) 패턴 복제(stop Event·daemon·release 시 join). tick 마다
+>      `engine.sweep(time.monotonic())`. 홉 feed(SSE)는 모듈7 — 6-b 는 sweep 가 만료/유휴flush 만 돌리면 됨.
+>   4. `_viewer_topology_info`(:1251~): `build_roster(entries)` → `_topology_engine.roster(entries, now=time.monotonic())`
+>      (engine None 이면 기존 build_roster 폴백). entries 조립 로직은 그대로.
+>   5. **bootstrap INFO(안전민감)**: 순수 결정 헬퍼(ssm_port·owner_start·now·window·sent·enabled→보낼 포트|None) +
+>      sweep tick 에서 `reader.write(b"INFO\r\n", audit=...)`(서버-내부, `_confirm_write` 비경유). 가드: SSM 식별 포트
+>      한정·boot_window 후·1회. **INFO 는 §9 안전 read 지만 실HW e2e([실장비], §12.5 미완) 전까지 default-OFF**
+>      (env `SERIAL_TOPOLOGY_BOOTSTRAP=1` opt-in) 권장 — 자동 시리얼 송신은 HW 검증 후 default 전환.
+>   각 단계 후 `uv run python -m pytest -q` 그린 확인. 6-b 완료 후 Workflow 적대리뷰(스레딩·bootstrap 안전 렌즈 포함).
+>   신규 모듈 flat 파일: topology_events·_correlator·_routing·_engine.py(향후 topology/ 패키지화 가능).
 >   신규 모듈은 flat 파일(topology_events.py·topology_correlator.py·topology_routing.py)로 두었고 향후 topology/ 패키지화 가능.
 >   상관기 핵심: (UnID,Unique) 1차키·실패vs unconfirmed 는 'SSM이 들은 UnID' 단위 스코프(전역래치 아님).
 > - **Phase B/C 설계 확정** = 이 문서. 상관기·분류기·경로 모델이 v1(단일키)에서 **대폭 개정**됐다(§5 펌웨어 사실이 근거).
