@@ -174,17 +174,14 @@ def test_get_topology_returns_roster_and_recent_hops(monkeypatch, dual):
             self.now = None
             self.recent_n = None
 
-        def roster(self, entries, now=None):
+        def roster_and_recent_hops(self, entries, now=None, n=20):
             self.entries = entries
             self.now = now
+            self.recent_n = n
             return {
                 "groups": [{"id": "group:SSM", "nodes": [{"id": "node:SSM"}], "edges": []}],
                 "unplaced": [],
-            }
-
-        def recent_hops(self, n):
-            self.recent_n = n
-            return [{"id": "hop-1", "path": ["node:SB5", "node:SSM"], "ok": True}]
+            }, [{"id": "hop-1", "path": ["node:SB5", "node:SSM"], "ok": True}]
 
     engine = FakeTopologyEngine()
     monkeypatch.setattr(srv, "_topology_engine", engine, raising=False)

@@ -5,6 +5,7 @@
 낸다. 시리얼 I/O·타이머·부트스트랩 송신은 server.py 가 배선한다(이 클래스는 I/O 비의존).
 """
 
+import serial_mcp.topology_engine as topology_engine
 from serial_mcp.topology_engine import TopologyEngine
 
 # 실측 멀티라인 RX 블록(plan §14). 마지막 블록은 다음 헤더/flush 전까지 pending.
@@ -20,6 +21,10 @@ SSM_RX_BLOCK = [
 def _feed(eng, port, lines, t0=1.0):
     for i, ln in enumerate(lines):
         eng.observe(port, t0 + i, ln)
+
+
+def _ssm_entries():
+    return [{"port": "COM4", "alias": "SSM", "lines": SSM_RX_BLOCK, "connected": True}]
 
 
 # ---- observe → 홉 방출 ----
@@ -51,12 +56,81 @@ def test_roster_includes_link_edges_from_observed_webtx():
     eng = TopologyEngine()
     _feed(eng, "COM4", SSM_RX_BLOCK, t0=1.0)
     eng.flush()
-    entries = [{"port": "COM4", "alias": "SSM", "lines": SSM_RX_BLOCK, "connected": True}]
+    entries = _ssm_entries()
     r = eng.roster(entries, now=10.0)
     g = r["groups"][0]
     assert g["kind"] == "ssm"
     # REPRSSI 가 링크 그래프 간선으로 잡힘(소스 macAddress → 이웃).
     assert any(e["from"] == "30:AE:A4:4B:1A:0C" for e in g["edges"])
+
+
+def test_roster_and_recent_hops_returns_matching_snapshots():
+    eng = TopologyEngine()
+    _feed(eng, "COM4", SSM_RX_BLOCK, t0=1.0)
+    eng.flush()
+    entries = _ssm_entries()
+
+    roster, hops = eng.roster_and_recent_hops(entries, now=10.0, n=10)
+
+    assert roster == eng.roster(entries, now=10.0)
+    assert hops == eng.recent_hops(10)
+
+
+def test_roster_and_recent_hops_keeps_causal_edge_with_hop():
+    eng = TopologyEngine()
+    _feed(eng, "COM4", SSM_RX_BLOCK, t0=1.0)
+    eng.flush()
+
+    roster, hops = eng.roster_and_recent_hops(_ssm_entries(), now=10.0, n=10)
+
+    assert any(h["key"] == (5, 25) and h["ok"] is True for h in hops)
+    edges = roster["groups"][0]["edges"]
+    assert any(
+        e["from"] == "30:AE:A4:4B:1A:0C" and e["to"] == "A0:85:E3:EA:5C:C4"
+        for e in edges
+    )
+
+
+def test_roster_and_recent_hops_zero_or_negative_hops_empty():
+    eng = TopologyEngine()
+    _feed(eng, "COM4", SSM_RX_BLOCK, t0=1.0)
+
+    _, zero_hops = eng.roster_and_recent_hops(_ssm_entries(), now=10.0, n=0)
+    _, negative_hops = eng.roster_and_recent_hops(_ssm_entries(), now=10.0, n=-1)
+
+    assert zero_hops == []
+    assert negative_hops == []
+
+
+def test_roster_matches_atomic_roster_part_after_delegation():
+    eng = TopologyEngine()
+    _feed(eng, "COM4", SSM_RX_BLOCK, t0=1.0)
+    eng.flush()
+    entries = _ssm_entries()
+
+    atomic_roster, hops = eng.roster_and_recent_hops(entries, now=10.0, n=0)
+
+    assert hops == []
+    assert eng.roster(entries, now=10.0) == atomic_roster
+
+
+def test_roster_and_recent_hops_builds_roster_outside_engine_lock(monkeypatch):
+    eng = TopologyEngine()
+    _feed(eng, "COM4", SSM_RX_BLOCK, t0=1.0)
+    eng.flush()
+    locked_during_build = []
+
+    def fake_build_roster(entries, routing=None, now=None):
+        locked_during_build.append(eng._lock.locked())
+        return {"groups": [{"id": "g", "edges": routing.edges(now)}], "unplaced": []}
+
+    monkeypatch.setattr(topology_engine, "build_roster", fake_build_roster)
+
+    roster, hops = eng.roster_and_recent_hops(_ssm_entries(), now=10.0, n=10)
+
+    assert locked_during_build == [False]
+    assert roster["groups"][0]["edges"]
+    assert hops == eng.recent_hops(10)
 
 
 # ---- sweep: 만료 pending(TX-without-RX) ----

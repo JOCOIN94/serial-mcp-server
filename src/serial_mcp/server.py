@@ -1061,13 +1061,16 @@ def get_topology(ctx: Optional[Context] = None) -> dict:
     if busy:
         return {**busy, "roster": {"groups": [], "unplaced": []}, "recent_hops": []}
 
-    roster = _viewer_topology_info()
     eng = _topology_engine
     try:
-        recent_hops = eng.recent_hops(20) if eng is not None else []
-    except Exception as e:  # noqa: BLE001 - 토폴로지 보조 조회 실패는 빈 히스토리로 격리
-        _log(f"최근 topology hop 조회 실패: {e!r}")
-        recent_hops = []
+        if eng is not None:
+            roster, recent_hops = eng.roster_and_recent_hops(
+                _topology_entries(), now=time.monotonic(), n=20)
+        else:
+            roster, recent_hops = build_roster(_topology_entries()), []
+    except Exception as e:  # noqa: BLE001 - 토폴로지 보조 조회 실패는 빈 스냅샷으로 격리
+        _log(f"topology 스냅샷 생성 실패: {e!r}")
+        roster, recent_hops = {"groups": [], "unplaced": []}, []
 
     groups = roster.get("groups", []) if isinstance(roster, dict) else []
     return {
@@ -1412,6 +1415,20 @@ def _viewer_status_info() -> dict:
     return {"session": _session_label, "ports": plist}
 
 
+def _topology_entries() -> list:
+    """모니터별 로스터 분류 입력 entries 조립. 예외 격리는 호출부가 담당한다."""
+    entries = []
+    for m in _monitors.values():
+        r = m.reader
+        entries.append({
+            "port": m.port,
+            "alias": m.name,
+            "lines": m.buffer.get_recent(300),
+            "connected": bool(r and r.connected),
+        })
+    return entries
+
+
 def _viewer_topology_info() -> dict:
     """웹 뷰어 /api/topology — 포트별 정체 자동발견 → SSM별 그룹·배치 로스터.
 
@@ -1422,15 +1439,7 @@ def _viewer_topology_info() -> dict:
     SB 는 ESP/STM 분할). 읽기 전용·실패 안전(예외 시 빈 로스터 — 뷰어 보조기능이 코어를 막지 않음).
     """
     try:
-        entries = []
-        for m in _monitors.values():
-            r = m.reader
-            entries.append({
-                "port": m.port,
-                "alias": m.name,
-                "lines": m.buffer.get_recent(300),   # 분류용 최근 줄(가벼운 render)
-                "connected": bool(r and r.connected),
-            })
+        entries = _topology_entries()
         eng = _topology_engine
         if eng is not None:
             return eng.roster(entries, now=time.monotonic())   # routing enrich(edges·원격노드)

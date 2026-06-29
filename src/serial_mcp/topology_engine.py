@@ -5,6 +5,7 @@
   routing(링크그래프·토큰맵)·correlator(다중홉 상관)에 흘려 홉을 방출하고 히스토리에 적재.
   sweep(now) → 유휴 pending 블록 flush + correlator 만료 처리(TX-without-RX).
   roster(entries) → routing 을 얹은 로스터 스냅샷. recent_hops(n) → 최근 홉(get_topology 용).
+  roster_and_recent_hops(entries,n) → 로스터 routing 스냅샷과 최근 홉을 같은 Lock 세션에서 캡처.
 
 리더 스레드(observe)·도구 호출(roster/recent_hops)·sweep 타이머가 공유 상태에 동시 접근하므로
 단일 Lock 으로 보호한다(AGENTS.md 버퍼/공유상태 Lock). 윈도 클럭은 **서버 도착 단조시각 ts**
@@ -90,15 +91,22 @@ class TopologyEngine:
                 new += self._drain(asm.flush())
             return new
 
-    def roster(self, entries, now: Optional[float] = None) -> dict:
-        """관측된 routing(링크그래프·토큰맵)을 얹은 로스터 스냅샷. 읽기 전용.
+    def roster_and_recent_hops(self, entries, now: Optional[float] = None, n: int = 20) -> tuple[dict, list]:
+        """로스터용 routing 스냅샷과 최근 홉을 한 Lock 세션에서 캡처해 반환한다.
 
-        Lock 안에서 routing 스냅샷만 뜨고, CPU 무거운 build_roster(포트별 정규식 분류)는 Lock
-        밖에서 돈다 — 뷰어 폴링이 엔진 Lock 으로 리더 observe 를 막지 않게(관측 비차단).
+        _drain 은 같은 Lock 안에서 routing.observe → correlator.observe 순서로 홉을 적재하므로,
+        routing 스냅샷과 _hops tail 을 함께 뜨면 recent_hops 에만 있는 링크 skew 를 피할 수 있다.
+        CPU 무거운 build_roster(포트별 정규식 분류)는 Lock 밖에서 수행해 관측 비차단을 유지한다.
         """
         with self._lock:
             snap = _RoutingSnapshot(self._routing.tokens(), self._routing.edges(now))
-        return build_roster(entries, routing=snap, now=now)
+            hops = [] if n <= 0 else list(self._hops)[-n:]
+        return build_roster(entries, routing=snap, now=now), hops
+
+    def roster(self, entries, now: Optional[float] = None) -> dict:
+        """관측된 routing(링크그래프·토큰맵)을 얹은 로스터 스냅샷. 읽기 전용."""
+        roster, _ = self.roster_and_recent_hops(entries, now=now, n=0)
+        return roster
 
     def recent_hops(self, n: int = 20) -> list:
         """최근 홉 n개(get_topology·SSE 보강용). 시간순 tail. n<=0 이면 빈 리스트."""
