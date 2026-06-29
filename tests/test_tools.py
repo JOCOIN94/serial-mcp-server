@@ -162,6 +162,59 @@ def test_viewer_release_port_releases_whole_session(monkeypatch, single):
     assert "release" in calls[0]
 
 
+# ---- get_topology ----
+
+def test_get_topology_returns_roster_and_recent_hops(monkeypatch, dual):
+    a, _ = dual
+    a.buffer.add("FW Ver: SSM", BASE)
+
+    class FakeTopologyEngine:
+        def __init__(self):
+            self.entries = None
+            self.now = None
+            self.recent_n = None
+
+        def roster(self, entries, now=None):
+            self.entries = entries
+            self.now = now
+            return {
+                "groups": [{"id": "group:SSM", "nodes": [{"id": "node:SSM"}], "edges": []}],
+                "unplaced": [],
+            }
+
+        def recent_hops(self, n):
+            self.recent_n = n
+            return [{"id": "hop-1", "path": ["node:SB5", "node:SSM"], "ok": True}]
+
+    engine = FakeTopologyEngine()
+    monkeypatch.setattr(srv, "_topology_engine", engine, raising=False)
+
+    out = srv.get_topology()
+
+    assert out["status"] == "ok"
+    assert out["roster"]["groups"][0]["id"] == "group:SSM"
+    assert out["recent_hops"] == [{"id": "hop-1", "path": ["node:SB5", "node:SSM"], "ok": True}]
+    assert engine.recent_n == 20
+    assert engine.now is not None
+    assert [entry["port"] for entry in engine.entries] == ["COM_A", "COM_B"]
+    assert engine.entries[0]["alias"] == "SSM"
+    assert engine.entries[0]["connected"] is True
+
+
+def test_get_topology_busy_keeps_snapshot_shape(monkeypatch):
+    monkeypatch.setattr(
+        srv,
+        "_ensure_owner",
+        lambda ctx=None, **kwargs: {"status": "busy", "message": "다른 세션이 사용 중"},
+    )
+
+    out = srv.get_topology()
+
+    assert out["status"] == "busy"
+    assert out["roster"] == {"groups": [], "unplaced": []}
+    assert out["recent_hops"] == []
+
+
 # ---- get_recent_logs / query_serial_logs / get_log_buffer_info ----
 
 def test_query_routes_by_port(dual):

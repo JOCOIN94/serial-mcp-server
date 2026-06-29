@@ -1045,6 +1045,41 @@ def get_serial_status(port: str = "", ctx: Optional[Context] = None) -> dict:
 
 
 @mcp.tool()
+def get_topology(ctx: Optional[Context] = None) -> dict:
+    """[언제 호출] 메시/멀티포트 장비에서 "어느 보드가 어디로 지나갔는지"를
+    해석하기 전에 호출한다. AI가 웹 뷰어를 보지 않고도 SSM/Repeater/APU/SB
+    로스터와 최근 홉 경로를 한 번에 읽는 전 포트 스냅샷 도구다.
+
+    [무엇을 반환] roster 는 현재 포트 로그와 routing 관측으로 만든 그룹/노드/엣지
+    구조이고, recent_hops 는 최근 20개 실제 경로 후보/성공/실패/미확정 요약이다.
+    이 도구는 전 포트 토폴로지를 반환하므로 port 인자를 받지 않는다. 포트별 원문은
+    get_recent_logs/query_serial_logs 로 이어서 확인하라.
+
+    [루프 단계] 메시 경로 해석. 읽기 전용.
+    """
+    busy = _ensure_owner(ctx)
+    if busy:
+        return {**busy, "roster": {"groups": [], "unplaced": []}, "recent_hops": []}
+
+    roster = _viewer_topology_info()
+    eng = _topology_engine
+    try:
+        recent_hops = eng.recent_hops(20) if eng is not None else []
+    except Exception as e:  # noqa: BLE001 - 토폴로지 보조 조회 실패는 빈 히스토리로 격리
+        _log(f"최근 topology hop 조회 실패: {e!r}")
+        recent_hops = []
+
+    groups = roster.get("groups", []) if isinstance(roster, dict) else []
+    return {
+        "status": "ok",
+        "message": f"토폴로지 그룹 {len(groups)}개, 최근 홉 {len(recent_hops)}개",
+        "roster": roster,
+        "recent_hops": recent_hops,
+        "viewer_url": _viewer_url(),
+    }
+
+
+@mcp.tool()
 def get_recent_logs(lines: int = 200, port: str = "", ctx: Optional[Context] = None) -> dict:
     """[언제 호출] 블랙박스 루프의 '결과 확인' 단계 — 사람이 장비를 동작시킨 뒤
     쌓인 로그를 확인할 때. 가장 자주 쓰는 도구.

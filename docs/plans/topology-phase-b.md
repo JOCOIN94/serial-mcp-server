@@ -10,7 +10,8 @@
 >   · ✅모듈6-b server.py 배선 `a32693c`(on_line observe탭·sweep 데몬·engine.roster·bootstrap INFO[기본 OFF opt-in])
 >   · ✅모듈6-b 후속 owner 생애주기 통합 테스트 보완(엔진 생성·sweep thread·release join·engine None 정리). **365 테스트 그린, 미push.**
 >   · ✅모듈7 routes `/api/topology/stream` 홉 SSE(RawFeed payload 일반화·observe/sweep hop publish·ViewerServer 배선). **368 테스트 그린, 미push.**
->   남은: 8 front(홉 애니메이션·디테일 패널) → Phase C(get_topology MCP).
+>   · ✅Phase C `get_topology` MCP(전포트 roster + recent_hops 20, SPEC/README 동기화). **370 테스트 그린, 미push.**
+>   남은: 8 front(홉 애니메이션·디테일 패널) → 실장비 e2e → 배포 레포 serial 스킬 도구목록 동기화.
 >
 > **▶ 모듈7-8 핸드오프(routes·front)**:
 >   - **7 routes**: `/api/topology` 는 이미 `_viewer_topology_info`→`engine.roster` 로 동작(모듈6-b). 남은 건
@@ -20,8 +21,8 @@
 >   - **8 front**: `web_viewer.py` `_HTML` 좌측 — `/api/topology/stream`→`window.topologyHop(hop)` 엣지 하이라이트·
 >     경로 애니메이션(바닐라 SVG+rAF). 로스터 `edges`(standalone 그룹 포함) 렌더 + 디테일 패널(경로 칩·구간 RSSI·
 >     quality·실패/미확정). 순수 로직(엣지 geometry·rssiColor)은 VIEWER-PURE + `viewer_logic_harness.cjs`.
->   - **Phase C**: `get_topology` MCP 도구 = `{roster: engine.roster(entries), recent_hops: engine.recent_hops(20)}`.
->     SPEC §5 조회 6→7종·`serial` 스킬 도구목록 동기화.
+>   - **Phase C**: `get_topology` MCP 도구 = `{status, message, roster, recent_hops, viewer_url}`.
+>     `roster` 는 `engine.roster(entries)`, `recent_hops` 는 `engine.recent_hops(20)`. SPEC §5 조회 6→7종·README 동기화 완료. 배포 레포 `serial` 스킬 도구목록 동기화는 후속.
 >   신규 모듈 flat 파일: topology_events·_correlator·_routing·_engine.py(향후 topology/ 패키지화 가능).
 >   상관기 핵심: (UnID,Unique) 1차키·실패vs unconfirmed 는 'SSM이 들은 UnID' 단위 스코프(전역래치 아님).
 > - **Phase B/C 설계 확정** = 이 문서. 상관기·분류기·경로 모델이 v1(단일키)에서 **대폭 개정**됐다(§5 펌웨어 사실이 근거).

@@ -15,6 +15,7 @@ ESP32·STM32 등 시리얼로 텍스트 로그를 출력하는 임베디드 보�
 |---|---|
 | `list_serial_ports` | 포트 목록 + VID/PID/description + 별칭 `name` (보드 식별은 별칭으로 — VID/PID는 어댑터 칩 확인용) |
 | `get_serial_status` | 연결 상태 / 포트 / 보드레이트 / 마지막 에러 |
+| `get_topology` | 전 포트 메시 토폴로지 로스터 + 최근 홉 20개(웹 뷰어 없이 AI가 경로 해석) |
 | `get_recent_logs(lines=200)` | 최근 N줄 (접힌 묶음 표기 포함) |
 | `query_serial_logs(pattern, max_results=100)` | 정규식 검색 |
 | `get_log_buffer_info` | 버퍼 크기 / 최신·최오래 항목 |
@@ -22,7 +23,7 @@ ESP32·STM32 등 시리얼로 텍스트 로그를 출력하는 임베디드 보�
 | `send_serial_command(command, port="", eol="\n", wait_ms=500)` | 보드 CLI/AT 명령 전송 + 직후 응답 회수(매 호출 승인) |
 | `reset_board(port="", wait_ms=2000)` | DTR/RTS 자동리셋 펄스 + 부팅 로그 회수(매 호출 승인) |
 
-**블랙박스 루프:** `clear_log_buffer` → 가능하면 `reset_board` 승인 후 직접 리셋(거부/미지원/0줄이면 사람이 물리 리셋) → `get_recent_logs` / `query_serial_logs`.
+**블랙박스 루프:** `clear_log_buffer` → 가능하면 `reset_board` 승인 후 직접 리셋(거부/미지원/0줄이면 사람이 물리 리셋) → `get_recent_logs` / `query_serial_logs`. 메시/멀티홉 경로를 해석할 때는 `get_topology`로 로스터와 최근 홉을 먼저 확인한다.
 
 ## 설치
 
@@ -90,7 +91,7 @@ claude mcp add --scope user serial-mcp \
   - ② **모든 동작 상태에서 나오는 패턴**이어야 한다 — 정상 동작 중에만 나오는 줄(예: 하위장비 패킷 처리 `\[Proc-`)을 고르면 **고장·유휴 상태에서 식별이 안 된다**(WiFi 끊긴 SSM은 `\[Proc-` 대신 `[IOc] Disconnected!`만 뱉음). 부팅 배너(`FW Ver:…`)나 상태 무관 상시 마커(`\[IOc\]` 등)가 안전하다.
 - **별칭의 `유닛-칩` 규칙**: 웹 뷰어는 별칭의 첫 `-` 앞을 유닛, 뒤를 칩으로 묶는다(`SB-ESP`·`SB-STM`→유닛 "SB", `SSM-ESP`→유닛 "SSM"·칩 "ESP"). 한 유닛에 칩이 여러 개면 한 박스로 묶여 보인다.
 
-AI 도구는 보드가 여러 개면 `port` 인자(별칭/포트명/`SSM (COM4)` 라벨)를 지정해 호출한다. 미지정 시 예외는 둘 — `get_serial_status`는 전 포트 상태 배열을 반환하고, `clear_log_buffer`는 전체 버퍼를 비운다.
+포트 단위 AI 도구는 보드가 여러 개면 `port` 인자(별칭/포트명/`SSM (COM4)` 라벨)를 지정해 호출한다. 미지정 시 예외는 둘 — `get_serial_status`는 전 포트 상태 배열을 반환하고, `clear_log_buffer`는 전체 버퍼를 비운다. `get_topology`는 전 포트 토폴로지 스냅샷이라 `port` 인자가 없다.
 
 ### 자기 포트 찾기
 

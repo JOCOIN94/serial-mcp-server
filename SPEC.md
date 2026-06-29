@@ -59,12 +59,13 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - 근거: 실장비(SSM) 펌웨어가 메시지 사이에 빈 줄을 교대로 출력해 §4.2의 중복 접기 판정(당시 직전 줄 비교)이 항상 깨졌다(dedup 무력화 + 버퍼 절반 낭비). 빈 줄은 AI 디버깅에 정보 가치가 없다.
 - tee 파일(§3)에는 빈 줄을 포함한 수신 원본이 그대로 기록된다.
 
-## 5. 도구 (조회 6종 읽기 전용 + 쓰기 2종 승인 게이트)
+## 5. 도구 (조회 7종 읽기 전용 + 쓰기 2종 승인 게이트)
 
-각 도구는 `status`와 `message`를 포함한 dict를 반환한다. `status`는 기본적으로 `ok|error`이며, 사용자가 쓰기 승인을 거부한 경우 `declined`를 반환한다(시스템 오류가 아니므로 AI는 같은 요청을 반복하지 말고 사람과 다음 행동을 합의한다). docstring은 사람을 위한 설명이 아니라 AI를 위한 사용 지침으로 작성하며, AI가 해당 도구를 언제·어떤 목적으로 호출하는지 명확히 기술한다. 반환 dict는 AI가 파싱·추론하기 좋은 구조로 구성한다. 다중 포트에서는 모든 조회/쓰기 도구가 `port` 인자(별칭/포트명/라벨 `SSM (COM4)` 형태 모두 허용, 대소문자 무관)를 받는다 — 에러 응답의 `ports` 목록 항목을 그대로 되돌려 호출해도 해석된다 — 미지정 시 포트 1개면 그 포트, 복수면 에러와 함께 `ports` 목록을 반환한다(`get_serial_status` 미지정은 전 포트 상태 배열, `clear_log_buffer` 미지정은 전체 비우기).
+각 도구는 `status`와 `message`를 포함한 dict를 반환한다. `status`는 기본적으로 `ok|error`이며, 사용자가 쓰기 승인을 거부한 경우 `declined`를 반환한다(시스템 오류가 아니므로 AI는 같은 요청을 반복하지 말고 사람과 다음 행동을 합의한다). docstring은 사람을 위한 설명이 아니라 AI를 위한 사용 지침으로 작성하며, AI가 해당 도구를 언제·어떤 목적으로 호출하는지 명확히 기술한다. 반환 dict는 AI가 파싱·추론하기 좋은 구조로 구성한다. 다중 포트에서는 포트 단위 조회/쓰기 도구가 `port` 인자(별칭/포트명/라벨 `SSM (COM4)` 형태 모두 허용, 대소문자 무관)를 받는다 — 에러 응답의 `ports` 목록 항목을 그대로 되돌려 호출해도 해석된다 — 미지정 시 포트 1개면 그 포트, 복수면 에러와 함께 `ports` 목록을 반환한다(`get_serial_status` 미지정은 전 포트 상태 배열, `clear_log_buffer` 미지정은 전체 비우기). `get_topology`는 전 포트 메시 토폴로지 스냅샷이라 `port` 인자를 받지 않는다.
 
 - `list_serial_ports` : 사용 가능한 포트 목록 + VID/PID·description(어댑터 칩 식별용, 예: CH343, CP210x) + 별칭 `name`·`monitored_ports`(보드 식별은 별칭으로 — 별칭이 없으면 로그 내용 또는 사람으로 확인).
 - `get_serial_status` : 현재 연결 상태(`connected`/`opening`), 포트, 보드레이트. (웹 뷰어 활성 시 `viewer_url` 포함 — `get_log_buffer_info`도 동일. AI는 세션 첫 호출 시 사용자 요청이 없어도 이 링크를 안내한다.) 첫 호출은 reader 의 첫 open 결판을 짧게(기본 1.5초) 기다려 lazy 기동 직후의 self-trigger race(전 포트 일시 `connected=false`)를 막는다. `opening=true`는 '꺼짐'이 아니라 첫 연결 진행/지연이며, 실제 미연결은 `last_error`로 판단한다.
+- `get_topology` : 전 포트 로스터(그룹·노드·엣지)와 최근 홉 20개(`recent_hops`)를 반환한다. AI가 웹 뷰어 없이 SSM/Repeater/APU/SB 메시 경로를 해석할 때 먼저 호출한다.
 - `get_recent_logs(lines=200)` : 최근 N줄(접힌 묶음 반복 횟수 표기 포함).
 - `query_serial_logs(pattern, max_results=100)` : 정규식으로 버퍼 검색.
 - `get_log_buffer_info` : 버퍼 크기 / 최신·최오래 항목.
@@ -72,7 +73,7 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 - `send_serial_command(command, port="", eol="\n", wait_ms=500)` : 보드 CLI/AT 명령을 UTF-8 텍스트로 전송하고, 전송 직후 `wait_ms` 동안 들어온 응답 로그를 회수한다.
 - `reset_board(port="", wait_ms=2000)` : DTR/RTS 펄스로 자동리셋 회로 보드를 하드웨어 리셋하고, 부팅 로그를 회수한다. native-USB/미배선 보드는 0줄 회수로 나타날 수 있으며, 이때 사람에게 물리 리셋을 요청한다.
 
-블랙박스 시험 절차: `clear_log_buffer`(시작) → 가능하면 `reset_board`(승인 팝업) 또는 사람이 장비 동작/리셋 → `get_recent_logs` / `query_serial_logs`(확인). AI가 자율 반복한다.
+블랙박스 시험 절차: `clear_log_buffer`(시작) → 가능하면 `reset_board`(승인 팝업) 또는 사람이 장비 동작/리셋 → `get_recent_logs` / `query_serial_logs`(확인). 메시/멀티홉 경로 해석은 `get_topology`로 로스터와 최근 홉을 먼저 확인한다. AI가 자율 반복한다.
 
 **5.1 docstring과 스킬의 책임 분리**
 - 각 도구의 docstring은 **자족적(self-contained)**으로 작성한다. 스킬이 없는 환경(예: `claude mcp add`로 MCP만 등록)에서도 AI가 그 도구를 단독 사용할 수 있도록, 도구 하나의 목적·호출 시점·반환 구조를 완결적으로 기술한다.
