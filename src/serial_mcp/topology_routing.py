@@ -135,6 +135,10 @@ class RoutingTable:
                         "source": v["source"], "fresh": fresh})
         return out
 
+    def tokens(self) -> dict:
+        """토큰맵 스냅샷(사본) {token: {name,mac,unid}}. roster(모듈5)가 원격 노드·mac 해소에 쓴다."""
+        return {tok: dict(ent) for tok, ent in self._tokens.items()}
+
     def resolve_token(self, token) -> Optional[dict]:
         """라우팅 토큰 → 노드 식별 {name,mac,unid} 사본. 미등록/예약 토큰이면 None."""
         tok = _norm_token(token)

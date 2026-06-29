@@ -211,6 +211,15 @@ def test_webtx_missing_src_mac_no_edges():
     assert rt.edges(now=1.0) == []      # src 결측이면 모든 reprssi 간선 무시
 
 
+def test_tokens_snapshot_is_copy():
+    rt = RoutingTable()
+    rt.observe(info_ev(unid=5, mac="AA"))
+    snap = rt.tokens()
+    assert snap["05"]["unid"] == 5 and snap["05"]["mac"] == "AA"
+    snap["05"]["unid"] = 999
+    assert rt.tokens()["05"]["unid"] == 5     # 내부 상태 불변(사본)
+
+
 def test_resolve_returns_copy_not_internal():
     rt = RoutingTable()
     rt.observe(info_ev(unid=5, mac="AA"))

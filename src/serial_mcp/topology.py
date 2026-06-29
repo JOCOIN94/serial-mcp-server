@@ -66,8 +66,9 @@ _RE_STM_BANNER = re.compile(r"SmartBay\s*FW", re.IGNORECASE)
 # SSM INFO 명령(simplevInfoBuffer) 전체 장비 테이블 헤더.
 _RE_SSM_TABLE = re.compile(r"Information on the entire equipment")
 
-# 분류 신뢰도(높을수록 강한 증거).
-_CONF = {"manual": 1.0, "info_json": 0.95, "stm32_banner": 0.9, "ssm_table": 0.9, "signature": 0.6}
+# 분류 신뢰도(높을수록 강한 증거). route_name = SSM 이 해소한 [Passed Device] 토큰→이름(원격 mesh 노드).
+_CONF = {"manual": 1.0, "info_json": 0.95, "stm32_banner": 0.9, "ssm_table": 0.9,
+         "route_name": 0.9, "signature": 0.6}
 
 
 def _norm_mcu(chip: Optional[str]) -> Optional[str]:
@@ -234,15 +235,20 @@ def _status_of(connected: bool) -> str:
     return "good" if connected else "stale"
 
 
-def build_roster(entries) -> dict:
-    """포트 목록 → 토폴로지 로스터.
+def build_roster(entries, routing=None, now=None) -> dict:
+    """포트 목록(+선택 라우팅 상태) → 토폴로지 로스터.
 
     entries: [{port, alias, lines, connected}] (lines 는 최근 수신 줄 list).
-    반환: {"groups": [{id, label, ssm_port, nodes:[node...]}], "unplaced": [port...]}.
-      node = {id, type, label, row, col, status, ports:[{mcu, port, connected}]}.
+    routing: 선택 RoutingTable(모듈4) — 주면 링크그래프 edges·원격 mesh 노드·mac/토큰 enrich 를
+      얹는다. 없으면(Phase A 호출부) edges=[]·원격노드 없음으로 하위호환 유지. now=fresh 판정 클럭.
+    반환: {"groups": [{id, label, ssm_port, kind, nodes:[node...], edges:[...]}], "unplaced":[port...]}.
+      kind = "ssm"(SSM 보유) | "standalone"(SSM 부재). edges = [{from,to,rssi,fresh}](SSM 그룹 한정).
+      node = {id, type, type_confidence, type_source, label, mac, unit_id, route_token,
+              row, col, status, ports:[{mcu, port, connected}]}.
       - SB 의 ESP/STM(같은 번호)은 한 노드로 병합(ports 2개, 프론트가 [ESP|STM] 분할).
+      - 원격 mesh 노드([Passed Device] 로만 등장, 직접 포트 없음)는 ports=[]·status="unknown".
       - row=타입 계층, col=같은 타입 내 번호/발견순.
-    불변식: 그룹↔SSM 1:1. SSM 0개면 단일 기본 그룹, 1개면 그 SSM 그룹, N개면 N그룹.
+    불변식: 그룹↔SSM 1:1. SSM 0개면 단일 standalone 그룹, 1개면 그 SSM 그룹, N개면 N그룹.
     """
     ids = [identify_port(e["port"], e.get("alias"), e.get("lines"), e.get("connected", True))
            for e in entries]
@@ -252,22 +258,81 @@ def build_roster(entries) -> dict:
     ssms = [d for d in placed if d["type"] == "SSM"]
     others = [d for d in placed if d["type"] != "SSM"]
 
-    # 그룹 골격(그룹↔SSM 1:1). SSM 없으면 단일 기본 그룹.
+    # 그룹 골격(그룹↔SSM 1:1). SSM 없으면 단일 standalone 그룹(SSM group 아님, 실패 아님).
     if ssms:
-        groups = [{"id": f"g{i+1}", "label": _label(s), "ssm_port": s["port"], "_members": [s]}
-                  for i, s in enumerate(ssms)]
+        groups = [{"id": f"g{i+1}", "label": _label(s), "ssm_port": s["port"],
+                   "kind": "ssm", "_members": [s]} for i, s in enumerate(ssms)]
     else:
-        groups = [{"id": "g1", "label": "(SSM 미식별)", "ssm_port": None, "_members": []}]
+        groups = [{"id": "g1", "label": "(SSM 미식별)", "ssm_port": None,
+                   "kind": "standalone", "_members": []}]
 
     # 비-SSM 귀속: Phase A 는 GID 미파싱이라 단일 SSM 가정(첫 그룹에 귀속). 멀티 SSM 의
-    # 정확한 GID/채널 귀속은 Phase B. (실측 기준 구성은 SSM 1개라 정확.)
+    # 정확한 GID/채널 귀속은 후속(합성 테스트). (실측 기준 구성은 SSM 1개라 정확.)
     for d in others:
         groups[0]["_members"].append(d)
 
-    for g in groups:
-        g["nodes"] = _layout_group(g["_members"])
+    token_map = routing.tokens() if routing is not None else {}
+    unid_idx = _unid_index(token_map)                       # unid → (token, entry): mac/토큰 enrich
+    link_edges = _group_edges(routing.edges(now)) if routing is not None else []
+
+    for i, g in enumerate(groups):
+        descriptors = _merge_sb(g["_members"])              # 직접연결(SB ESP/STM 병합)
+        if i == 0 and token_map:                            # 원격 mesh 노드는 1차(주) 그룹에 귀속
+            descriptors += _remote_descriptors(descriptors, token_map)
+        g["nodes"] = _layout_group(descriptors, unid_idx)
+        # edges 는 SSM 발신(REPRSSI/[Route] Link)이라 SSM 그룹 한정. 단일 SSM 가정 → 1차 그룹에 전부.
+        g["edges"] = link_edges if (i == 0 and g["kind"] == "ssm") else []
         del g["_members"]
     return {"groups": groups, "unplaced": unplaced}
+
+
+def _unid_index(token_map: dict) -> dict:
+    """토큰맵 {token:{name,mac,unid}} → unid 역인덱스 {unid:(token, entry)}. 직접노드 enrich 용."""
+    idx = {}
+    for token, ent in token_map.items():
+        if ent.get("unid") is not None:
+            idx[ent["unid"]] = (token, ent)
+    return idx
+
+
+def _group_edges(edges) -> list:
+    """라우팅 링크그래프 edges → 로스터 그룹 edges {from,to,rssi,fresh}(source 등 부가필드 제외)."""
+    return [{"from": e["from"], "to": e["to"], "rssi": e.get("rssi"), "fresh": e.get("fresh")}
+            for e in edges]
+
+
+def _remote_descriptors(direct: list, token_map: dict) -> list:
+    """토큰맵에서 직접연결 노드에 없는 원격 mesh 노드를 디스크립터로 만든다(ports:[]).
+
+    [Passed Device] 가 해소한 토큰→이름(예 '(01-REP1)')만 노드로 쓴다. 토큰은 노드 1:1 식별자
+    (RouteTokenForInfoPos '%02X'(UnitID))이므로 각 토큰=별개 노드다 — 토큰 단위로 순회만 해도
+    원격 노드끼리는 중복되지 않는다(번호 없는 동일타입 이름 둘을 (type,None)로 잘못 합치지 않음).
+
+    name 미해소(None) 엔트리는 parse_alias 로 type 을 도출할 수 없어 배치 불가라 건너뛴다
+    (직접노드/원격 여부와 무관 — name=None 은 'UnID 는 봤으나 [Passed Device] 이름 미해소'다).
+    type 은 [Passed Device] 경로 이름 해소분이므로 type_source="route_name"(SSM INFO 테이블 파싱과 구분).
+
+    직접노드 dedup 은 **번호가 있을 때만** 신뢰한다(번호=UnitID 동일성). 번호 없는 직접 비-SB 리프
+    (REPEAT/APU: _number_from_lines 가 SB 한정이라 number=None)는 같은 장비가 'REP1' 로 해소돼도
+    dedup 키가 어긋나 중복 노드가 생길 수 있다 — 직접 비-SB 리프의 자기 UnID 추출은 실하드웨어
+    e2e 로 검증할 모듈6(engine) 배선과 함께 보강한다(현재 routing 미배선이라 잠복).
+    """
+    direct_numbered = {(n["type"], n["number"]) for n in direct if n.get("number") is not None}
+    out = []
+    for token, ent in token_map.items():
+        name = ent.get("name")
+        if not name:
+            continue
+        typ, num, _ = parse_alias(name)
+        if not typ:
+            continue
+        if num is not None and (typ, num) in direct_numbered:
+            continue                       # 같은 (type, UnitID) 직접노드 → 원격 중복 생성 금지
+        out.append({"type": typ, "number": num, "ports": [], "mac": ent.get("mac"),
+                    "unid": ent.get("unid"), "route_token": token,
+                    "type_confidence": _CONF["route_name"], "type_source": "route_name",
+                    "remote": True})
+    return out
 
 
 def _label(d: dict) -> str:
@@ -276,27 +341,39 @@ def _label(d: dict) -> str:
 
 
 def _merge_sb(members: list[dict]) -> list[dict]:
-    """SB 의 ESP/STM(같은 번호)을 한 논리 노드로 병합. 번호 없으면 포트별 개별 노드."""
+    """SB 의 ESP/STM(같은 번호)을 한 논리 노드로 병합. 번호 없으면 포트별 개별 노드.
+
+    각 디스크립터는 type/number/ports 와 함께 type_confidence/type_source(노드 enrich 용)를 보존한다.
+    병합 SB 노드는 두 포트 중 더 강한 증거(confidence 최대)를 채택한다.
+    """
     merged: dict = {}           # number -> 병합 노드
     singles: list[dict] = []
     for d in members:
+        port_entry = {"mcu": d.get("mcu"), "port": d["port"], "connected": d["connected"]}
         if d["type"] == "SB" and d.get("number") is not None:
-            key = d["number"]
-            node = merged.setdefault(key, {"type": "SB", "number": key, "ports": []})
-            node["ports"].append({"mcu": d.get("mcu"), "port": d["port"], "connected": d["connected"]})
+            node = merged.setdefault(d["number"], {
+                "type": "SB", "number": d["number"], "ports": [],
+                "type_confidence": 0.0, "type_source": None, "remote": False})
+            node["ports"].append(port_entry)
+            if d["type_confidence"] >= node["type_confidence"]:   # 더 강한 증거 채택
+                node["type_confidence"] = d["type_confidence"]
+                node["type_source"] = d["type_source"]
         else:
-            singles.append({"type": d["type"], "number": d.get("number"),
-                            "ports": [{"mcu": d.get("mcu"), "port": d["port"], "connected": d["connected"]}]})
+            singles.append({"type": d["type"], "number": d.get("number"), "ports": [port_entry],
+                            "type_confidence": d["type_confidence"], "type_source": d["type_source"],
+                            "remote": False})
     # SB 칩 순서를 발견순이 아니라 ESP→STM 으로 일관 고정(디자인 [ESP|STM]).
     for node in merged.values():
         node["ports"].sort(key=lambda p: 0 if p.get("mcu") == "ESP" else 1 if p.get("mcu") == "STM" else 2)
     return list(merged.values()) + singles
 
 
-def _layout_group(members: list[dict]) -> list[dict]:
-    """그룹 멤버 → 배치된 노드 목록(row=타입, col=같은 타입 내 번호/순서)."""
-    nodes = _merge_sb(members)
-    # 타입·번호로 안정 정렬(열 순서 결정)
+def _layout_group(nodes: list[dict], unid_idx: dict) -> list[dict]:
+    """디스크립터 목록 → 배치된 노드(row=타입, col=같은 타입 내 번호/순서). 직접·원격 공통.
+
+    직접노드는 unid 역인덱스(unid_idx)로 mac/route_token 을 enrich 한다. 원격노드는 디스크립터에
+    이미 mac/unid/route_token 이 실려 있고 status="unknown"(직접 관측 연결 없음).
+    """
     nodes.sort(key=lambda n: (TYPE_RANK.get(n["type"], 9),
                               n["number"] if n.get("number") is not None else 1 << 30))
     col_of: dict[str, int] = {}
@@ -305,14 +382,32 @@ def _layout_group(members: list[dict]) -> list[dict]:
         typ = n["type"]
         col = col_of.get(typ, 0)
         col_of[typ] = col + 1
-        connected = any(p["connected"] for p in n["ports"])
+        remote = n.get("remote", False)
+        if remote:
+            token, mac, unit_id = n.get("route_token"), n.get("mac"), n.get("unid")
+        else:                                          # 직접노드: 번호로 라우팅 관측치 enrich
+            unit_id, token, mac = n.get("number"), None, None
+            hit = unid_idx.get(unit_id) if unit_id is not None else None
+            if hit:
+                token, ent = hit
+                mac = ent.get("mac")
+        if unit_id is None:
+            unit_id = n.get("number")                  # 원격 토큰 entry 에 unid 없으면 이름 번호로
+        connected = (not remote) and any(p["connected"] for p in n["ports"])
+        num = n.get("number")
+        fallback = (n["ports"][0]["port"] if n["ports"] else token or typ)
         out.append({
-            "id": f"{typ}-{n['number'] if n.get('number') is not None else n['ports'][0]['port']}",
+            "id": f"{typ}-{num if num is not None else fallback}",
             "type": typ,
+            "type_confidence": n.get("type_confidence"),
+            "type_source": n.get("type_source"),
             "label": _label(n),
+            "mac": mac,
+            "unit_id": unit_id,
+            "route_token": token,
             "row": ROW_BY_TYPE.get(typ, 5),
             "col": col,
-            "status": _status_of(connected),
+            "status": "unknown" if remote else _status_of(connected),
             "ports": n["ports"],
         })
     return out

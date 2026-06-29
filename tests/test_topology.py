@@ -11,6 +11,7 @@ from serial_mcp.topology import (
     identify_port,
     parse_alias,
 )
+from serial_mcp.topology_routing import RoutingTable
 
 # ---- 실측 로그 픽스처 ----
 SSM_LINES = [
@@ -233,3 +234,107 @@ def test_identify_sb_alias_without_chip_extracts_bayid():
     # 칩 미표기 SB 별칭 + STM 로그: mcu 미상이어도 BayID 로 번호 보강(둘 다 시도).
     d = identify_port("COM12", "SB", ["BayID:5,"], True)
     assert d["type"] == "SB" and d["number"] == 5
+
+
+# ---- Phase B 모듈5: roster 확장(group kind · edges · 원격 mesh 노드 · 노드 enrich) ----
+
+def _ev(kind="rx", ts=1.0, unid=None, unique=1, mac=None, passed=None, route=None, reprssi=None):
+    """roster 테스트용 최소 Event(routing.observe 입력)."""
+    return {"kind": kind, "ts": ts, "route": route,
+            "ids": {"unid": unid, "unique": unique, "mac": mac},
+            "hints": {"passed": passed},
+            "metrics": {"reprssi": reprssi or []}}
+
+
+def test_roster_group_kind_ssm():
+    r = build_roster(_live_entries())
+    assert r["groups"][0]["kind"] == "ssm"
+
+
+def test_roster_group_kind_standalone_when_no_ssm():
+    # SB 단독(SSM 부재) → standalone 그룹(실패 아님, SSM group 아님).
+    entries = [{"port": "COM14", "alias": None, "lines": SB_ESP_LINES, "connected": True}]
+    r = build_roster(entries)
+    assert len(r["groups"]) == 1
+    assert r["groups"][0]["kind"] == "standalone" and r["groups"][0]["ssm_port"] is None
+
+
+def test_roster_no_routing_empty_edges_no_remote():
+    # routing 미전달(Phase A 호출부) → edges 빈 리스트 + 원격 노드 없음(모두 직접연결 ports 보유).
+    r = build_roster(_live_entries())
+    g = r["groups"][0]
+    assert g["edges"] == []
+    assert all(n["ports"] for n in g["nodes"])
+
+
+def test_roster_edges_from_routing_link_graph():
+    rt = RoutingTable()
+    rt.observe(_ev(kind="route", ts=1.0, route={"from_mac": "AA", "to_mac": "BB", "rssi": -41}))
+    r = build_roster(_live_entries(), routing=rt, now=2.0)
+    edges = r["groups"][0]["edges"]
+    assert len(edges) == 1
+    e = edges[0]
+    assert e["from"] == "AA" and e["to"] == "BB" and e["rssi"] == -41 and e["fresh"] is True
+
+
+def test_roster_remote_node_from_passed_device():
+    # SB5 직접연결 + REP1 은 [Passed Device] 로만 등장하는 원격 mesh 노드(직접 포트 없음).
+    rt = RoutingTable()
+    rt.observe(_ev(kind="rx", unid=5, mac="AA:BB", passed="(05-SB5)->(01-REP1)"))
+    r = build_roster(_live_entries(), routing=rt, now=2.0)
+    rep = [n for n in r["groups"][0]["nodes"] if n["type"] == "REPEAT"]
+    assert len(rep) == 1
+    assert rep[0]["ports"] == [] and rep[0]["status"] == "unknown"
+    assert rep[0]["route_token"] == "01" and rep[0]["label"] == "REPEAT1"
+    assert rep[0]["unit_id"] == 1                       # 토큰 entry unid 없으면 이름 번호로 폴백
+    assert rep[0]["type_source"] == "route_name"        # 출처=[Passed Device] 이름 해소(ssm_table 아님)
+
+
+def test_roster_remote_node_mac_from_token_entry():
+    # 원격 REP1 이 자기 UnID/Mac 도 등록(SSM 이 중계 관측) → 원격노드에 mac·unit_id 전파.
+    rt = RoutingTable()
+    rt.observe(_ev(kind="rx", unid=5, mac="AA:BB", passed="(05-SB5)->(01-REP1)"))
+    rt.observe(_ev(kind="rx", unid=1, mac="DD:EE:FF"))   # 토큰 '01' 에 unid+mac 병합
+    rep = [n for n in build_roster(_live_entries(), routing=rt, now=2.0)["groups"][0]["nodes"]
+           if n["type"] == "REPEAT"][0]
+    assert rep["unit_id"] == 1 and rep["mac"] == "DD:EE:FF"
+
+
+def test_roster_unnumbered_remote_same_type_not_collapsed():
+    # 번호 없는 동일타입 원격 둘(토큰 01/02)은 별개 노드 — (type,None)로 합치지 말 것.
+    rt = RoutingTable()
+    rt.observe(_ev(kind="rx", unid=5, mac="AA:BB", passed="(01-REP)->(02-REP)"))
+    rep = [n for n in build_roster(_live_entries(), routing=rt, now=2.0)["groups"][0]["nodes"]
+           if n["type"] == "REPEAT"]
+    assert {n["route_token"] for n in rep} == {"01", "02"}   # 둘 다 생존(붕괴 없음)
+
+
+def test_roster_remote_deduped_against_direct_node():
+    # 직접연결 SB5 가 [Passed Device] 에도 등장 → 원격 노드로 중복 생성 금지.
+    rt = RoutingTable()
+    rt.observe(_ev(kind="rx", unid=5, mac="AA:BB", passed="(05-SB5)"))
+    r = build_roster(_live_entries(), routing=rt, now=2.0)
+    sb = [n for n in r["groups"][0]["nodes"] if n["type"] == "SB"]
+    assert len(sb) == 1 and sb[0]["ports"]      # 직접 SB5 하나뿐(원격 중복 없음)
+
+
+def test_roster_direct_node_enriched_mac_unit_token():
+    rt = RoutingTable()
+    rt.observe(_ev(kind="rx", unid=5, mac="AA:BB:CC", passed="(05-SB5)"))
+    r = build_roster(_live_entries(), routing=rt, now=2.0)
+    sb = [n for n in r["groups"][0]["nodes"] if n["type"] == "SB"][0]
+    assert sb["unit_id"] == 5 and sb["route_token"] == "05" and sb["mac"] == "AA:BB:CC"
+
+
+def test_roster_node_carries_type_confidence_source():
+    sb = [n for n in build_roster(_live_entries())["groups"][0]["nodes"] if n["type"] == "SB"][0]
+    assert sb["type_source"] == "info_json" and sb["type_confidence"] >= 0.9
+
+
+def test_roster_standalone_group_has_empty_edges():
+    # SSM 부재 standalone 그룹엔 링크그래프 간선이 없다(REPRSSI/[Route] Link 는 SSM 발신).
+    rt = RoutingTable()
+    rt.observe(_ev(kind="route", ts=1.0, route={"from_mac": "AA", "to_mac": "BB", "rssi": -41}))
+    entries = [{"port": "COM14", "alias": None, "lines": SB_ESP_LINES, "connected": True}]
+    r = build_roster(entries, routing=rt, now=2.0)
+    assert r["groups"][0]["kind"] == "standalone" and r["groups"][0]["edges"] == []

@@ -129,9 +129,9 @@ Event = {
 Node = {
   "id",                               # "mac:AA:.." 또는 "port:COM14"
   "type",                             # SSM|APU|APU_C|REPEAT|SB|SB_STM32|UNKNOWN
-  "type_confidence", "type_source",   # info_json|ssm_table|stm32_banner|signature|manual
+  "type_confidence", "type_source",   # info_json|ssm_table|stm32_banner|signature|manual|route_name
   "label", "mac", "unit_id", "route_token",
-  "row", "col", "status",             # online|stale|unknown
+  "row", "col", "status",             # good|stale|unknown (직접노드=good/stale, 원격 mesh=unknown)
   "ports":[{mcu, port, connected}],   # mesh-only 원격노드면 []
 }
 
