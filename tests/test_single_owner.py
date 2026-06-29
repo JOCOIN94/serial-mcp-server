@@ -87,6 +87,50 @@ def test_status_lazily_acquires_owner_and_starts_readers(monkeypatch):
         srv._release_owner("test cleanup")
 
 
+def test_owner_acquire_starts_topology_lifecycle_before_readers(monkeypatch):
+    start_checks = []
+
+    class TopologyAwareReader(StubReader):
+        def start(self):
+            start_checks.append(srv._topology_engine is not None)
+            super().start()
+
+    class DummyLockSocket:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    lock_socket = DummyLockSocket()
+    monkeypatch.setattr(srv, "SerialReader", TopologyAwareReader)
+    monkeypatch.setattr(srv, "_bind_lock_socket", lambda port: lock_socket)
+    monkeypatch.setattr(srv, "_config", cfg(web=0, web_ui=False))
+    monkeypatch.setattr(srv, "_monitors", {})
+    monkeypatch.setattr(srv, "_viewer", None)
+    monkeypatch.setattr(srv, "_owner_active", False, raising=False)
+    monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
+    monkeypatch.setattr(srv, "_hotplug_thread", None, raising=False)
+
+    err = srv._acquire_owner_locked()
+
+    try:
+        assert err is None
+        assert start_checks == [True]
+        assert isinstance(srv._topology_engine, srv.TopologyEngine)
+        assert srv._topology_thread is not None
+        assert srv._topology_thread.name == "topology-sweep"
+        assert srv._topology_thread.is_alive()
+        assert srv._topology_stop.is_set() is False
+        assert isinstance(srv._topology_bootstrapped, set)
+        assert srv._topology_owner_ts is not None
+        assert srv._monitors["COM_A"].reader.started is True
+    finally:
+        srv._release_owner("test cleanup")
+
+    assert lock_socket.closed is True
+
+
 def test_occupied_lock_reports_busy_without_creating_monitors(monkeypatch):
     blocker = socket.socket()
     blocker.bind(("127.0.0.1", 0))
@@ -247,6 +291,34 @@ def test_release_owner_joins_hotplug_thread_before_clearing(monkeypatch):
     assert hotplug.timeout is not None
     assert hotplug.is_alive() is False
     assert srv._hotplug_thread is None
+    assert srv._monitors == {}
+
+
+def test_release_owner_stops_topology_thread_and_clears_engine(monkeypatch):
+    reader = StubReader("COM_A", 115200, buffer=None)
+    mon = SimpleNamespace(port="COM_A", reader=reader)
+    topology_thread = JoinableThread()
+    topology_stop = threading.Event()
+    engine = object()
+
+    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
+    monkeypatch.setattr(srv, "_viewer", None)
+    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
+    monkeypatch.setattr(srv, "_hotplug_thread", None, raising=False)
+    monkeypatch.setattr(srv, "_topology_thread", topology_thread, raising=False)
+    monkeypatch.setattr(srv, "_topology_stop", topology_stop, raising=False)
+    monkeypatch.setattr(srv, "_topology_engine", engine, raising=False)
+
+    srv._release_owner("test release")
+
+    assert topology_stop.is_set()
+    assert topology_thread.join_called is True
+    assert topology_thread.timeout is not None
+    assert topology_thread.is_alive() is False
+    assert srv._topology_thread is None
+    assert srv._topology_engine is None
+    assert reader.stopped is True
     assert srv._monitors == {}
 
 

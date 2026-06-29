@@ -7,7 +7,8 @@
 >   · ✅모듈4 routing `f31a097`(링크그래프·토큰맵·RSSI ladder, 예약토큰 '00'/'FF' 가드)
 >   · ✅모듈5 roster `a365786`(standalone 그룹·링크 edges·원격 mesh 노드·노드 enrich, build_roster 확장)
 >   · ✅모듈6-a `topology_engine.py` TopologyEngine(observe·sweep·roster·recent_hops, 순수 상태+Lock)
->   · ✅모듈6-b server.py 배선 `a32693c`(on_line observe탭·sweep 데몬·engine.roster·bootstrap INFO[기본 OFF opt-in]). **363 테스트 그린, 미push.**
+>   · ✅모듈6-b server.py 배선 `a32693c`(on_line observe탭·sweep 데몬·engine.roster·bootstrap INFO[기본 OFF opt-in])
+>   · ✅모듈6-b 후속 owner 생애주기 통합 테스트 보완(엔진 생성·sweep thread·release join·engine None 정리). **365 테스트 그린, 미push.**
 >   남은: 7 routes(/api/topology 는 이미 engine.roster 로 배선됨 — `/api/topology/stream` 홉 SSE 추가) → 8 front(홉 애니메이션·디테일 패널) → Phase C(get_topology MCP).
 >
 > **▶ 모듈7-8 핸드오프(routes·front)**:
