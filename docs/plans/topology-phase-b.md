@@ -2,27 +2,29 @@
 
 > **▶ 핸드오프 (2026-06-26 재작성)** — 이 문서는 GPT 리뷰 + cbm 펌웨어 검증 + SSM-부재 케이스까지 반영한 **단일 진실원 총정리본**이다.
 > - **Phase A 완료·커밋·push** (main `3cdcbbf`, origin 동기화).
-> - **Phase B 진행(2026-06-29, ultracode 자율 — 모듈별 TDD→Workflow 적대리뷰→수정→커밋)**:
->   ✅모듈1 classifier `9f23da9` · ✅모듈2 events `464e7d2` · ✅모듈3 correlator `9f83ca7`
->   · ✅모듈4 routing `f31a097`(링크그래프·토큰맵·RSSI ladder, 예약토큰 '00'/'FF' 가드)
->   · ✅모듈5 roster `a365786`(standalone 그룹·링크 edges·원격 mesh 노드·노드 enrich, build_roster 확장)
->   · ✅모듈6-a `topology_engine.py` TopologyEngine(observe·sweep·roster·recent_hops, 순수 상태+Lock)
->   · ✅모듈6-b server.py 배선 `a32693c`(on_line observe탭·sweep 데몬·engine.roster·bootstrap INFO[기본 OFF opt-in])
->   · ✅모듈6-b 후속 owner 생애주기 통합 테스트 보완(엔진 생성·sweep thread·release join·engine None 정리). **365 테스트 그린, 미push.**
->   · ✅모듈7 routes `/api/topology/stream` 홉 SSE(RawFeed payload 일반화·observe/sweep hop publish·ViewerServer 배선). **368 테스트 그린, 미push.**
->   · ✅Phase C `get_topology` MCP(전포트 roster + recent_hops 20, SPEC/README 동기화). **370 테스트 그린, 미push.**
->   남은: 8 front(홉 애니메이션·디테일 패널) → 실장비 e2e → 배포 레포 serial 스킬 도구목록 동기화.
+> - **Phase B/C(2026-06-29, ultracode 자율 — 모듈별 TDD→Workflow 적대리뷰→수정→커밋)**:
+>   ✅1 classifier `9f23da9` · ✅2 events `464e7d2` · ✅3 correlator `9f83ca7` · ✅4 routing `f31a097`
+>   · ✅5 roster `a365786` · ✅6-a engine + ✅6-b 배선 `a32693c`(+owner 생애주기 통합테스트 `616d5f1`)
+>   · ✅7 routes `/api/topology/stream` 홉 SSE `63f8a18` · ✅Phase C `get_topology` MCP `f5f7aa6`.
+>   **여기까지 origin/main push 완료 + v1.3.2 릴리즈 태그 `de77f54`(uvx 반영분).**
+>   · ✅code-review(Workflow 6렌즈)로 Codex 작업 재검증 → 확정 발견 전부 수정:
+>     #3 roster·recent_hops 원자 스냅샷(`TopologyEngine.roster_and_recent_hops` 단일Lock, build_roster는 Lock밖) `8499dac`(Codex) ·
+>     #1 홉 ts 제거 + AI 인과추론 방지 3중장치(ts필드 제거·docstring[주의]·응답 `hops_caveat`) · #2 busy테스트 'error' 정정 `26d377b` · 계획서 동결 `ab3f6da`.
+>   **376 테스트 그린. ⚠️ 위 3커밋(`8499dac`·`26d377b`·`ab3f6da`)은 미push** — v1.3.2 이후 버그픽스라
+>   사용자 반영하려면 v1.3.3 릴리즈 필요(AGENTS.md 릴리스: pyproject bump→uv lock→태그→marketplace 2레포 동기화).
+>   남은: **모듈8 front(유일 미완)** → 실장비 e2e → v1.3.3 릴리즈 + 배포 레포 `serial` 스킬 도구목록 동기화.
 >
-> **▶ 모듈7-8 핸드오프(routes·front)**:
->   - **7 routes**: `/api/topology` 는 이미 `_viewer_topology_info`→`engine.roster` 로 동작(모듈6-b). 남은 건
->     `/api/topology/stream`(홉 SSE) — `web_viewer.py` 기존 `_serve_stream`(RawFeed 구독→헤더→하트비트, drop-oldest)
->     패턴 일반화. 홉 소스: `TopologyEngine` 에 `HopFeed`(viewer_feed.RawFeed payload Any 일반화) 추가하거나
->     observe/sweep 반환 홉을 feed.publish. ViewerServer 에 `topology_stream` 콜백 배선(server.py 가 주입).
->   - **8 front**: `web_viewer.py` `_HTML` 좌측 — `/api/topology/stream`→`window.topologyHop(hop)` 엣지 하이라이트·
->     경로 애니메이션(바닐라 SVG+rAF). 로스터 `edges`(standalone 그룹 포함) 렌더 + 디테일 패널(경로 칩·구간 RSSI·
->     quality·실패/미확정). 순수 로직(엣지 geometry·rssiColor)은 VIEWER-PURE + `viewer_logic_harness.cjs`.
->   - **Phase C**: `get_topology` MCP 도구 = `{status, message, roster, recent_hops, viewer_url}`.
->     `roster` 는 `engine.roster(entries)`, `recent_hops` 는 `engine.recent_hops(20)`. SPEC §5 조회 6→7종·README 동기화 완료. 배포 레포 `serial` 스킬 도구목록 동기화는 후속.
+> **▶ 모듈8 프론트 핸드오프(새 세션 진입점)** — `src/serial_mcp/web_viewer.py` `_HTML`(인라인 JS/SVG, **새 의존성 0**):
+>   - 데이터원(둘 다 백엔드 구현·동작 확인됨): `/api/topology`(로스터, 이미 5초 폴링 `refreshTopology`) +
+>     `/api/topology/stream`(홉 dict SSE). 기존 Phase A `renderTopology`(좌측 로스터 절대배치) **위에 얹는다**.
+>   - 그릴 것: ①로스터 `edges` 렌더(standalone 그룹 포함, `fresh`로 선 농도) ②홉 경로 애니메이션
+>     (`hop.path` 따라 엣지 하이라이트, 바닐라 SVG+rAF) ③디테일 패널(경로 칩·구간 RSSI·quality·`ok`/`confidence` — 실패/미확정 구간 표시).
+>   - **⚠️ #1 제약(코드리뷰 확정·중요)**: 홉엔 **시각(ts)이 없다**(의도적 제거). 도착·나열 순서로 송수신 인과나
+>     시간차를 추론하는 UI 금지 — 펌웨어 출력순·포트 지터로 RX가 TX보다 먼저 보일 수 있음(상관은 키 기반으로 이미 끝남).
+>     표시는 `path`·`ok`·`confidence`만. 응답 `hops_caveat` 문구 참조.
+>   - 순수 로직(엣지 geometry·rssiColor 등 DOM 비의존)은 VIEWER-PURE 센티넬로 감싸 `tests/viewer_logic_harness.cjs`(node)로 단위테스트.
+>   - 검증: `uv run python -m pytest`(파이썬, `uv run pytest`는 이 PC서 깨짐) + `node tests/viewer_logic_harness.cjs`(JS) + 실장비 라이브 뷰어(COM4 등).
+>   - 상세 설계는 §7-8·§6(Hop.path/segments·Roster.edges 자료구조) 참조. stdout 금지·관측 비차단·클라이언트 파리티 준수.
 >   신규 모듈 flat 파일: topology_events·_correlator·_routing·_engine.py(향후 topology/ 패키지화 가능).
 >   상관기 핵심: (UnID,Unique) 1차키·실패vs unconfirmed 는 'SSM이 들은 UnID' 단위 스코프(전역래치 아님).
 > - **Phase B/C 설계 확정** = 이 문서. 상관기·분류기·경로 모델이 v1(단일키)에서 **대폭 개정**됐다(§5 펌웨어 사실이 근거).
