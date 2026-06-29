@@ -29,6 +29,15 @@ def test_parse_passed_to_node_names():
 
 # ---- 성공 홉(SSM RX) ----
 
+def test_hop_has_no_timestamp_field():
+    # 홉은 시각을 노출하지 않는다(의도적) — 서버 도착시각은 포트 지터·펌웨어 출력순으로 RX 가
+    # TX 보다 먼저 관측될 수 있어 인과/순서 추론에 부적합. AI 오용 방지로 ts 를 빼고 키 상관만.
+    c = Correlator()
+    h = c.observe(ev("rx", port="COM4", ts=1.0, passed="(05-SB5)", takentime=61))[0]
+    assert "ts" not in h
+    assert h["ok"] is True and h["path"] == ["SB5"]   # 경로·성공은 그대로 제공
+
+
 def test_rx_emits_success_hop_with_path_and_rtt():
     c = Correlator()
     hops = c.observe(ev("rx", port="COM4", ts=1.0, src="SB1",

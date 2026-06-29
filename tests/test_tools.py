@@ -191,6 +191,8 @@ def test_get_topology_returns_roster_and_recent_hops(monkeypatch, dual):
     assert out["status"] == "ok"
     assert out["roster"]["groups"][0]["id"] == "group:SSM"
     assert out["recent_hops"] == [{"id": "hop-1", "path": ["node:SB5", "node:SSM"], "ok": True}]
+    # 시각 순서로 인과 추론을 막는 경고가 응답에 항상 동봉된다(AI 오용 방지 장치).
+    assert "추론하지 마라" in out["hops_caveat"]
     assert engine.recent_n == 20
     assert engine.now is not None
     assert [entry["port"] for entry in engine.entries] == ["COM_A", "COM_B"]
@@ -199,15 +201,18 @@ def test_get_topology_returns_roster_and_recent_hops(monkeypatch, dual):
 
 
 def test_get_topology_busy_keeps_snapshot_shape(monkeypatch):
+    # get_topology 는 for_status 없이 _ensure_owner 를 호출하므로 점유 시 status="error" 다
+    # (SPEC §5 ok|error·데이터 도구군과 일치 — "busy" 는 get_serial_status 만의 예외).
+    # 핵심 검증은 점유 시에도 roster·recent_hops 빈 스키마가 보존되는지다.
     monkeypatch.setattr(
         srv,
         "_ensure_owner",
-        lambda ctx=None, **kwargs: {"status": "busy", "message": "다른 세션이 사용 중"},
+        lambda ctx=None, **kwargs: {"status": "error", "message": "다른 세션이 사용 중"},
     )
 
     out = srv.get_topology()
 
-    assert out["status"] == "busy"
+    assert out["status"] == "error"
     assert out["roster"] == {"groups": [], "unplaced": []}
     assert out["recent_hops"] == []
 

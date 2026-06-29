@@ -325,6 +325,16 @@ _topology_owner_ts: float = 0.0               # owner 획득 monotonic(부팅 wi
 _topology_bootstrapped: set[str] = set()      # bootstrap INFO 송신 완료한 SSM 포트(1회 래치)
 _TOPOLOGY_SWEEP_S = 2.0                        # sweep 간격(만료 pending·유휴 블록 flush)
 _TOPOLOGY_BOOT_WINDOW_S = 8.0                  # owner 획득 후 이 시간까진 bootstrap 금지(부팅 보호)
+# get_topology 응답에 항상 동봉하는 AI-대면 경고. 홉에는 시각이 없다(의도적) — 서버 도착시각은
+# 포트 지터·펌웨어 출력순(sendMessage 후 [Tx])으로 RX 가 TX 보다 먼저 보일 수 있어 인과/순서
+# 추론에 부적합하다(상관은 (UnID,Unique) 등 키로 이미 끝났다). AI 가 순서로 추론하다 오판하는
+# 것을 막는 장치다 — 시각 필드 제거 + docstring [주의] + 이 필드, 3중.
+_TOPOLOGY_HOPS_CAVEAT = (
+    "recent_hops 는 최신순(끝이 가장 최근)이며 시각(timestamp)을 제공하지 않는다 — 의도적이다. "
+    "펌웨어가 sendMessage 후 [Tx] 를 출력하고 포트별 도착 지터가 있어 RX 가 TX 보다 먼저 관측될 "
+    "수 있으니, 홉의 나열·도착 순서로 송수신 인과나 시간차를 추론하지 마라. 경로·성공·실패·미확정은 "
+    "각 홉의 path·ok·confidence(키 상관 결과)로만 판단하라."
+)
 
 
 class _WriteApproval(BaseModel):
@@ -1055,6 +1065,12 @@ def get_topology(ctx: Optional[Context] = None) -> dict:
     이 도구는 전 포트 토폴로지를 반환하므로 port 인자를 받지 않는다. 포트별 원문은
     get_recent_logs/query_serial_logs 로 이어서 확인하라.
 
+    [주의] recent_hops 에는 시각(timestamp)이 없다 — 일부러 뺐다. 홉의 나열·도착 순서로
+    송수신 인과나 시간차를 추론하지 마라: 펌웨어가 sendMessage 후 [Tx] 를 출력하고 포트별
+    도착 지터가 있어 RX 가 TX 보다 먼저 관측될 수 있다(상관은 (UnID,Unique) 등 키로 이미
+    끝났다). 경로·성공·실패는 각 홉의 path·ok·confidence 로만 판단하라. 응답의 hops_caveat 도
+    같은 경고다.
+
     [루프 단계] 메시 경로 해석. 읽기 전용.
     """
     busy = _ensure_owner(ctx)
@@ -1078,6 +1094,7 @@ def get_topology(ctx: Optional[Context] = None) -> dict:
         "message": f"토폴로지 그룹 {len(groups)}개, 최근 홉 {len(recent_hops)}개",
         "roster": roster,
         "recent_hops": recent_hops,
+        "hops_caveat": _TOPOLOGY_HOPS_CAVEAT,   # 시각 순서로 인과 추론 금지(AI 오용 방지)
         "viewer_url": _viewer_url(),
     }
 

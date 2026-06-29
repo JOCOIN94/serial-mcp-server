@@ -136,11 +136,14 @@ class Correlator:
         path = list(flow["path"])
         if not path and flow.get("src_name"):
             path = [flow["src_name"]]          # [Passed Device] 없으면 <<<From 소스명으로 폴백
+        # 홉에 시각(ts)을 싣지 않는다(의도적). 서버 도착시각(monotonic)은 포트 지터·펌웨어
+        # 출력순(sendMessage 후 [Tx])으로 RX 가 TX 보다 먼저 관측될 수 있어 인과/순서 신호로
+        # 부적합하다 — 상관은 (UnID,Unique) 키로 이미 끝났다. 윈도 만료 판정용 last_ts/first_ts 는
+        # flow 내부에만 두고 노출하지 않아, 소비자(AI)가 순서로 추론하다 오판하는 것을 막는다.
         return {
             "key": flow["key"], "ok": ok, "confidence": confidence,
             "path": path, "src_name": flow.get("src_name"),
             "device_type": flow.get("device_type"), "rtt_ms": flow.get("rtt_ms"),
             # 관측 포트(best-effort): RX-선행이면 소스 TX 포트가 빠질 수 있다(소스는 roster 가 path[0]로 해소).
             "ports": sorted(p for p in flow["ports"] if p is not None),
-            "ts": flow.get("last_ts", flow["first_ts"]),
         }
