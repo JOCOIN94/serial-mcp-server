@@ -83,6 +83,28 @@ def test_sweep_flushes_idle_pending_block():
     assert len(succ) == 1 and succ[0]["rtt_ms"] == 42
 
 
+def test_sweep_idle_flush_not_double_recorded_in_history():
+    # 회귀: sweep 의 유휴 flush 홉이 recent_hops 히스토리에 1번만 적재돼야(이중 적재 금지).
+    eng = TopologyEngine(window_s=10.0)
+    eng.observe("COM4", 1.0, '[Proc-WiFiRx] {"UnID":5,"Unique":7,"INFO":["4"]}')
+    eng.observe("COM4", 1.0, ' -- takentime : 42')
+    eng.sweep(now=20.0, flush_idle_s=2.0)
+    keys = [h["key"] for h in eng.recent_hops(10)]
+    assert keys.count((5, 7)) == 1                       # 중복 없음
+
+
+def test_sweep_mixed_flush_and_timeout_history_no_duplicates():
+    # 유휴 flush(성공) + correlator 만료(실패)가 섞여도 히스토리는 각 1회.
+    eng = TopologyEngine(window_s=10.0)
+    eng.observe("COM4", 0.0, '[Proc-WiFiRx] {"UnID":5,"Unique":1,"INFO":["4"]}')  # SSM 이 UnID5 들음
+    eng.observe("COM4", 0.1, ' -- takentime : 5')
+    eng.observe("COM14", 1.0, '[Tx - my INFO] {"UnID":5,"Unique":2,"INFO":["4"]}')  # 응답없는 TX
+    eng.observe("COM14", 1.1, ' -- noise')
+    eng.sweep(now=50.0, flush_idle_s=2.0)
+    keys = [h["key"] for h in eng.recent_hops(20)]
+    assert keys.count((5, 1)) == 1 and keys.count((5, 2)) == 1
+
+
 def test_sweep_does_not_flush_active_block():
     # 막 들어온 블록(유휴 아님)은 flush 하지 않는다(블록 도중 절단 방지).
     eng = TopologyEngine(window_s=10.0)
@@ -106,3 +128,12 @@ def test_recent_hops_bounded_and_tail():
 def test_recent_hops_default_count():
     eng = TopologyEngine()
     assert eng.recent_hops() == []              # 빈 상태
+
+
+def test_recent_hops_zero_returns_empty():
+    # n<=0 은 빈 리스트(전체 반환 아님 — 슬라이스 [-0:] 함정 방지).
+    eng = TopologyEngine(window_s=100.0)
+    eng.observe("COM4", 1.0, '[Proc-WiFiRx] {"UnID":5,"Unique":1,"INFO":["4"]}')
+    eng.observe("COM4", 1.0, '[Proc-WiFiRx] {"UnID":5,"Unique":2,"INFO":["4"]}')   # 앞 블록 flush
+    assert eng.recent_hops(0) == []
+    assert eng.recent_hops(-1) == []

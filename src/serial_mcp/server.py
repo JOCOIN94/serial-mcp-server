@@ -51,7 +51,8 @@ from .ports import (
     parse_port_list,
 )
 from .ring_buffer import LineBuffer
-from .topology import build_roster
+from .topology import build_roster, classify_device
+from .topology_engine import TopologyEngine
 from .viewer_feed import RawFeed
 from .web_viewer import ViewerServer
 
@@ -315,6 +316,15 @@ _hotplug_thread: Optional[threading.Thread] = None
 _session_label: Optional[str] = None
 _session_lock = threading.Lock()
 
+# ---- 토폴로지 엔진 (Phase B) ----
+_topology_engine: Optional[TopologyEngine] = None
+_topology_stop = threading.Event()            # sweep 타이머 종료 신호
+_topology_thread: Optional[threading.Thread] = None
+_topology_owner_ts: float = 0.0               # owner 획득 monotonic(부팅 window 기준점)
+_topology_bootstrapped: set[str] = set()      # bootstrap INFO 송신 완료한 SSM 포트(1회 래치)
+_TOPOLOGY_SWEEP_S = 2.0                        # sweep 간격(만료 pending·유휴 블록 flush)
+_TOPOLOGY_BOOT_WINDOW_S = 8.0                  # owner 획득 후 이 시간까진 bootstrap 금지(부팅 보호)
+
 
 class _WriteApproval(BaseModel):
     """쓰기 승인 폼 — 빈 스키마라 클라이언트는 수락/거절만 표시한다."""
@@ -504,9 +514,97 @@ def _start_hotplug_locked(cfg: dict) -> None:
              "좀비 핸들 해제만 수행(늦은 연결은 재연결 루프가 잡음))")
 
 
+def _topology_observe(port: str, text: str) -> None:
+    """리더 스레드 on_line 훅 — 수신 줄을 토폴로지 엔진에 관측 입력(비차단·예외삼킴).
+
+    엔진이 없으면(테스트·owner 미획득) no-op. 토폴로지(보조 기능) 실패가 리더/오토네임·시리얼
+    경로를 막지 않게 모든 예외를 삼킨다(AGENTS.md 관측 비차단·뷰어 실패 코어 무영향).
+    윈도 클럭은 서버 도착 단조시각(time.monotonic) — 펌웨어 RTC 아님(plan §6).
+    """
+    eng = _topology_engine
+    if eng is None:
+        return
+    try:
+        eng.observe(port, time.monotonic(), text)
+    except Exception as e:  # noqa: BLE001 - 토폴로지 실패는 코어로 전파 금지
+        _log(f"topology observe 오류({port}): {e!r}")
+
+
+def _bootstrap_due(now: float, owner_ts: float, boot_window_s: float, sent: set,
+                   port: str, is_ssm: bool, connected: bool) -> bool:
+    """이 포트로 bootstrap INFO 를 보낼 때인지 순수 판정(I/O·전역 비의존 — 단위 테스트용).
+
+    조건 전부 충족: SSM 으로 식별됨 + 연결됨 + 미송신 + 부팅 window(owner 획득 후 boot_window_s)
+    종료. 부팅 setup window 중에는 절대 송신하지 않는다(serialCmd 오작동 보호, AGENTS.md 안전제약).
+    """
+    return (is_ssm and connected and port not in sent
+            and (now - owner_ts) >= boot_window_s)
+
+
+def _topology_bootstrap_tick() -> None:
+    """sweep tick: bootstrap 미완 SSM 포트마다 서버-내부 INFO 1회 송신(부팅 window 후·SSM 한정·포트별 1회 래치).
+
+    INFO 는 SSM 의 simplevInfoBuffer(장비 테이블)를 dump 하는 안전 read(SPEC §9/§10) — 파괴
+    명령 아님. 서버 발신이라 _confirm_write 게이트 비경유(ctx 없음). SERIAL_WRITE=off 면 송신 안 함.
+    비-SSM 포트엔 절대 송신하지 않는다(부팅 중 명령셋 오작동 위험, AGENTS.md). 포트별 1회 래치
+    (_topology_bootstrapped)라 SSM 이 여럿이면 각각 1회 보낸다(부팅 window 는 owner 획득 기준 —
+    SSM 분류 자체가 라이브 앱 시그니처를 요구해 부팅완료 게이트로 작동, plan §9 미래 강화 메모).
+    """
+    if not _config.get("write", True):
+        return
+    now = time.monotonic()
+    for mon in list(_monitors.values()):
+        port_key = mon.port.upper()
+        reader = mon.reader
+        connected = bool(reader is not None and getattr(reader, "connected", False))
+        d = classify_device(mon.buffer.get_recent(300), alias=mon.name)
+        if not _bootstrap_due(now, _topology_owner_ts, _TOPOLOGY_BOOT_WINDOW_S,
+                              _topology_bootstrapped, port_key, d["type"] == "SSM", connected):
+            continue
+        try:
+            reader.write(b"INFO\r\n", audit="[TOPOLOGY] bootstrap INFO 요청(서버 발신 1회)")
+            _topology_bootstrapped.add(port_key)
+            _log(f"topology bootstrap: {mon.label} 에 INFO 송신(서버 발신 1회)")
+        except Exception as e:  # noqa: BLE001 - 송신 실패가 sweep 루프를 죽이면 안 됨
+            _log(f"topology bootstrap 송신 실패({mon.port}): {e!r}")
+
+
+def _topology_loop(interval: float, stop: threading.Event, bootstrap_enabled: bool) -> None:
+    """토폴로지 sweep 타이머(데몬 본체) — 어떤 예외에도 죽지 않는다.
+
+    stop.wait(interval) 가 타이머 겸 종료 신호 수신을 겸한다. 매 tick: 엔진 sweep(만료 pending·
+    유휴 블록 flush) + (켜짐) bootstrap. 홉 SSE 발행은 모듈7(routes)에서 얹는다.
+    """
+    while not stop.wait(interval):
+        try:
+            eng = _topology_engine
+            if eng is not None:
+                eng.sweep(time.monotonic())
+            if bootstrap_enabled:
+                _topology_bootstrap_tick()
+        except Exception as e:  # noqa: BLE001 - 데몬 루프 보호
+            _log(f"topology sweep 오류: {e!r}")
+
+
+def _start_topology_locked(cfg: dict) -> None:
+    """owner 획득 후 토폴로지 sweep 타이머 스레드를 기동한다(엔진은 _acquire 가 이미 생성)."""
+    global _topology_stop, _topology_thread
+    _topology_stop = threading.Event()
+    _topology_thread = threading.Thread(
+        target=_topology_loop,
+        args=(_TOPOLOGY_SWEEP_S, _topology_stop, bool(cfg.get("topology_bootstrap", False))),
+        name="topology-sweep",
+        daemon=True,
+    )
+    _topology_thread.start()
+    mode = "bootstrap 켜짐" if cfg.get("topology_bootstrap") else "bootstrap 꺼짐(기본)"
+    _log(f"토폴로지 엔진 시작 (sweep {_TOPOLOGY_SWEEP_S:g}초, {mode})")
+
+
 def _acquire_owner_locked() -> Optional[dict]:
     """8743/SERIAL_WEB bind를 시도해 성공 시 whole-session owner 리소스를 시작한다."""
     global _viewer, _lock_socket, _owner_active
+    global _topology_engine, _topology_owner_ts, _topology_bootstrapped
 
     if _owner_active or _monitors:
         return None
@@ -539,8 +637,13 @@ def _acquire_owner_locked() -> Optional[dict]:
             _viewer = None
             _log(f"소유권 잠금: {_owner_url(port)} bind 성공(UI 미서빙)")
         _owner_active = True
+        # 토폴로지 엔진은 모니터 기동 전에 생성한다(리더 on_line 이 관측 입력하므로).
+        _topology_engine = TopologyEngine()
+        _topology_owner_ts = time.monotonic()
+        _topology_bootstrapped = set()
         _start_monitors_locked(cfg)
         _start_hotplug_locked(cfg)
+        _start_topology_locked(cfg)
         _log(f"소유권 획득 (포트 {len(_monitors)}개, dedup={cfg['dedup']}, "
              f"buffer={cfg['maxlen']}, tee={cfg['tee'] or '없음'})")
         return None
@@ -566,6 +669,7 @@ def _ensure_owner(ctx: Optional[Context] = None, *, for_status: bool = False) ->
 def _release_owner_locked(reason: str) -> None:
     """COM 핸들 → 뷰어/8743 순서로 whole-session 소유권을 반납한다."""
     global _monitors, _viewer, _lock_socket, _owner_active, _hotplug_thread
+    global _topology_thread, _topology_engine
 
     had_owner = _owner_active or bool(_monitors) or _viewer is not None or _lock_socket is not None
     hotplug_thread = _hotplug_thread
@@ -575,6 +679,16 @@ def _release_owner_locked(reason: str) -> None:
             hotplug_thread.join(timeout=1.0)
         except RuntimeError:
             pass
+
+    topology_thread = _topology_thread
+    _topology_stop.set()
+    if topology_thread is not None and topology_thread is not threading.current_thread():
+        try:
+            topology_thread.join(timeout=1.0)
+        except RuntimeError:
+            pass
+    _topology_thread = None
+    _topology_engine = None
 
     for mon in list(_monitors.values()):
         reader = mon.reader
@@ -1252,9 +1366,10 @@ def _viewer_topology_info() -> dict:
     """웹 뷰어 /api/topology — 포트별 정체 자동발견 → SSM별 그룹·배치 로스터.
 
     각 포트의 최근 수신 줄(별칭 우선)로 장비(SSM/REPEAT/APU/APU_C/SB·ESP/STM)를 식별해
-    topology.build_roster 가 그래프 노드(row/col/ports)를 만든다. 좌측 토폴로지
-    그래프가 이 로스터를 그대로 그린다(노드 클릭 = 그 포트 로그 보기, SB 는 ESP/STM 분할).
-    읽기 전용·실패 안전(예외 시 빈 로스터 — 뷰어 보조기능이 MCP 코어를 막지 않는다).
+    로스터(그래프 노드 row/col/ports)를 만든다. 엔진이 있으면 관측된 routing(링크그래프·토큰맵)을
+    얹어 standalone 그룹·링크 edges·원격 mesh 노드까지 반영하고, 없으면 분류만의 build_roster 로
+    폴백한다. 좌측 토폴로지 그래프가 이 로스터를 그대로 그린다(노드 클릭 = 그 포트 로그 보기,
+    SB 는 ESP/STM 분할). 읽기 전용·실패 안전(예외 시 빈 로스터 — 뷰어 보조기능이 코어를 막지 않음).
     """
     try:
         entries = []
@@ -1266,6 +1381,9 @@ def _viewer_topology_info() -> dict:
                 "lines": m.buffer.get_recent(300),   # 분류용 최근 줄(가벼운 render)
                 "connected": bool(r and r.connected),
             })
+        eng = _topology_engine
+        if eng is not None:
+            return eng.roster(entries, now=time.monotonic())   # routing enrich(edges·원격노드)
         return build_roster(entries)
     except Exception as e:   # noqa: BLE001 - 뷰어 보조기능: 어떤 실패도 코어로 전파 금지
         _log(f"토폴로지 로스터 생성 실패: {e}")
@@ -1427,6 +1545,9 @@ def _load_config(env: Mapping[str, str]) -> dict:
         "write": _parse_flag(env, "SERIAL_WRITE"),
         "write_confirm": _parse_confirm_mode(env, "SERIAL_WRITE_CONFIRM"),
         "char_delay": _parse_char_delay(env),
+        # 토폴로지 bootstrap INFO 자동 송신 — 실HW e2e 전까지 기본 OFF(서버-내부 시리얼 송신은
+        # 신중히 opt-in). 켜면 첫 SSM 식별·부팅 window 종료 후 SSM 포트에 INFO 1회(안전 read).
+        "topology_bootstrap": _parse_flag(env, "SERIAL_TOPOLOGY_BOOTSTRAP", default=False),
     }
 
 
@@ -1457,9 +1578,14 @@ def _make_monitor(
                      exclude=cfg["exclude"], include=cfg["include"])
     feed = RawFeed()
     mon = PortMonitor(port=port, name=name, buffer=buf, feed=feed, reader=None)
-    on_line = None
-    if _autoname_rules and name is None:   # 명시 별칭 없을 때만 자동 식별 후킹
-        on_line = (lambda ts, text, m=mon: _autoname_check(m, text))
+    # on_line 훅 = 자동식별(별칭 없을 때만) + 토폴로지 관측(엔진 있으면). 둘 다 비차단·예외삼킴.
+    autoname_on = bool(_autoname_rules) and name is None
+
+    def on_line(ts, text, m=mon, _an=autoname_on):
+        if _an:
+            _autoname_check(m, text)
+        _topology_observe(m.port, text)
+
     mon.reader = SerialReader(port=port, baud=baud, buffer=buf,
                               tee_path=_tee_path_for(cfg["tee"], name or port),
                               feed=feed, on_line=on_line,

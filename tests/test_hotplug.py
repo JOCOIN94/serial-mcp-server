@@ -55,7 +55,9 @@ def test_make_monitor_basic_assembly(stub_reader):
     assert mon.name is None
     assert mon.reader.baud == 9600
     assert mon.reader.tee_path == "log.COM7.txt"     # 별칭 없으면 포트명 태그
-    assert mon.reader.on_line is None                # autoname 규칙 없음 → 훅 없음
+    assert mon.reader.on_line is not None            # on_line 은 토폴로지 관측을 항상 배선
+    mon.reader.on_line(None, "아무 줄")               # autoname 규칙 없음 → 이름 불변·예외 없음
+    assert mon.name is None
     assert mon.reader.started is False               # 팩토리는 시작하지 않는다(2패스 분리)
 
 
@@ -77,10 +79,12 @@ def test_make_monitor_hooks_autoname_only_when_unnamed(stub_reader, monkeypatch)
     monkeypatch.setattr(srv, "_autoname_rules", srv.compile_autoname([("SB1", r"STM32")]))
     named = srv._make_monitor("COM7", None, {}, {**BASE_CFG, "names": {"COM7": "SSM"}})
     unnamed = srv._make_monitor("COM8", None, {}, BASE_CFG)
-    assert named.reader.on_line is None              # 명시 별칭 보유 → 훅 생략
-    assert unnamed.reader.on_line is not None        # 무명 → autoname 훅 장착
-    unnamed.reader.on_line(None, "***Send to the STM32")
-    assert unnamed.name is None or unnamed.name == "SB1"   # 훅이 _autoname_check로 연결됨
+    # on_line 은 둘 다 설정됨(토폴로지 관측 상시). 차이는 autoname 호출 여부다.
+    assert named.reader.on_line is not None and unnamed.reader.on_line is not None
+    named.reader.on_line(None, "***Send to the STM32")    # 명시 별칭 보유 → autoname 미작동
+    assert named.name == "SSM"                            # 이름 불변
+    unnamed.reader.on_line(None, "***Send to the STM32")  # 무명 → autoname 작동
+    assert unnamed.name is None or unnamed.name == "SB1"  # 훅이 _autoname_check로 연결됨
 
 
 # ---- _hotplug_scan_once (재스캔 → 신규 USB 포트만 모니터 추가) ----

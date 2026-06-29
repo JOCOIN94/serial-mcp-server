@@ -33,6 +33,7 @@ def test_load_config_defaults_when_empty():
         "ports": [], "names": {}, "autoname": [], "baud": 115200, "tee": None,
         "exclude": None, "include": None, "maxlen": 2000, "dedup": 5, "web": 8743,
         "web_ui": True, "hotplug": 5.0, "write": True, "write_confirm": "all", "char_delay": 0.01,
+        "topology_bootstrap": False,
     }
 
 
@@ -52,7 +53,14 @@ def test_load_config_reads_all_vars():
         "baud": 57600, "tee": "log.txt", "exclude": "DEBUG", "include": "ERROR",
         "maxlen": 500, "dedup": 0, "web": 9000, "web_ui": True, "hotplug": 10.0,
         "write": False, "write_confirm": "off", "char_delay": 0.025,
+        "topology_bootstrap": False,
     }
+
+
+def test_load_config_topology_bootstrap_opt_in():
+    assert _load_config({})["topology_bootstrap"] is False                      # 기본 OFF
+    assert _load_config({"SERIAL_TOPOLOGY_BOOTSTRAP": "1"})["topology_bootstrap"] is True
+    assert _load_config({"SERIAL_TOPOLOGY_BOOTSTRAP": "off"})["topology_bootstrap"] is False
 
 
 def test_load_config_strips_port_whitespace():

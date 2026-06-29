@@ -238,6 +238,8 @@ AI가 "SB5는 멀티홉이라 SSM 포트 도착이 정상", "이 포트는 SB �
 ## 9. 안전·불변식
 
 - **자동 송신 정책**: 부트스트랩 `INFO`는 **SSM 포트 + 식별확정 후 + 부팅 window 종료 후**에만, 서버-내부 1회. 비-SSM 포트 송신 금지.
+  - **구현(모듈6-b)**: `_bootstrap_due`(SSM·연결·미송신·부팅window) + 포트별 1회 래치(`_topology_bootstrapped`). **기본 OFF**(env `SERIAL_TOPOLOGY_BOOTSTRAP=1` opt-in) — 실HW e2e 전까지 자동 시리얼 송신 신중. `SERIAL_WRITE=off`면 미송신.
+  - **[미래 강화 — default-ON 승격 전 필수]** 부팅 window(`_TOPOLOGY_BOOT_WINDOW_S=8s`)는 **owner 획득 시각 기준**이라 늦게 hotplug/reset 되는 포트엔 per-board 유예가 없다. 현재 안전은 시간 window 가 아니라 **SSM 분류 게이트가 부팅완료 게이트로 작동**해 보장된다(classify_device 가 SSM 판정하려면 라이브 SSM 앱 시그니처[`Information on the entire equipment`/`[Proc-WiFiRx]`/`[Route] Link`/REPRSSI] 필요 → 부트로더 단계 보드는 SSM 분류 안 됨). 위험 보드 SB-ESP 는 INFO[0]=4 로 항상 SB 분류돼 타깃 불가. **유일 노출**: opt-in ON + 비-SSM 보드를 'SSM'으로 **오설정 별칭**(conf 1.0 으로 분류 게이트 우회) + 그 보드 부팅 중. default-ON 으로 올리기 전 (a)per-board connect 시각 기준 window 또는 (b)별칭 SSM 도 라이브 시그니처 1회 확인 후 송신으로 닫을 것.
 - **자동 금지 명령**: `CREQINFO`·`VEXTUNITINFO`·`REQSTCOMM`·`REQRSSI`(RF 송신/상태 토글). 파괴 명령(REFLASH*/DOWNBIN/FORMAT)은 당연 금지.
 - **읽기전용 사상**: SSM serial `INFO`(=`simplevInfoBuffer`)는 안전 read. 단 SSM→원격 `ReqInfoTo`(ESP-NOW RF 송신, 카운터·takentime 영향)는 "read-only-ish"로 §5/§10에 문서화.
 - 관측 비차단·drop-oldest·뷰어 실패 코어 무영향·Lock 보호·클라이언트 파리티(§2 제약).

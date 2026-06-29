@@ -24,6 +24,27 @@ from .topology_events import EventAssembler
 from .topology_routing import RoutingTable
 
 
+class _RoutingSnapshot:
+    """build_roster 가 보는 routing 인터페이스(tokens()/edges())의 불변 스냅샷.
+
+    roster() 가 엔진 Lock 안에서 한 번만 떠서(RoutingTable.tokens()/edges() 는 이미 사본 반환),
+    CPU 무거운 build_roster(포트별 정규식 분류)는 Lock 밖에서 돌게 한다 — 뷰어 폴링이 리더
+    스레드 observe 를 Lock 으로 막지 않도록(관측 비차단 불변식). edges 는 now 로 미리 계산됐다.
+    """
+
+    __slots__ = ("_tokens", "_edges")
+
+    def __init__(self, tokens: dict, edges: list) -> None:
+        self._tokens = tokens
+        self._edges = edges
+
+    def tokens(self) -> dict:
+        return self._tokens
+
+    def edges(self, now=None) -> list:    # now 무시 — 스냅샷 시점 fresh 로 이미 계산됨
+        return self._edges
+
+
 class TopologyEngine:
     """관측 줄 → 홉/로스터. 순수 상태(Lock 보호), I/O 비의존."""
 
@@ -53,13 +74,13 @@ class TopologyEngine:
         윈도 만료 pending(TX-without-RX)을 실패/미확정으로 방출한다.
         """
         with self._lock:
-            new: list = []
-            for port, asm in self._assemblers.items():
+            flushed: list = []
+            for port, asm in list(self._assemblers.items()):
                 if now - self._last_ts.get(port, now) >= flush_idle_s:
-                    new += self._drain(asm.flush())
-            new += self._correlator.sweep(now)
-            self._hops.extend(new)
-            return new
+                    flushed += self._drain(asm.flush())   # _drain 이 이미 _hops 에 적재함
+            swept = self._correlator.sweep(now)
+            self._hops.extend(swept)                      # correlator.sweep 분만 추가 적재
+            return flushed + swept
 
     def flush(self) -> list:
         """모든 포트의 pending 블록을 즉시 방출(종료/테스트). 새 홉 리스트 반환."""
@@ -70,21 +91,29 @@ class TopologyEngine:
             return new
 
     def roster(self, entries, now: Optional[float] = None) -> dict:
-        """관측된 routing(링크그래프·토큰맵)을 얹은 로스터 스냅샷. 읽기 전용."""
+        """관측된 routing(링크그래프·토큰맵)을 얹은 로스터 스냅샷. 읽기 전용.
+
+        Lock 안에서 routing 스냅샷만 뜨고, CPU 무거운 build_roster(포트별 정규식 분류)는 Lock
+        밖에서 돈다 — 뷰어 폴링이 엔진 Lock 으로 리더 observe 를 막지 않게(관측 비차단).
+        """
         with self._lock:
-            return build_roster(entries, routing=self._routing, now=now)
+            snap = _RoutingSnapshot(self._routing.tokens(), self._routing.edges(now))
+        return build_roster(entries, routing=snap, now=now)
 
     def recent_hops(self, n: int = 20) -> list:
-        """최근 홉 n개(get_topology·SSE 보강용). 시간순 tail."""
+        """최근 홉 n개(get_topology·SSE 보강용). 시간순 tail. n<=0 이면 빈 리스트."""
         with self._lock:
-            hops = list(self._hops)
-            return hops[-n:] if n < len(hops) else hops
+            if n <= 0:
+                return []
+            return list(self._hops)[-n:]
 
     def _drain(self, events) -> list:
         """방출된 Event 들을 routing·correlator 에 흘려 홉을 모은다(Lock 보유 중 호출).
 
-        observe/flush 양쪽이 같은 처리를 쓰도록 분리. correlator 홉만 히스토리에 적재한다
-        (routing 은 부수상태 갱신, 방출 없음). sweep 은 별도로 self._hops 에 적재한다.
+        observe/flush/sweep(유휴 flush) 모두 이 경로로 홉을 적재한다 — _drain 이 self._hops 에
+        직접 extend 하므로(routing 은 부수상태 갱신, 방출 없음), 호출측은 반환값만 쓰고 _hops 에
+        다시 넣지 않는다(이중 적재 주의). correlator.sweep 산출분은 _drain 을 안 거치므로 sweep 이
+        그 분만 따로 _hops 에 적재한다.
         """
         out: list = []
         for ev in events:
