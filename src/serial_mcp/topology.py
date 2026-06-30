@@ -343,12 +343,14 @@ def _remote_descriptors(direct: list, token_map: dict) -> list:
     (직접노드/원격 여부와 무관 — name=None 은 'UnID 는 봤으나 [Passed Device] 이름 미해소'다).
     type 은 [Passed Device] 경로 이름 해소분이므로 type_source="route_name"(SSM INFO 테이블 파싱과 구분).
 
-    직접노드 dedup 은 **번호가 있을 때만** 신뢰한다(번호=UnitID 동일성). 번호 없는 직접 비-SB 리프
-    (REPEAT/APU: _number_from_lines 가 SB 한정이라 number=None)는 같은 장비가 'REP1' 로 해소돼도
-    dedup 키가 어긋나 중복 노드가 생길 수 있다 — 직접 비-SB 리프의 자기 UnID 추출은 실하드웨어
-    e2e 로 검증할 모듈6(engine) 배선과 함께 보강한다(현재 routing 미배선이라 잠복).
+    직접노드 dedup 은 **라우팅 토큰(UnitID 파생)** 기준이다 — 메시 이름의 번호(예 'SB1')가 직접
+    노드의 UnID(예 5)와 달라도 같은 토큰('05')이면 같은 장비로 보고 원격 중복을 막는다((type,번호)
+    기준이면 UnID≠이름번호 일 때 같은 장비가 SB5(직접)·SB1(원격)으로 둘이 된다). 번호 없는 직접
+    비-SB 리프(REPEAT/APU: _number_from_lines 가 SB 한정이라 number=None)는 토큰을 못 구해 dedup
+    에서 빠질 수 있다 — 직접 비-SB 리프의 UnID 추출은 모듈6(engine) 배선과 함께 보강(현재 잠복).
     """
-    direct_numbered = {(n["type"], n["number"]) for n in direct if n.get("number") is not None}
+    direct_tokens = {t for t in (_unid_token(n["number"]) for n in direct
+                                 if n.get("number") is not None) if t}
     out = []
     for token, ent in token_map.items():
         name = ent.get("name")
@@ -357,18 +359,46 @@ def _remote_descriptors(direct: list, token_map: dict) -> list:
         typ, num, _ = parse_alias(name)
         if not typ:
             continue
-        if num is not None and (typ, num) in direct_numbered:
-            continue                       # 같은 (type, UnitID) 직접노드 → 원격 중복 생성 금지
+        if token in direct_tokens:
+            continue                       # 같은 토큰(=같은 UnitID)의 직접노드 → 원격 중복 생성 금지
         out.append({"type": typ, "number": num, "ports": [], "mac": ent.get("mac"),
-                    "unid": ent.get("unid"), "route_token": token,
+                    "unid": ent.get("unid"), "route_token": token, "name": name,
                     "type_confidence": _CONF["route_name"], "type_source": "route_name",
                     "remote": True})
     return out
 
 
 def _label(d: dict) -> str:
-    """노드/그룹 표시 라벨: 'SSM', 'SB5', 'APU3' (번호 있으면 붙임)."""
+    """그룹 표시 라벨: 'SSM', 'SB5', 'APU3' (번호 있으면 붙임). 그룹(SSM)용 — 노드는 _node_label."""
     return d["type"] + (str(d["number"]) if d.get("number") is not None else "")
+
+
+def _unid_token(num) -> Optional[str]:
+    """UnitID(10진) → 라우팅 토큰(2-hex). 예약 토큰('00'/'FF')은 노드 토큰 아님 → None.
+
+    routing._token_of_unid 과 같은 규약. 직접노드↔원격노드를 '같은 장비'로 묶는 dedup 키다 —
+    토큰은 UnitID 파생이라, 메시 이름의 번호(예 SB1)가 UnID(예 5)와 달라도 같은 토큰('05')으로
+    중복을 제거한다((type,번호) 기준 dedup 은 UnID≠이름번호 일 때 같은 장비를 둘로 본다).
+    """
+    try:
+        tok = f"{int(num) & 0xFF:02X}"
+    except (TypeError, ValueError):
+        return None
+    return None if tok in ("00", "FF") else tok
+
+
+def _node_label(typ: str, number, resolved_name: Optional[str] = None,
+                collision: bool = False, port: Optional[str] = None) -> str:
+    """노드 표시 라벨. 우선순위: 라우팅 해소 이름(메시 네이밍) > type+번호 > type.
+
+    UnID(번호)는 사용자설정 BayID 라 식별 권위가 아니다(표시 메타) — 표시는 메시가 해소한 이름을
+    우선한다(roster↔hop 네이밍 단일 소스). BayID 충돌(number_collision) 노드는 포트로 라벨을
+    구분한다(똑같은 'SB5' 둘 방지).
+    """
+    base = resolved_name or (f"{typ}{number}" if number is not None else typ)
+    if collision and port:
+        return f"{base} ({port})"
+    return base
 
 
 def _merge_sb(members: list[dict]) -> list[dict]:
@@ -429,12 +459,14 @@ def _layout_group(nodes: list[dict], unid_idx: dict) -> list[dict]:
         remote = n.get("remote", False)
         if remote:
             token, mac, unit_id = n.get("route_token"), n.get("mac"), n.get("unid")
+            resolved_name = n.get("name")              # 원격: [Passed Device] 메시 이름
         else:                                          # 직접노드: 번호로 라우팅 관측치 enrich
-            unit_id, token, mac = n.get("number"), None, None
+            unit_id, token, mac, resolved_name = n.get("number"), None, None, None
             hit = unid_idx.get(unit_id) if unit_id is not None else None
             if hit:
                 token, ent = hit
                 mac = ent.get("mac")
+                resolved_name = ent.get("name")        # 메시가 이 UnID 를 부르는 이름(있으면 라벨 우선)
         if unit_id is None:
             unit_id = n.get("number")                  # 원격 토큰 entry 에 unid 없으면 이름 번호로
         connected = (not remote) and any(p["connected"] for p in n["ports"])
@@ -442,14 +474,16 @@ def _layout_group(nodes: list[dict], unid_idx: dict) -> list[dict]:
         fallback = (n["ports"][0]["port"] if n["ports"] else token or typ)
         node_id = f"{typ}-{num if num is not None else fallback}"
         # BayID 충돌로 같은 (type,number) 노드가 둘 이상이면 id 가 겹치므로 포트로 유일화.
-        if n.get("number_collision") and n["ports"]:
-            node_id = f"{node_id}@{n['ports'][0]['port']}"
+        collision = bool(n.get("number_collision"))
+        first_port = n["ports"][0]["port"] if n.get("ports") else None
+        if collision and first_port:
+            node_id = f"{node_id}@{first_port}"
         out.append({
             "id": node_id,
             "type": typ,
             "type_confidence": n.get("type_confidence"),
             "type_source": n.get("type_source"),
-            "label": _label(n),
+            "label": _node_label(typ, num, resolved_name, collision, first_port),
             "mac": mac,
             "unit_id": unit_id,
             "route_token": token,

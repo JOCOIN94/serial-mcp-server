@@ -375,7 +375,9 @@ def test_roster_remote_node_from_passed_device():
     rep = [n for n in r["groups"][0]["nodes"] if n["type"] == "REPEAT"]
     assert len(rep) == 1
     assert rep[0]["ports"] == [] and rep[0]["status"] == "unknown"
-    assert rep[0]["route_token"] == "01" and rep[0]["label"] == "REPEAT1"
+    # 라벨은 메시 해소 이름(REP1) — type 정규화('REPEAT')가 아니라 hop/[Passed Device] 표기와 일치(P2-1).
+    assert rep[0]["route_token"] == "01" and rep[0]["label"] == "REP1"
+    assert rep[0]["type"] == "REPEAT"                   # type 은 정규화 enum(라벨과 별개)
     assert rep[0]["unit_id"] == 1                       # 토큰 entry unid 없으면 이름 번호로 폴백
     assert rep[0]["type_source"] == "route_name"        # 출처=[Passed Device] 이름 해소(ssm_table 아님)
 
@@ -414,6 +416,28 @@ def test_roster_direct_node_enriched_mac_unit_token():
     r = build_roster(_live_entries(), routing=rt, now=2.0)
     sb = [n for n in r["groups"][0]["nodes"] if n["type"] == "SB"][0]
     assert sb["unit_id"] == 5 and sb["route_token"] == "05" and sb["mac"] == "AA:BB:CC"
+
+
+def test_roster_label_prefers_routing_resolved_mesh_name():
+    # 메시가 UnID 5 를 'SB1' 로 부르면([Passed Device] 토큰 05 해소) 같은 장비를 SB5(직접)·SB1(원격)
+    # 으로 중복 생성하지 않고, 살아남은 노드 라벨은 메시 이름(SB1)·UnID 는 unit_id 메타로 둔다.
+    rt = RoutingTable()
+    rt.observe(_ev(kind="rx", unid=5, mac="AA:BB", passed="(05-SB1)"))
+    sb = [n for n in build_roster(_live_entries(), routing=rt, now=2.0)["groups"][0]["nodes"]
+          if n["type"] == "SB"]
+    assert len(sb) == 1                      # 같은 토큰(05) → 직접·원격 중복 없음
+    assert sb[0]["label"] == "SB1"           # 메시 해소 이름 우선
+    assert sb[0]["unit_id"] == 5             # UnID 는 식별 권위가 아니라 메타로 보존
+
+
+def test_roster_collision_label_disambiguated_by_port():
+    # BayID 충돌 노드는 라벨도 포트로 구분(똑같은 'SB5' 둘이 안 보이게).
+    entries = [
+        {"port": "COM12", "alias": None, "lines": SB_ESP_LINES, "connected": True},
+        {"port": "COM20", "alias": None, "lines": SB_ESP_LINES, "connected": True},
+    ]
+    sb = [n for n in build_roster(entries)["groups"][0]["nodes"] if n["type"] == "SB"]
+    assert {n["label"] for n in sb} == {"SB5 (COM12)", "SB5 (COM20)"}
 
 
 def test_roster_node_carries_type_confidence_source():
