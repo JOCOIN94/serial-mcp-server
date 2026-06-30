@@ -74,6 +74,7 @@ class Correlator:
         if flow is None:
             flow = {"key": key, "first_ts": ts, "last_ts": ts, "ports": set(),
                     "seen": set(), "tx": False, "rx": False,
+                    "tx_port": None, "rx_port": None,
                     "path": [], "src_name": None, "device_type": None, "rtt_ms": None}
             self._flows[key] = flow
             self._evict(self._flows, self._max_flows)
@@ -90,11 +91,15 @@ class Correlator:
 
         if ev["kind"] == "tx":
             flow["tx"] = True
+            if flow["tx_port"] is None:            # leaf 발신 로컬 포트(첫 관측 보존)
+                flow["tx_port"] = ev.get("port")
             return out
 
         # kind == "rx" (SSM 수신) → 성공 즉시 방출(단측 관측만으로 충분)
         self._ssm_rx_unids.add(key[0])
         flow["rx"] = True
+        if flow["rx_port"] is None:                # SSM 수신 포트(그룹 귀속 키)
+            flow["rx_port"] = ev.get("port")
         flow["src_name"] = ev["hints"].get("src_name") or flow["src_name"]
         if ev["metrics"].get("takentime_ms") is not None:
             flow["rtt_ms"] = ev["metrics"]["takentime_ms"]
@@ -144,6 +149,8 @@ class Correlator:
             "key": flow["key"], "ok": ok, "confidence": confidence,
             "path": path, "src_name": flow.get("src_name"),
             "device_type": flow.get("device_type"), "rtt_ms": flow.get("rtt_ms"),
+            # rx_port=SSM 수신 포트(그룹 귀속), src_port=leaf 발신 로컬 포트. 한쪽만 관측되면 다른 쪽 None.
+            "rx_port": flow.get("rx_port"), "src_port": flow.get("tx_port"),
             # 관측 포트(best-effort): RX-선행이면 소스 TX 포트가 빠질 수 있다(소스는 roster 가 path[0]로 해소).
             "ports": sorted(p for p in flow["ports"] if p is not None),
         }

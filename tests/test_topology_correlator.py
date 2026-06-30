@@ -57,6 +57,22 @@ def test_tx_then_rx_correlates_one_success():
     assert "COM14" in hops[0]["ports"] and "COM4" in hops[0]["ports"]
 
 
+def test_hop_exposes_rx_and_src_ports():
+    # leaf-TX 포트(소스 로컬)와 SSM-RX 포트(그룹 귀속)를 홉에 분리 노출 — 멤버십 매핑 기반(P1).
+    c = Correlator()
+    c.observe(ev("tx", port="COM14", ts=1.0, dtype="4"))
+    h = c.observe(ev("rx", port="COM4", ts=1.2, passed="(05-SB5)"))[0]
+    assert h["rx_port"] == "COM4"      # SSM 수신 포트(그룹 귀속 키)
+    assert h["src_port"] == "COM14"    # leaf 발신 로컬 포트
+
+
+def test_rx_only_hop_has_rx_port_no_src_port():
+    # SSM RX 만 관측(소스 TX 미관측) → rx_port 만, src_port 는 None.
+    c = Correlator()
+    h = c.observe(ev("rx", port="COM4", ts=1.0, passed="(05-SB5)"))[0]
+    assert h["rx_port"] == "COM4" and h["src_port"] is None
+
+
 # ---- 포트내 dedup + 완료 후 브로드캐스트 잔향 ----
 
 def test_port_internal_dedup_same_packet():
