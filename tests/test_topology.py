@@ -159,6 +159,22 @@ def test_roster_sb_esp_stm_merged_into_one_node():
     assert ports == {"ESP": "COM14", "STM": "COM12"}
     assert [p["mcu"] for p in sb[0]["ports"]] == ["ESP", "STM"]   # 발견순 무관, ESP→STM 고정
     assert sb[0]["label"] == "SB5"            # BayID/UnID 5
+    assert sb[0]["number_collision"] is False  # ESP+STM 같은 베이 → 충돌 아님
+
+
+def test_roster_two_sb_esp_same_unid_not_merged():
+    # 같은 BayID(UnID=5)인 서로 다른 베이의 SB-ESP 둘은 병합 금지(UnID=사용자설정 BayID 충돌).
+    # 포트가 타이브레이커 → 별개 노드 2개, id 유일, number_collision 표시.
+    entries = [
+        {"port": "COM12", "alias": None, "lines": SB_ESP_LINES, "connected": True},
+        {"port": "COM20", "alias": None, "lines": SB_ESP_LINES, "connected": True},
+    ]
+    sb = [n for n in build_roster(entries)["groups"][0]["nodes"] if n["type"] == "SB"]
+    assert len(sb) == 2                              # 병합 금지
+    assert len({n["id"] for n in sb}) == 2           # id 유일(포트로 유일화)
+    assert all(n["number_collision"] for n in sb)    # 충돌 플래그
+    assert all(len(n["ports"]) == 1 for n in sb)     # 각자 자기 포트만
+    assert sorted(p["port"] for n in sb for p in n["ports"]) == ["COM12", "COM20"]
 
 
 def test_roster_rows_by_type():

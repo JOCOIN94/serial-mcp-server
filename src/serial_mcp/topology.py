@@ -346,19 +346,27 @@ def _label(d: dict) -> str:
 
 
 def _merge_sb(members: list[dict]) -> list[dict]:
-    """SB 의 ESP/STM(같은 번호)을 한 논리 노드로 병합. 번호 없으면 포트별 개별 노드.
+    """SB 의 ESP/STM(같은 번호·다른 MCU)을 한 논리 노드로 병합. 번호 없으면 포트별 개별 노드.
 
-    각 디스크립터는 type/number/ports 와 함께 type_confidence/type_source(노드 enrich 용)를 보존한다.
-    병합 SB 노드는 두 포트 중 더 강한 증거(confidence 최대)를 채택한다.
+    병합은 **번호가 같고 MCU 가 서로 다를 때만** 한다(한 베이 = ESP 1 + STM 1). 같은 번호라도
+    같은 MCU 가 둘 이상이면(예: SB-ESP 둘이 BayID 5 공유 — UnID=사용자설정 BayID 충돌이라
+    서로 다른 베이) 한 노드로 묶지 않고 별개 노드로 남긴다. 포트가 타이브레이커다. 이렇게 충돌로
+    갈라진 노드들은 number_collision=True 로 표시해 식별 모호를 신호한다(_layout_group 이 id 도 포트로 유일화).
+    각 디스크립터의 type_confidence/type_source 는 보존하며, 병합 노드는 더 강한 증거(confidence 최대)를 채택한다.
     """
-    merged: dict = {}           # number -> 병합 노드
+    by_number: dict = {}        # number -> [bay 노드, ...] (각 bay 는 MCU 당 포트 1개)
     singles: list[dict] = []
     for d in members:
         port_entry = {"mcu": d.get("mcu"), "port": d["port"], "connected": d["connected"]}
         if d["type"] == "SB" and d.get("number") is not None:
-            node = merged.setdefault(d["number"], {
-                "type": "SB", "number": d["number"], "ports": [],
-                "type_confidence": 0.0, "type_source": None, "remote": False})
+            bays = by_number.setdefault(d["number"], [])
+            mcu = d.get("mcu")
+            # 이 MCU 슬롯이 빈 기존 bay 에 합류, 없으면(같은 MCU 충돌) 새 bay 생성.
+            node = next((b for b in bays if all(p.get("mcu") != mcu for p in b["ports"])), None)
+            if node is None:
+                node = {"type": "SB", "number": d["number"], "ports": [],
+                        "type_confidence": 0.0, "type_source": None, "remote": False}
+                bays.append(node)
             node["ports"].append(port_entry)
             if d["type_confidence"] >= node["type_confidence"]:   # 더 강한 증거 채택
                 node["type_confidence"] = d["type_confidence"]
@@ -366,11 +374,16 @@ def _merge_sb(members: list[dict]) -> list[dict]:
         else:
             singles.append({"type": d["type"], "number": d.get("number"), "ports": [port_entry],
                             "type_confidence": d["type_confidence"], "type_source": d["type_source"],
-                            "remote": False})
-    # SB 칩 순서를 발견순이 아니라 ESP→STM 으로 일관 고정(디자인 [ESP|STM]).
-    for node in merged.values():
-        node["ports"].sort(key=lambda p: 0 if p.get("mcu") == "ESP" else 1 if p.get("mcu") == "STM" else 2)
-    return list(merged.values()) + singles
+                            "remote": False, "number_collision": False})
+    merged_nodes: list[dict] = []
+    for bays in by_number.values():
+        collision = len(bays) > 1                  # 같은 번호가 여러 bay → BayID 충돌
+        for node in bays:
+            node["number_collision"] = collision
+            # SB 칩 순서를 발견순이 아니라 ESP→STM 으로 일관 고정(디자인 [ESP|STM]).
+            node["ports"].sort(key=lambda p: 0 if p.get("mcu") == "ESP" else 1 if p.get("mcu") == "STM" else 2)
+            merged_nodes.append(node)
+    return merged_nodes + singles
 
 
 def _layout_group(nodes: list[dict], unid_idx: dict) -> list[dict]:
@@ -401,8 +414,12 @@ def _layout_group(nodes: list[dict], unid_idx: dict) -> list[dict]:
         connected = (not remote) and any(p["connected"] for p in n["ports"])
         num = n.get("number")
         fallback = (n["ports"][0]["port"] if n["ports"] else token or typ)
+        node_id = f"{typ}-{num if num is not None else fallback}"
+        # BayID 충돌로 같은 (type,number) 노드가 둘 이상이면 id 가 겹치므로 포트로 유일화.
+        if n.get("number_collision") and n["ports"]:
+            node_id = f"{node_id}@{n['ports'][0]['port']}"
         out.append({
-            "id": f"{typ}-{num if num is not None else fallback}",
+            "id": node_id,
             "type": typ,
             "type_confidence": n.get("type_confidence"),
             "type_source": n.get("type_source"),
@@ -413,6 +430,7 @@ def _layout_group(nodes: list[dict], unid_idx: dict) -> list[dict]:
             "row": ROW_BY_TYPE.get(typ, 5),
             "col": col,
             "status": "unknown" if remote else _status_of(connected),
+            "number_collision": bool(n.get("number_collision")),
             "ports": n["ports"],
         })
     return out
