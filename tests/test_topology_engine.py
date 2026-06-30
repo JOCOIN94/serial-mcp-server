@@ -50,6 +50,32 @@ def test_observe_is_per_port_assembler():
     assert eng.recent_hops(10) is not None   # 예외 없이 처리됨(분리 누산 확인은 아래 상관 테스트)
 
 
+# ---- membership 스냅샷(SSM포트별 그룹 귀속 기반) ----
+
+def test_membership_snapshot_maps_ssm_port_to_leaf():
+    # leaf TX(COM14) ↔ SSM RX(COM4) 같은 (UnID,Unique) 상관 → 멤버십에 SSM포트→{unid:{type,local_port}}.
+    eng = TopologyEngine()
+    eng.observe("COM14", 1.0, '[Tx - my INFO] {"UnID":5,"Unique":30,"INFO":["4","SB260526-002",-21]}')
+    eng.observe("COM4", 1.2, '[Proc-WiFiRx] {"UnID":5,"Unique":30,"INFO":["4","SB260526-002",-21]}')
+    eng.flush()                              # COM14 tx → COM4 rx 순으로 방출돼 상관 성립
+    m = eng.membership_snapshot()
+    assert "COM4" in m
+    assert m["COM4"][5]["device_type"] == "4"
+    assert m["COM4"][5]["local_port"] == "COM14"
+
+
+def test_membership_snapshot_preserves_local_port_on_later_rx_only():
+    # 나중에 같은 장비의 rx-only(소스 TX 미관측) 홉이 와도 이미 안 leaf 로컬포트를 지우지 않는다.
+    eng = TopologyEngine()
+    eng.observe("COM14", 1.0, '[Tx - my INFO] {"UnID":5,"Unique":30,"INFO":["4"]}')
+    eng.observe("COM4", 1.2, '[Proc-WiFiRx] {"UnID":5,"Unique":30,"INFO":["4"]}')
+    eng.flush()
+    eng.observe("COM4", 5.0, '[Proc-WiFiRx] {"UnID":5,"Unique":40,"INFO":["4"]}')  # 소스 TX 없는 RX
+    eng.observe("COM4", 5.1, '[Proc-WiFiRx] {"UnID":5,"Unique":41,"INFO":["4"]}')  # 앞 블록 flush
+    m = eng.membership_snapshot()
+    assert m["COM4"][5]["local_port"] == "COM14"   # 보존
+
+
 # ---- 라우팅/로스터 통합 ----
 
 def test_roster_includes_link_edges_from_observed_webtx():

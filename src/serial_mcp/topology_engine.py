@@ -56,6 +56,9 @@ class TopologyEngine:
         self._correlator = Correlator(window_s=window_s)
         self._routing = RoutingTable()
         self._hops: deque = deque(maxlen=hop_history)         # 최근 홉(상한·drop-oldest)
+        # SSM포트별 그룹 귀속 멤버십: {ssm_port: {unid: {device_type, local_port, last_ts}}}.
+        # correlator 가 (UnID,Unique)+시간창으로 짝지은 rx-완료 홉(rx_port=SSM, src_port=leaf)에서 누적.
+        self._membership: dict = {}
 
     def observe(self, port: str, ts: float, text: str) -> list:
         """리더 스레드가 수신 줄마다 호출(비차단·예외삼킴은 호출측 on_line 훅). 새 홉 리스트 반환."""
@@ -65,7 +68,7 @@ class TopologyEngine:
                 asm = EventAssembler(port)
                 self._assemblers[port] = asm
             self._last_ts[port] = ts
-            return self._drain(asm.feed(ts, text))
+            return self._drain(asm.feed(ts, text), ts)
 
     def sweep(self, now: float, flush_idle_s: float = 2.0) -> list:
         """유휴 pending 블록 flush + correlator 만료 처리. 새 홉 리스트 반환.
@@ -78,7 +81,7 @@ class TopologyEngine:
             flushed: list = []
             for port, asm in list(self._assemblers.items()):
                 if now - self._last_ts.get(port, now) >= flush_idle_s:
-                    flushed += self._drain(asm.flush())   # _drain 이 이미 _hops 에 적재함
+                    flushed += self._drain(asm.flush(), now)   # _drain 이 이미 _hops 에 적재함
             swept = self._correlator.sweep(now)
             self._hops.extend(swept)                      # correlator.sweep 분만 추가 적재
             return flushed + swept
@@ -115,17 +118,51 @@ class TopologyEngine:
                 return []
             return list(self._hops)[-n:]
 
-    def _drain(self, events) -> list:
+    def membership_snapshot(self) -> dict:
+        """SSM포트별 그룹 귀속 멤버십 사본 {ssm_port: {unid: {device_type, local_port, last_ts}}}.
+
+        build_roster(모듈5)가 멀티-SSM 그룹 배치·leaf 로컬포트 연결에 쓴다. roster 스냅샷과 함께
+        같은 Lock 세션에서 떠야 skew 가 없다(roster_and_recent_hops 가 그 경로). 읽기 전용 사본.
+        """
+        with self._lock:
+            return self._membership_copy()
+
+    def _membership_copy(self) -> dict:
+        return {ssm: {unid: dict(ent) for unid, ent in members.items()}
+                for ssm, members in self._membership.items()}
+
+    def _drain(self, events, ts=None) -> list:
         """방출된 Event 들을 routing·correlator 에 흘려 홉을 모은다(Lock 보유 중 호출).
 
         observe/flush/sweep(유휴 flush) 모두 이 경로로 홉을 적재한다 — _drain 이 self._hops 에
         직접 extend 하므로(routing 은 부수상태 갱신, 방출 없음), 호출측은 반환값만 쓰고 _hops 에
         다시 넣지 않는다(이중 적재 주의). correlator.sweep 산출분은 _drain 을 안 거치므로 sweep 이
-        그 분만 따로 _hops 에 적재한다.
+        그 분만 따로 _hops 에 적재한다. rx-완료 홉은 멤버십(SSM포트→leaf)에도 누적한다.
         """
         out: list = []
         for ev in events:
             self._routing.observe(ev)
             out += self._correlator.observe(ev)
+        for hop in out:
+            self._record_membership(hop, ts)
         self._hops.extend(out)
         return out
+
+    def _record_membership(self, hop: dict, ts) -> None:
+        """rx-완료 홉(rx_port=SSM 수신 포트)으로 멤버십을 갱신. tx-only(sweep) 홉은 rx_port 없어 건너뜀.
+
+        같은 (ssm_port, unid)에 후속 홉이 와도 새 홉에 없는 필드(예: rx-only 라 src_port=None)는
+        기존 값을 보존한다 — leaf 로컬포트가 한 번 확인되면 유지(가장 최근 관측이 우선, 없으면 보존).
+        """
+        ssm_port = hop.get("rx_port")
+        key = hop.get("key")
+        if ssm_port is None or not key:
+            return
+        unid = key[0]
+        members = self._membership.setdefault(ssm_port, {})
+        prev = members.get(unid, {})
+        members[unid] = {
+            "device_type": hop.get("device_type") or prev.get("device_type"),
+            "local_port": hop.get("src_port") or prev.get("local_port"),
+            "last_ts": ts if ts is not None else prev.get("last_ts"),
+        }
