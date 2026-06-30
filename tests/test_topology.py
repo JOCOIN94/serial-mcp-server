@@ -31,6 +31,16 @@ SB_STM_LINES = [
     "Price1st:3000,",
     "minCoinSensingTime:25,",
 ]
+# SB-STM 런타임(카드 동작) — 부팅/설정 시그니처(BayID 등) 없이 카드만 처리하는 윈도.
+# 2026-06-30 라이브 캡처(COM13). 'Send state of STM32'=SB-SmartBay 전용, 'Released to touch
+# Card'=STM main.c 전용(cbm 검증). 'Check the Card'는 APU/SSM 에도 있어 분류 토큰에서 제외.
+SB_STM_RUNTIME_LINES = [
+    "This Card is a Old card.",
+    "Check the Card. - Our Card 1.",
+    "Send state of STM32 : 0x0005",
+    "Released to touch Card.",
+    "Lower Disp. Step : 2",
+]
 
 
 # ---- 별칭 파싱(명시 식별 우선) ----
@@ -74,6 +84,20 @@ def test_classify_device_info_less_leaf_window_is_unknown_not_sb():
 
 def test_classify_sb_stm_from_logs():
     assert classify_lines(SB_STM_LINES) == ("SB", "STM")
+
+
+def test_classify_sb_stm_from_runtime_card_logs():
+    # 부팅/설정 시그니처 없이 카드 동작만 있는 런타임 윈도도 SB-STM 으로 잡아야 한다
+    # (라이브서 COM13 SB-STM 이 unplaced 였던 결함). SB/STM 전용 토큰 기반.
+    assert classify_lines(SB_STM_RUNTIME_LINES) == ("SB", "STM")
+    d = classify_device(SB_STM_RUNTIME_LINES)
+    assert d["type"] == "SB" and d["mcu"] == "STM"
+
+
+def test_runtime_stm_tokens_do_not_misclassify_ssm():
+    # SB/STM 전용 토큰은 SSM 윈도를 SB 로 끌어오면 안 된다(over-broad 금지).
+    assert classify_lines(SSM_LINES) == ("SSM", "ESP")
+    assert classify_device(SSM_LINES)["type"] == "SSM"
 
 
 def test_classify_empty_is_unknown():

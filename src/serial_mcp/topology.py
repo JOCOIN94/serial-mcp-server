@@ -47,8 +47,13 @@ _SIGNATURES = [
     # SSM-ESP(게이트웨이): Proc-* 는 WiFi 활성 시만 나오므로 Route/From SB/REPRSSI 도 함께.
     ("SSM", "ESP", 3, re.compile(r"\[Proc-WiFiRx\]|\[Proc-Raw Packet\]|\[Proc_WiFiTx\]|\[Proc-WebRTx\]")),
     ("SSM", "ESP", 3, re.compile(r"\[Route\] Link|<<<\s*From\s+SB|REPRSSI")),
-    # SB-STM: 베이 컨트롤러(카드·가격·베이설정) — SB 고유.
+    # SB-STM: 베이 컨트롤러(카드·가격·베이설정) — SB 고유. 부팅/설정 시점에 나옴.
     ("SB", "STM", 3, re.compile(r"\bBayID\s*:|<\s*MasterCard\s*>|BayConfig Info|minCoinSensingTime|Price1st")),
+    # SB-STM 런타임(카드/상태 동작) — 부팅·설정 시그니처가 없는 카드처리 윈도를 보강한다(실장비서
+    # COM13 SB-STM 이 카드만 처리해 unplaced 였던 결함). SB/STM **전용** 토큰만 등록한다(cbm 검증
+    # 2026-06-30: 'Send state of STM32'=SB-SmartBay 전용, 'Released to touch Card'=STM main.c 전용).
+    # 'Check the Card'/'Lower Disp. Step' 등은 APU/SSM 펌웨어에도 있어 over-broad 라 제외.
+    ("SB", "STM", 3, re.compile(r"Send state of STM32|Released to touch Card")),
 ]
 
 # 장비 자기 번호(BayID/UnID) 추출 — SB 의 ESP/STM 짝을 같은 번호로 묶는 데 쓴다.
