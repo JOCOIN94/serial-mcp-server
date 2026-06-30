@@ -65,7 +65,7 @@ ESP32, STM32 등 시리얼 인터페이스로 텍스트 로그를 출력하는 �
 
 - `list_serial_ports` : 사용 가능한 포트 목록 + VID/PID·description(어댑터 칩 식별용, 예: CH343, CP210x) + 별칭 `name`·`monitored_ports`(보드 식별은 별칭으로 — 별칭이 없으면 로그 내용 또는 사람으로 확인).
 - `get_serial_status` : 현재 연결 상태(`connected`/`opening`), 포트, 보드레이트. (웹 뷰어 활성 시 `viewer_url` 포함 — `get_log_buffer_info`도 동일. AI는 세션 첫 호출 시 사용자 요청이 없어도 이 링크를 안내한다.) 첫 호출은 reader 의 첫 open 결판을 짧게(기본 1.5초) 기다려 lazy 기동 직후의 self-trigger race(전 포트 일시 `connected=false`)를 막는다. `opening=true`는 '꺼짐'이 아니라 첫 연결 진행/지연이며, 실제 미연결은 `last_error`로 판단한다.
-- `get_topology` : 전 포트 로스터(그룹·노드·엣지)와 최근 홉 20개(`recent_hops`)를 반환한다. AI가 웹 뷰어 없이 SSM/Repeater/APU/SB 메시 경로를 해석할 때 먼저 호출한다.
+- `get_topology` : 전 포트 로스터(그룹·노드·엣지)와 최근 홉 20개(`recent_hops`)를 반환한다. AI가 웹 뷰어 없이 SSM/Repeater/APU/SB 메시 경로를 해석할 때 먼저 호출한다. 로스터 식별·그룹 불변식(펌웨어+실장비 검증): **① 그룹은 SSM 포트별**(각 SSM 이 수신한 leaf 가 그 그룹 소속 — SSM N개=그룹 N개). **② 장비 식별은 직접연결 로컬 포트**(각 leaf 가 전용 포트라 안정 식별자). **③ UnID 는 사용자 설정 BayID 라 표시 메타(`unit_id`)일 뿐 식별·병합 키가 아니다**(서로 다른 베이가 같은 BayID 를 가질 수 있어 충돌 가능 → 포트로 구분, 라벨은 메시 해소 이름 우선). **④ Mac 은 INFO 식별 패킷에 없고 링크 그래프(엣지)에만 존재**하므로 식별 매칭에 쓰지 않는다 — leaf↔SSM 상관 키는 `(UnID, Unique) + 도착 시간창 + 발신 포트`다(`Unique` 는 1~99 롤링 카운터라 단독 식별 불가). 근거·검증: `docs/plans/2026-06-30-topology-identity-grouping-refactor.md`.
 - `get_recent_logs(lines=200)` : 최근 N줄(접힌 묶음 반복 횟수 표기 포함).
 - `query_serial_logs(pattern, max_results=100)` : 정규식으로 버퍼 검색.
 - `get_log_buffer_info` : 버퍼 크기 / 최신·최오래 항목.
