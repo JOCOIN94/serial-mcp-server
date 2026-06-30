@@ -103,8 +103,9 @@ class TopologyEngine:
         """
         with self._lock:
             snap = _RoutingSnapshot(self._routing.tokens(), self._routing.edges(now))
+            membership = self._membership_copy()
             hops = [] if n <= 0 else list(self._hops)[-n:]
-        return build_roster(entries, routing=snap, now=now), hops
+        return build_roster(entries, routing=snap, membership=membership, now=now), hops
 
     def roster(self, entries, now: Optional[float] = None) -> dict:
         """관측된 routing(링크그래프·토큰맵)을 얹은 로스터 스냅샷. 읽기 전용."""

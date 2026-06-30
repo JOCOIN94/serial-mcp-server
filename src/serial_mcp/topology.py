@@ -240,12 +240,33 @@ def _status_of(connected: bool) -> str:
     return "good" if connected else "stale"
 
 
-def build_roster(entries, routing=None, now=None) -> dict:
-    """포트 목록(+선택 라우팅 상태) → 토폴로지 로스터.
+def _local_port_to_ssm(membership: Optional[dict]) -> dict:
+    """멤버십 {ssm_port:{unid:{local_port,last_ts,..}}} → {local_port: ssm_port} 역인덱스.
+
+    한 leaf 로컬포트가 두 SSM 에 들렸으면(시간차) last_ts 가 더 최근인 SSM 을 택한다(직접 USB
+    leaf 는 보통 한 SSM 귀속이나 메시 오버히어 대비). local_port 없는 엔트리(원격·미상관)는 건너뜀.
+    """
+    best: dict = {}                     # local_port → (ssm_port, last_ts)
+    for ssm_port, members in (membership or {}).items():
+        for ent in members.values():
+            lp = ent.get("local_port")
+            if not lp:
+                continue
+            ts = ent.get("last_ts")
+            cur = best.get(lp)
+            if cur is None or (ts is not None and (cur[1] is None or ts >= cur[1])):
+                best[lp] = (ssm_port, ts)
+    return {lp: v[0] for lp, v in best.items()}
+
+
+def build_roster(entries, routing=None, membership=None, now=None) -> dict:
+    """포트 목록(+선택 라우팅 상태·멤버십) → 토폴로지 로스터.
 
     entries: [{port, alias, lines, connected}] (lines 는 최근 수신 줄 list).
     routing: 선택 RoutingTable(모듈4) — 주면 링크그래프 edges·원격 mesh 노드·mac/토큰 enrich 를
       얹는다. 없으면(Phase A 호출부) edges=[]·원격노드 없음으로 하위호환 유지. now=fresh 판정 클럭.
+    membership: 선택 {ssm_port:{unid:{device_type,local_port,last_ts}}}(엔진 모듈6) — 주면 각 leaf 를
+      그 leaf 를 수신한 SSM 의 그룹에 배치한다(멀티-SSM 정확). 없거나 매칭 안 되면 첫 그룹 폴백.
     반환: {"groups": [{id, label, ssm_port, kind, nodes:[node...], edges:[...]}], "unplaced":[port...]}.
       kind = "ssm"(SSM 보유) | "standalone"(SSM 부재). edges = [{from,to,rssi,fresh}](SSM 그룹 한정).
       node = {id, type, type_confidence, type_source, label, mac, unit_id, route_token,
@@ -271,10 +292,15 @@ def build_roster(entries, routing=None, now=None) -> dict:
         groups = [{"id": "g1", "label": "(SSM 미식별)", "ssm_port": None,
                    "kind": "standalone", "_members": []}]
 
-    # 비-SSM 귀속: Phase A 는 GID 미파싱이라 단일 SSM 가정(첫 그룹에 귀속). 멀티 SSM 의
-    # 정확한 GID/채널 귀속은 후속(합성 테스트). (실측 기준 구성은 SSM 1개라 정확.)
+    # 비-SSM 귀속: membership(SSM포트→leaf 로컬포트)이 있으면 각 leaf 를 그 leaf 를 수신한 SSM
+    # 그룹에 배치한다(멀티-SSM 정확). 없거나(Phase A) 매칭 안 되면 첫 그룹 폴백(단일 SSM 가정) /
+    # standalone. (링크 edges·원격 mesh 노드의 SSM별 분할은 routing 의 SSM별 미파싱이라 후속 — 현재
+    # 첫 그룹에만 얹는다. 실측 기준 구성은 SSM 1개라 영향 없음.)
+    group_by_ssm = {g["ssm_port"]: g for g in groups if g.get("ssm_port")}
+    local_to_ssm = _local_port_to_ssm(membership)
     for d in others:
-        groups[0]["_members"].append(d)
+        target = group_by_ssm.get(local_to_ssm.get(d["port"])) or groups[0]
+        target["_members"].append(d)
 
     token_map = routing.tokens() if routing is not None else {}
     unid_idx = _unid_index(token_map)                       # unid → (token, entry): mac/토큰 enrich

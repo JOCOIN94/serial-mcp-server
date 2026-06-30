@@ -177,6 +177,56 @@ def test_roster_two_sb_esp_same_unid_not_merged():
     assert sorted(p["port"] for n in sb for p in n["ports"]) == ["COM12", "COM20"]
 
 
+def test_roster_multi_ssm_places_leaf_by_membership():
+    # 멀티-SSM: membership(SSM포트→leaf)로 각 leaf 를 자기 SSM 그룹에 배치(전부 첫 그룹에 몰지 않음).
+    entries = [
+        {"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM9", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM12", "alias": "SB1-ESP", "lines": [], "connected": True},
+        {"port": "COM20", "alias": "SB2-ESP", "lines": [], "connected": True},
+    ]
+    membership = {
+        "COM4": {1: {"device_type": "4", "local_port": "COM12", "last_ts": 1.0}},
+        "COM9": {2: {"device_type": "4", "local_port": "COM20", "last_ts": 1.0}},
+    }
+    r = build_roster(entries, membership=membership)
+    assert len(r["groups"]) == 2
+    by_ssm = {g["ssm_port"]: g for g in r["groups"]}
+    com4_ports = {p["port"] for n in by_ssm["COM4"]["nodes"] for p in n["ports"]}
+    com9_ports = {p["port"] for n in by_ssm["COM9"]["nodes"] for p in n["ports"]}
+    assert "COM12" in com4_ports and "COM12" not in com9_ports
+    assert "COM20" in com9_ports and "COM20" not in com4_ports
+
+
+def test_roster_multi_ssm_without_membership_falls_back_first_group():
+    # membership 없으면 현재 동작(첫 그룹 귀속) 폴백 — 하위호환.
+    entries = [
+        {"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM9", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM12", "alias": "SB1-ESP", "lines": [], "connected": True},
+    ]
+    r = build_roster(entries)
+    ports = {p["port"] for n in r["groups"][0]["nodes"] for p in n["ports"]}
+    assert "COM12" in ports
+
+
+def test_roster_membership_most_recent_ssm_wins():
+    # leaf 가 두 SSM 에 들렸으면(시간차) last_ts 가 더 최근인 SSM 그룹에 배치.
+    entries = [
+        {"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM9", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM12", "alias": "SB1-ESP", "lines": [], "connected": True},
+    ]
+    membership = {
+        "COM4": {1: {"device_type": "4", "local_port": "COM12", "last_ts": 1.0}},
+        "COM9": {1: {"device_type": "4", "local_port": "COM12", "last_ts": 9.0}},  # 더 최근
+    }
+    r = build_roster(entries, membership=membership)
+    by_ssm = {g["ssm_port"]: g for g in r["groups"]}
+    assert any(p["port"] == "COM12" for n in by_ssm["COM9"]["nodes"] for p in n["ports"])
+    assert all(p["port"] != "COM12" for n in by_ssm["COM4"]["nodes"] for p in n["ports"])
+
+
 def test_roster_rows_by_type():
     r = build_roster(_live_entries())
     by_type = {n["type"]: n for n in r["groups"][0]["nodes"]}
