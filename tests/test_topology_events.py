@@ -62,6 +62,7 @@ def test_rx_block_assembled_into_one_event():
     assert e["hints"]["src_name"] == "SB1"           # <<< From SB1
     assert e["metrics"]["takentime_ms"] == 61
     assert e["metrics"]["avr_takentime_ms"] == 121.0
+    assert e["metrics"]["rssi"] == -21               # INFO[2] = 수신 RSSI(dBm) — 링크 품질색 소스
 
 
 def test_webtx_is_separate_event_with_reprssi():

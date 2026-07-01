@@ -380,6 +380,13 @@ def test_roster_edges_stale_when_last_ts_old():
     assert e["fresh"] is False
 
 
+def test_roster_edges_carry_rssi():
+    # 멤버십 rssi → edge rssi(프론트 rssiColor 로 링크 품질색: 강=초록·약=빨강). None 이면 회색.
+    membership = {"COM4": {5: {"device_type": "4", "local_port": "COM14", "last_ts": 1.0, "rssi": -42}}}
+    e = build_roster(_live_entries(), membership=membership, now=2.0)["groups"][0]["edges"][0]
+    assert e["rssi"] == -42
+
+
 def test_roster_remote_node_from_passed_device():
     # SB5 직접연결 + REP1 은 [Passed Device] 로만 등장하는 원격 mesh 노드(직접 포트 없음).
     rt = RoutingTable()

@@ -88,6 +88,15 @@ def test_membership_local_port_filled_when_rx_precedes_tx():
     assert m["COM4"][5]["local_port"] == "COM14"   # RX 선행이어도 leaf 포트 확보(버그 수정)
 
 
+def test_membership_carries_rssi_from_hop():
+    # rx INFO[2] RSSI 가 홉→멤버십으로 전파(링크 품질색 소스).
+    eng = TopologyEngine()
+    eng.observe("COM14", 1.0, '[Tx - my INFO] {"UnID":5,"Unique":30,"INFO":["4","M",-42]}')
+    eng.observe("COM4", 1.2, '[Proc-WiFiRx] {"UnID":5,"Unique":30,"INFO":["4","M",-42]}')
+    eng.flush()
+    assert eng.membership_snapshot()["COM4"][5]["rssi"] == -42
+
+
 # ---- 라우팅/로스터 통합 ----
 
 def test_roster_includes_link_edges_from_observed_membership():

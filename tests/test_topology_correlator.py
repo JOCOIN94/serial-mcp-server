@@ -8,13 +8,13 @@ from serial_mcp.topology_correlator import Correlator, _parse_passed
 
 
 def ev(kind, unid=5, unique=1, port="COM4", ts=0.0, src=None, passed=None,
-       takentime=None, dtype=None):
+       takentime=None, dtype=None, rssi=None):
     """테스트용 최소 Event dict(topology_events 산출 형태의 부분집합)."""
     return {
         "kind": kind, "port": port, "ts": ts,
         "ids": {"unid": unid, "unique": unique, "rt_tokens": []},
         "hints": {"src_name": src, "passed": passed, "device_type": dtype},
-        "metrics": {"takentime_ms": takentime, "reprssi": []},
+        "metrics": {"takentime_ms": takentime, "reprssi": [], "rssi": rssi},
     }
 
 
@@ -67,6 +67,14 @@ def test_hop_exposes_rx_and_src_ports():
     h = c.observe(ev("rx", port="COM4", ts=1.2, passed="(05-SB5)"))[0]
     assert h["rx_port"] == "COM4"      # SSM 수신 포트(그룹 귀속 키)
     assert h["src_port"] == "COM14"    # leaf 발신 로컬 포트
+
+
+def test_hop_carries_rssi_from_rx():
+    # rx INFO[2] RSSI(metrics.rssi)가 완성 홉에 실린다 — 링크 품질색 소스.
+    c = Correlator()
+    c.observe(ev("tx", port="COM12", ts=1.0))
+    h = c.observe(ev("rx", port="COM4", ts=1.2, passed="(05-SB5)", rssi=-42))[0]
+    assert h["rssi"] == -42
 
 
 def test_rx_only_hop_has_rx_port_no_src_port():

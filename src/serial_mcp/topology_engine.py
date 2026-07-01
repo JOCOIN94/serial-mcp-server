@@ -176,4 +176,5 @@ class TopologyEngine:
             "device_type": hop.get("device_type") or prev.get("device_type"),
             "local_port": hop.get("src_port") or prev.get("local_port"),
             "last_ts": ts if ts is not None else prev.get("last_ts"),
+            "rssi": hop.get("rssi") if hop.get("rssi") is not None else prev.get("rssi"),
         }

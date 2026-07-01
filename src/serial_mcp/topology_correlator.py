@@ -79,7 +79,7 @@ class Correlator:
             flow = {"key": key, "first_ts": ts, "last_ts": ts, "ports": set(),
                     "seen": set(), "tx": False, "rx": False,
                     "tx_port": None, "rx_port": None, "rx_ts": None,
-                    "path": [], "src_name": None, "device_type": None, "rtt_ms": None}
+                    "path": [], "src_name": None, "device_type": None, "rtt_ms": None, "rssi": None}
             self._flows[key] = flow
             self._evict(self._flows, self._max_flows)
 
@@ -113,6 +113,8 @@ class Correlator:
         flow["src_name"] = ev["hints"].get("src_name") or flow["src_name"]
         if ev["metrics"].get("takentime_ms") is not None:
             flow["rtt_ms"] = ev["metrics"]["takentime_ms"]
+        if ev["metrics"].get("rssi") is not None:      # SB→SSM 수신 RSSI(INFO[2]) — 링크 품질색
+            flow["rssi"] = ev["metrics"]["rssi"]
         flow["path"] = _parse_passed(ev["hints"].get("passed"))
         # 완성 우선: TX 를 이미 봤으면 즉시 방출(둘 다 채움). 아직이면 대기 — 뒤늦은 TX 를 흡수해
         # src_port 를 채우거나(포트간 링크), TX 가 안 오면 sweep 이 grace 후 rx-only 로 방출한다.
@@ -172,6 +174,7 @@ class Correlator:
             "key": flow["key"], "ok": ok, "confidence": confidence,
             "path": path, "src_name": flow.get("src_name"),
             "device_type": flow.get("device_type"), "rtt_ms": flow.get("rtt_ms"),
+            "rssi": flow.get("rssi"),
             # rx_port=SSM 수신 포트(그룹 귀속), src_port=leaf 발신 로컬 포트. 한쪽만 관측되면 다른 쪽 None.
             "rx_port": flow.get("rx_port"), "src_port": flow.get("tx_port"),
             # 관측 포트(best-effort): RX-선행이면 소스 TX 포트가 빠질 수 있다(소스는 roster 가 path[0]로 해소).

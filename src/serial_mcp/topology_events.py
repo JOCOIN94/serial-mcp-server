@@ -116,6 +116,8 @@ def _fill_from_json(ev: dict, obj) -> None:
     info = obj.get("INFO")
     if isinstance(info, list) and info:
         hints["device_type"] = str(info[0])            # INFO[0] = 장비타입 enum
+        if len(info) > 2 and isinstance(info[2], (int, float)) and not isinstance(info[2], bool):
+            met["rssi"] = int(info[2])                 # INFO[2] = 수신 RSSI(dBm) — SB→SSM 링크 품질
     rt = obj.get("Rt")
     if isinstance(rt, list):
         ids["rt_tokens"] = [str(t) for t in rt if t is not None]

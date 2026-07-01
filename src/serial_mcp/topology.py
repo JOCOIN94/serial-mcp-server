@@ -341,7 +341,7 @@ def _membership_edges(membership, ssm_port, now, fresh_s=_MEMBERSHIP_FRESH_S) ->
             continue
         last_ts = ent.get("last_ts")
         fresh = now is None or last_ts is None or (now - last_ts) < fresh_s
-        out.append({"from": lp, "to": ssm_port, "fresh": bool(fresh)})
+        out.append({"from": lp, "to": ssm_port, "fresh": bool(fresh), "rssi": ent.get("rssi")})
     return out
 
 
