@@ -606,6 +606,7 @@ kbd {
 .tgroup { background: var(--bg); border: 1px solid var(--border-2); border-radius: 10px; padding: 12px 12px 14px; }
 .tgroup-num { font: 700 10px var(--ui); letter-spacing: .08em; color: var(--muted); margin: 0 0 6px 2px; }
 .tcanvas { position: relative; }   /* width/height 인라인 — 절대배치 노드 컨테이너 */
+.tedges { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }   /* 링크선 — 노드 뒤·클릭 비간섭 */
 
 /* 노드 = 라벨(밖·위) + 박스(색). 단일 MCU(SSM/REPEAT/APU/APU_C)는 박스에 ESP 한 칸,
    SB 는 박스를 좌우로 나눠 ESP|STM 두 칸(각 칸이 포트 클릭 타깃·자체 상태점). */
@@ -1182,6 +1183,36 @@ function renderBodyHTML(model, cls, view) {
   return decoText(s, cls, view);
 }
 
+/* ---- 토폴로지 그래프 순수로직(모듈8 ① edges 링크선) — DOM 비의존 계산만 ---- */
+
+/* rssi(dBm) → 링크강도 색. 강(-30)=초록 → 약(-90)=빨강, 미상(null/NaN/공백)=중립 회색.
+   REPRSSI/[Route] Link 간선의 농도 표현에 쓴다. 범위 밖은 클램프(throw 없음). */
+function rssiColor(rssi) {
+  var r = Number(rssi);
+  if (rssi == null || rssi === "" || isNaN(r)) return "#707b88";   // 미상 = 중립(stale 계열)
+  if (r < -90) r = -90; else if (r > -30) r = -30;                 // 강약 범위 클램프
+  var hue = Math.round(((r + 90) / 60) * 120);                     // 0(약)=빨강 → 120(강)=초록
+  return "hsl(" + hue + ",62%,55%)";
+}
+
+/* 로스터 edges({from,to = mac}) + 배치된 노드(placed:[{n:{mac},x,y,w,h}]) → 선분 목록.
+   노드 mac 으로 양 끝을 찾아 중심좌표로 선분화한다. 배치에 없는 mac(원격 mesh 노드 등)이나
+   자기루프는 그릴 대상이 없어 skip. 좌표 계산만 하고 DOM 은 board.js 가 그린다. */
+function edgeSegments(placed, edges) {
+  var byMac = {}, ps = placed || [];
+  for (var i = 0; i < ps.length; i++) {
+    var p = ps[i], n = p && p.n, mac = n && n.mac;
+    if (mac) byMac[mac] = { x: p.x + (p.w || 0) / 2, y: p.y + (p.h || 0) / 2 };
+  }
+  var out = [], es = edges || [];
+  for (var j = 0; j < es.length; j++) {
+    var e = es[j] || {}, a = byMac[e.from], b = byMac[e.to];
+    if (!a || !b || e.from === e.to) continue;
+    out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, rssi: e.rssi, fresh: e.fresh });
+  }
+  return out;
+}
+
 /* ---- export (browser global + node require 양쪽) ---- */
 var SViewer = {
   escapeHtml: escapeHtml, cleanCtrl: cleanCtrl, stripAnsi: stripAnsi,
@@ -1189,7 +1220,8 @@ var SViewer = {
   parseLine: parseLine, classifyLine: classifyLine, findPayload: findPayload,
   correlationBadges: correlationBadges, normalizeForRepeat: normalizeForRepeat,
   tsToMs: tsToMs, renderBodyHTML: renderBodyHTML, renderPayloadHTML: renderPayloadHTML,
-  decoText: decoText
+  decoText: decoText,
+  rssiColor: rssiColor, edgeSegments: edgeSegments
 };
 if (typeof module !== "undefined" && module.exports) module.exports = SViewer;
 if (typeof window !== "undefined") window.SViewer = SViewer;
@@ -1207,9 +1239,16 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
 
 (function () {
   let lastSig = "";
+  const SV = window.SViewer;                       // 순수 로직(edgeSegments·rssiColor) — VIEWER-PURE 에서 export
+  const SVGNS = "http://www.w3.org/2000/svg";
 
   function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
   function txt(tag, t, cls) { const e = el(tag, cls); e.textContent = t; return e; }
+  function svgEl(tag, attrs) {                      // SVG 는 createElementNS + setAttribute 라야 그려진다
+    const e = document.createElementNS(SVGNS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
 
   // 장비 타입 색·배지·상태 색 (디자인 토큰)
   var TYPE_COLOR = { SSM: "#56d4dd", REPEAT: "#e3b341", APU: "#3fb950", APU_C: "#2ea043", SB: "#6ab7ff" };
@@ -1267,6 +1306,23 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     return wrap;
   }
 
+  // 링크선(REPRSSI/[Route] Link) SVG 오버레이 — 노드 박스 뒤에 깔린다. edges 없으면 null.
+  // 좌표·매칭은 SViewer.edgeSegments(순수, 테스트됨), 간선 색은 rssiColor(강=초록·약=빨강).
+  // fresh=false(오래된 링크)는 옅게. path 실제경로가 아니라 '가능한 링크' 그래프임에 유의(plan §4).
+  function renderEdges(lay, edges) {
+    const segs = SV.edgeSegments(lay.placed, edges);
+    if (!segs.length) return null;
+    const svg = svgEl("svg", { "class": "tedges", width: lay.w, height: lay.h });
+    for (const s of segs) {
+      svg.appendChild(svgEl("line", {
+        x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2,
+        stroke: SV.rssiColor(s.rssi), "stroke-width": "2",
+        "stroke-opacity": s.fresh === false ? "0.3" : "0.85", "stroke-linecap": "round",
+      }));
+    }
+    return svg;
+  }
+
   // 그룹 = "그룹 N" 순번(밖·위) + 박스(노드 절대배치). 그룹↔SSM 1:1.
   function renderGroup(g, idx, active, onSelect) {
     const wrap = el("div");
@@ -1276,6 +1332,8 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     box.style.width = (lay.w + 26) + "px";   // 콘텐츠 크기로 좌측 정렬
     const canvas = el("div", "tcanvas");
     canvas.style.width = lay.w + "px"; canvas.style.height = lay.h + "px";
+    const edges = renderEdges(lay, g.edges);            // 노드 아래 링크선(있을 때만)
+    if (edges) canvas.appendChild(edges);
     for (const pl of lay.placed) canvas.appendChild(renderNode(pl, active, onSelect));
     box.appendChild(canvas);
     wrap.appendChild(box);

@@ -159,5 +159,49 @@ eq(cls("��" + String.fromCharCode(1, 2, 3, 4, 5, 6) + "@#$%^&*").primary, "n
 eq(SV.findPayload("{".repeat(5000)), null, "rg-payload-pathological-null");
 ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
 
+/* ===== 토폴로지 그래프 순수로직(모듈8 ① edges 링크선) — DOM 비의존 계산만 ===== */
+
+/* T-1. rssiColor: 강(-30)~약(-90) 그라디언트 색, null/NaN=중립, 범위 밖은 클램프(throw 없음). */
+{
+  const isColor = s => typeof s === "string" && /^(#|rgb|hsl)/.test(s);
+  ok(isColor(SV.rssiColor(-40)), "rssi-color-strong-is-color");
+  ok(isColor(SV.rssiColor(-85)), "rssi-color-weak-is-color");
+  eq(SV.rssiColor(null), SV.rssiColor(undefined), "rssi-color-null-undefined-same");
+  ok(SV.rssiColor(null) !== SV.rssiColor(-40), "rssi-color-null-differs-from-signal");
+  ok(SV.rssiColor(-35) !== SV.rssiColor(-88), "rssi-color-strong-vs-weak-differ");
+  ok(isColor(SV.rssiColor(-5)) && isColor(SV.rssiColor(-120)), "rssi-color-clamps-out-of-range");
+  ok(isColor(SV.rssiColor("-40")), "rssi-color-numeric-string");   // JSON 이 문자열로 줄 수도
+}
+
+/* T-2. edgeSegments: 노드 mac ↔ edge from/to 매칭 → 노드 중심좌표 선분. 미매칭 mesh 엣지는 skip. */
+{
+  const placed = [
+    { n: { mac: "AA", id: "mac:AA" }, x: 0, y: 0, w: 100, h: 60 },
+    { n: { mac: "BB", id: "mac:BB" }, x: 200, y: 0, w: 100, h: 60 },
+  ];
+  const edges = [
+    { from: "AA", to: "BB", rssi: -40, fresh: true },
+    { from: "AA", to: "ZZ", rssi: -50, fresh: false },   // ZZ 노드 배치에 없음 → 그릴 수 없어 skip
+  ];
+  const segs = SV.edgeSegments(placed, edges);
+  eq(segs.length, 1, "edge-seg-skips-unmatched");
+  eq(segs[0].x1, 50, "edge-seg-x1-center");      // 0 + 100/2
+  eq(segs[0].y1, 30, "edge-seg-y1-center");      // 0 + 60/2
+  eq(segs[0].x2, 250, "edge-seg-x2-center");     // 200 + 100/2
+  eq(segs[0].y2, 30, "edge-seg-y2-center");
+  eq(segs[0].rssi, -40, "edge-seg-rssi-kept");
+  eq(segs[0].fresh, true, "edge-seg-fresh-kept");
+}
+
+/* T-3. edgeSegments 방어: null/빈 입력·mac 없는 노드·자기루프 안전(throw 없이 skip). */
+{
+  eq(SV.edgeSegments([], []).length, 0, "edge-seg-empty");
+  eq(SV.edgeSegments(null, null).length, 0, "edge-seg-null-safe");
+  const noMac = [{ n: { id: "port:COM4" }, x: 0, y: 0, w: 100, h: 60 }];
+  eq(SV.edgeSegments(noMac, [{ from: "AA", to: "BB" }]).length, 0, "edge-seg-node-without-mac-skipped");
+  const p2 = [{ n: { mac: "AA" }, x: 0, y: 0, w: 100, h: 60 }];
+  eq(SV.edgeSegments(p2, [{ from: "AA", to: "AA" }]).length, 0, "edge-seg-self-loop-skipped");
+}
+
 if (fails.length) { console.error("FAILURES (" + fails.length + "):\n" + fails.map(f => " - " + f).join("\n")); process.exit(1); }
 console.log("all viewer-logic assertions passed");
