@@ -607,6 +607,7 @@ kbd {
 .tgroup-num { font: 700 10px var(--ui); letter-spacing: .08em; color: var(--muted); margin: 0 0 6px 2px; }
 .tcanvas { position: relative; }   /* width/height 인라인 — 절대배치 노드 컨테이너 */
 .tedges { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }   /* 링크선 — 노드 뒤·클릭 비간섭 */
+.thop { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; z-index: 2; }   /* 홉 경로 강조 — 노드 위 */
 
 /* 노드 = 라벨(밖·위) + 박스(색). 단일 MCU(SSM/REPEAT/APU/APU_C)는 박스에 ESP 한 칸,
    SB 는 박스를 좌우로 나눠 ESP|STM 두 칸(각 칸이 포트 클릭 타깃·자체 상태점). */
@@ -1213,6 +1214,32 @@ function edgeSegments(placed, edges) {
   return out;
 }
 
+/* hop.path(노드명 시퀀스) → 현재 배치(placed)에서 label 매칭된 노드 중심 waypoint 목록.
+   미매칭 이름은 건너뛴다(부분 경로라도 그린다). hop.path 는 [Passed Device] 해소 '이름'
+   축이라 edges 의 mac 매칭과 별개다. 2개 미만이면 선을 못 그으니 board.js 가 pulse 로만 쓴다. */
+function hopWaypoints(placed, path) {
+  var byLabel = {}, ps = placed || [];
+  for (var i = 0; i < ps.length; i++) {
+    var p = ps[i], n = p && p.n;
+    if (n && n.label != null) byLabel[n.label] = { x: p.x + (p.w || 0) / 2, y: p.y + (p.h || 0) / 2 };
+  }
+  var out = [], pa = path || [];
+  for (var j = 0; j < pa.length; j++) {
+    var w = byLabel[pa[j]];
+    if (w) out.push({ x: w.x, y: w.y, name: pa[j] });
+  }
+  return out;
+}
+
+/* 홉 상태 → 경로 강조 색. ok=성공(초록), ok:false+timeout=실패(빨강), 그 외=미확정(노랑).
+   ⚠️ 홉엔 시각(ts)이 없다 — 순서/시간차 추론 금지, ok·confidence 로만 상태 판단(#1 제약). */
+function hopColor(hop) {
+  if (!hop) return "#8b949e";
+  if (hop.ok) return "#3fb950";                       // SSM RX 확인 = 성공
+  if (hop.confidence === "timeout") return "#f0786f"; // 윈도 만료 = 실패
+  return "#e3b341";                                    // unconfirmed/inferred/observed = 미확정
+}
+
 /* ---- export (browser global + node require 양쪽) ---- */
 var SViewer = {
   escapeHtml: escapeHtml, cleanCtrl: cleanCtrl, stripAnsi: stripAnsi,
@@ -1221,7 +1248,8 @@ var SViewer = {
   correlationBadges: correlationBadges, normalizeForRepeat: normalizeForRepeat,
   tsToMs: tsToMs, renderBodyHTML: renderBodyHTML, renderPayloadHTML: renderPayloadHTML,
   decoText: decoText,
-  rssiColor: rssiColor, edgeSegments: edgeSegments
+  rssiColor: rssiColor, edgeSegments: edgeSegments,
+  hopWaypoints: hopWaypoints, hopColor: hopColor
 };
 if (typeof module !== "undefined" && module.exports) module.exports = SViewer;
 if (typeof window !== "undefined") window.SViewer = SViewer;
@@ -1241,6 +1269,7 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
   let lastSig = "";
   const SV = window.SViewer;                       // 순수 로직(edgeSegments·rssiColor) — VIEWER-PURE 에서 export
   const SVGNS = "http://www.w3.org/2000/svg";
+  let _groupViews = [];                            // 렌더된 그룹 [{canvas, lay}] — 홉 애니메이션이 참조
 
   function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
   function txt(tag, t, cls) { const e = el(tag, cls); e.textContent = t; return e; }
@@ -1337,6 +1366,7 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     for (const pl of lay.placed) canvas.appendChild(renderNode(pl, active, onSelect));
     box.appendChild(canvas);
     wrap.appendChild(box);
+    _groupViews.push({ canvas: canvas, lay: lay });   // 홉 애니메이션이 이 canvas·좌표를 참조
     return wrap;
   }
 
@@ -1417,6 +1447,7 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     if (s === lastSig) return;
     lastSig = s;
     root.innerHTML = "";
+    _groupViews = [];                                // 재렌더 — 이전 그룹뷰 폐기(스테일 canvas 참조 방지)
     root.appendChild(buildSession(session, allPorts(roster), onRelease));
     const groups = roster.groups || [], unplaced = roster.unplaced || [];
     const wrap = el("div", "topo");
@@ -1428,6 +1459,55 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     }
     root.appendChild(wrap);
   };
+
+  // ── 홉 경로 애니메이션(모듈8 ②) ──
+  // /api/topology/stream 이 준 hop 을 현재 렌더된 그래프 위에 잠깐 강조한다. hop.path(이름) 를
+  // 노드 label 로 매칭(SViewer.hopWaypoints)해 waypoint 를 잇는다. 홉엔 시각이 없으므로 순서·
+  // 시간차는 표현하지 않고 경로와 성패(색)만 보여준다(#1 제약).
+  window.topologyHop = function (hop) {
+    if (!hop || !SV) return;
+    const color = SV.hopColor(hop);
+    for (const view of _groupViews) {
+      const wps = SV.hopWaypoints(view.lay.placed, hop.path);
+      if (wps.length >= 2) animateHopPath(view.canvas, view.lay, wps, color);
+    }
+  };
+
+  function polylineLength(wps) {                    // 대시 애니메이션용 총 길이
+    let d = 0;
+    for (let i = 1; i < wps.length; i++) {
+      const dx = wps[i].x - wps[i - 1].x, dy = wps[i].y - wps[i - 1].y;
+      d += Math.sqrt(dx * dx + dy * dy);
+    }
+    return d;
+  }
+
+  // 경로 폴리라인을 그렸다가(대시가 흐르는 rAF) 끝나면 fade-out 제거. 홉마다 자기 레이어(짧음).
+  function animateHopPath(canvas, lay, wps, color) {
+    const svg = svgEl("svg", { "class": "thop", width: lay.w, height: lay.h });
+    const line = svgEl("polyline", {
+      points: wps.map(w => w.x + "," + w.y).join(" "), fill: "none", stroke: color,
+      "stroke-width": "3", "stroke-linecap": "round", "stroke-linejoin": "round",
+    });
+    svg.appendChild(line);
+    canvas.appendChild(svg);
+    const total = polylineLength(wps) || 1;
+    line.setAttribute("stroke-dasharray", total);
+    const DUR = 1100;
+    let start = null;
+    function step(t) {
+      if (start === null) start = t;
+      const k = Math.min(1, (t - start) / DUR);
+      line.setAttribute("stroke-dashoffset", (total * (1 - k)).toFixed(1));   // 시작→끝으로 그려짐
+      if (k >= 1) {
+        svg.style.transition = "opacity .45s"; svg.style.opacity = "0";
+        setTimeout(() => { if (svg.parentNode) svg.parentNode.removeChild(svg); }, 480);
+        return;
+      }
+      requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
 
   window.resetPortBoardSig = function () { lastSig = ""; };
 })();
@@ -1817,6 +1897,19 @@ async function refreshTopology() {
 }
 setInterval(refreshTopology, 5000);
 
+/* 토폴로지 홉 SSE — 포트 무관 단일 스트림(로그 /api/stream 과 별개). 수신 홉을 그래프 위에
+   애니메이션(window.topologyHop). EventSource 는 끊기면 자동 재연결하므로 onerror 별도 처리
+   불필요. init 에서 1회만 연결한다. */
+let _topoES = null;
+function connectTopologyStream() {
+  if (_topoES) return;                                  // 중복 연결 방지(init 1회)
+  _topoES = new EventSource("/api/topology/stream");
+  _topoES.onmessage = ev => {
+    let hop; try { hop = JSON.parse(ev.data); } catch (e) { return; }
+    if (window.topologyHop) window.topologyHop(hop);
+  };
+}
+
 function selectPort(port) {
   if (port !== state.port) connectStream(port);
   localStorage.setItem("sv_port", port);
@@ -2041,6 +2134,7 @@ document.addEventListener("keydown", e => {
 async function init() {
   await refreshStatus();
   await refreshTopology();
+  connectTopologyStream();       // 홉 SSE 구독 — 경로 애니메이션(모듈8 ②)
   recount();
 }
 init();

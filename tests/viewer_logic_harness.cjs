@@ -203,5 +203,39 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   eq(SV.edgeSegments(p2, [{ from: "AA", to: "AA" }]).length, 0, "edge-seg-self-loop-skipped");
 }
 
+/* ===== 토폴로지 홉 애니메이션 순수로직(모듈8 ② hop) — DOM 비의존 ===== */
+
+/* T-4. hopWaypoints: hop.path(노드명 시퀀스) ↔ 배치노드 label 매칭 → 중심좌표 waypoint.
+   미매칭 이름은 건너뛴다(부분 경로라도 그린다). path 는 이름 기반(edges 의 mac 과 다른 축). */
+{
+  const placed = [
+    { n: { label: "SB5", mac: "AA" }, x: 0, y: 0, w: 100, h: 60 },
+    { n: { label: "REP1", mac: "BB" }, x: 200, y: 0, w: 100, h: 60 },
+    { n: { label: "SSM", mac: "CC" }, x: 400, y: 0, w: 100, h: 60 },
+  ];
+  const wps = SV.hopWaypoints(placed, ["SB5", "REP1", "SSM"]);
+  eq(wps.length, 3, "hop-wp-full-path");
+  eq(wps[0].x, 50, "hop-wp-x-center");            // 0 + 100/2
+  eq(wps[0].y, 30, "hop-wp-y-center");            // 0 + 60/2
+  eq(wps[0].name, "SB5", "hop-wp-name-kept");
+  eq(wps[2].x, 450, "hop-wp-last");               // 400 + 100/2
+  const partial = SV.hopWaypoints(placed, ["SB5", "GHOST", "SSM"]);
+  eq(partial.length, 2, "hop-wp-skips-unmatched");    // GHOST 는 배치에 없음 → skip
+  eq(partial[1].name, "SSM", "hop-wp-partial-order");
+  eq(SV.hopWaypoints(null, null).length, 0, "hop-wp-null-safe");
+  eq(SV.hopWaypoints(placed, []).length, 0, "hop-wp-empty-path");
+}
+
+/* T-5. hopColor: ok=성공(초록), ok:false+timeout=실패, 그 외 confidence=미확정. 서로 다른 색.
+   ⚠️ 시각(ts) 없음 — 순서/시간 추론 금지, ok·confidence 로만 상태 판단(#1 제약). */
+{
+  const isColor = s => typeof s === "string" && /^(#|rgb|hsl)/.test(s);
+  ok(isColor(SV.hopColor({ ok: true, confidence: "observed" })), "hop-color-ok-is-color");
+  ok(SV.hopColor({ ok: true }) !== SV.hopColor({ ok: false, confidence: "timeout" }), "hop-color-ok-vs-fail-differ");
+  ok(SV.hopColor({ ok: false, confidence: "timeout" }) !== SV.hopColor({ ok: false, confidence: "unconfirmed" }),
+     "hop-color-fail-vs-unconfirmed-differ");
+  ok(isColor(SV.hopColor(null)), "hop-color-null-safe");
+}
+
 if (fails.length) { console.error("FAILURES (" + fails.length + "):\n" + fails.map(f => " - " + f).join("\n")); process.exit(1); }
 console.log("all viewer-logic assertions passed");
