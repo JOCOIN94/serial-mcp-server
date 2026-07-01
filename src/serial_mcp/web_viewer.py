@@ -1230,21 +1230,37 @@ function edgeSegments(placed, edges) {
   return out;
 }
 
-/* hop.path(노드명 시퀀스) → 현재 배치(placed)에서 label 매칭된 노드 중심 waypoint 목록.
-   미매칭 이름은 건너뛴다(부분 경로라도 그린다). hop.path 는 [Passed Device] 해소 '이름'
-   축이라 edges 의 mac 매칭과 별개다. 2개 미만이면 선을 못 그으니 board.js 가 pulse 로만 쓴다. */
-function hopWaypoints(placed, path) {
-  var byLabel = {}, ps = placed || [];
+/* 홉 경로 → 배치(placed) 노드 중심 waypoint 시퀀스. 경로 = [Passed Device] 노드들(label 매칭)
+   뒤에 목적지(rx_port=SSM 수신 포트, 포트 매칭)를 항상 붙인 것. 목적지를 늘 포함하므로 카드
+   태그 같은 직접 1홉(path 소스 1점)도 소스→SSM 2점이 되어 그려진다. 경로 이름이 하나도 안
+   풀리면 소스 포트(src_port)로 시작점을 잡는다. 연속쌍이 곧 홉 구간(segment: a→b, b→c)이라
+   홉 수·경로 길이와 무관하게 담백히 수용된다. 미매칭 노드는 건너뛴다(부분 경로라도 그린다). */
+function hopWaypoints(placed, hop) {
+  var byLabel = {}, byPort = {}, ps = placed || [];
   for (var i = 0; i < ps.length; i++) {
-    var p = ps[i], n = p && p.n;
-    if (n && n.label != null) byLabel[n.label] = { x: p.x + (p.w || 0) / 2, y: p.y + (p.h || 0) / 2 };
+    var p = ps[i], n = p && p.n, c = { x: p.x + (p.w || 0) / 2, y: p.y + (p.h || 0) / 2 };
+    if (n && n.label != null) byLabel[n.label] = c;
+    var ports = (n && n.ports) || [];
+    for (var k = 0; k < ports.length; k++) {
+      if (ports[k] && ports[k].port) byPort[ports[k].port] = c;
+    }
   }
-  var out = [], pa = path || [];
+  var seq = [], h = hop || {}, pa = h.path || [];
   for (var j = 0; j < pa.length; j++) {
     var w = byLabel[pa[j]];
-    if (w) out.push({ x: w.x, y: w.y, name: pa[j] });
+    if (w) seq.push({ x: w.x, y: w.y, name: pa[j] });
   }
-  return out;
+  if (!seq.length && h.src_port && byPort[h.src_port]) {    // 경로 이름 미해소 → 소스 포트로 시작점
+    var s = byPort[h.src_port];
+    seq.push({ x: s.x, y: s.y, name: h.src_port });
+  }
+  var r = h.rx_port ? byPort[h.rx_port] : null;             // 목적지(SSM 수신 포트)를 경로 끝에 추가
+  if (r) {
+    var last = seq[seq.length - 1];
+    if (!last || last.x !== r.x || last.y !== r.y)          // 소스==목적지(자기수신) 중복 방지
+      seq.push({ x: r.x, y: r.y, name: h.rx_port });
+  }
+  return seq;
 }
 
 /* 홉 상태 → 경로 강조 색. ok=성공(초록), ok:false+timeout=실패(빨강), 그 외=미확정(노랑).
@@ -1500,7 +1516,7 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     if (!hop || !SV) return;
     const color = SV.hopColor(hop);
     for (const view of _groupViews) {
-      const wps = SV.hopWaypoints(view.lay.placed, hop.path);
+      const wps = SV.hopWaypoints(view.lay.placed, hop);   // 경로 노드 + 목적지(SSM) — 1홉이든 N홉이든 수용
       if (wps.length >= 2) animateHopPath(view.canvas, view.lay, wps, color);
     }
     renderHopDetail(SV.hopDetail(hop));               // 디테일 패널(경로·성패·RTT) 갱신

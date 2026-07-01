@@ -204,25 +204,37 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
 
 /* ===== 토폴로지 홉 애니메이션 순수로직(모듈8 ② hop) — DOM 비의존 ===== */
 
-/* T-4. hopWaypoints: hop.path(노드명 시퀀스) ↔ 배치노드 label 매칭 → 중심좌표 waypoint.
-   미매칭 이름은 건너뛴다(부분 경로라도 그린다). path 는 이름 기반(edges 의 mac 과 다른 축). */
+/* T-4. hopWaypoints: 경로 = path 노드(label 매칭) + 목적지(rx_port=SSM 수신 포트, 포트 매칭)를
+   끝에 붙인 waypoint. 목적지를 항상 포함하므로 카드 태그(직접 1홉)든 멀티홉이든 연속쌍(segment)
+   으로 그려진다 — 홉 수·경로 길이 무관. 경로 이름 미해소 시 src_port 로 시작점. 미매칭 노드는 skip. */
 {
   const placed = [
-    { n: { label: "SB5", mac: "AA" }, x: 0, y: 0, w: 100, h: 60 },
-    { n: { label: "REP1", mac: "BB" }, x: 200, y: 0, w: 100, h: 60 },
-    { n: { label: "SSM", mac: "CC" }, x: 400, y: 0, w: 100, h: 60 },
+    { n: { label: "SB5", ports: [{ port: "COM14" }] }, x: 0, y: 0, w: 100, h: 60 },
+    { n: { label: "REP1", ports: [] }, x: 200, y: 0, w: 100, h: 60 },
+    { n: { label: "SSM", ports: [{ port: "COM4" }] }, x: 400, y: 0, w: 100, h: 60 },
   ];
-  const wps = SV.hopWaypoints(placed, ["SB5", "REP1", "SSM"]);
-  eq(wps.length, 3, "hop-wp-full-path");
+  // 멀티홉: path 노드들 + 목적지(rx_port=COM4=SSM) → 3점
+  const wps = SV.hopWaypoints(placed, { path: ["SB5", "REP1"], rx_port: "COM4" });
+  eq(wps.length, 3, "hop-wp-path-plus-dest");
   eq(wps[0].x, 50, "hop-wp-x-center");            // 0 + 100/2
   eq(wps[0].y, 30, "hop-wp-y-center");            // 0 + 60/2
   eq(wps[0].name, "SB5", "hop-wp-name-kept");
-  eq(wps[2].x, 450, "hop-wp-last");               // 400 + 100/2
-  const partial = SV.hopWaypoints(placed, ["SB5", "GHOST", "SSM"]);
-  eq(partial.length, 2, "hop-wp-skips-unmatched");    // GHOST 는 배치에 없음 → skip
-  eq(partial[1].name, "SSM", "hop-wp-partial-order");
+  eq(wps[2].x, 450, "hop-wp-dest-ssm");           // 400 + 100/2 (SSM 목적지)
+  // 카드 태그(직접 1홉): path 소스 1점 + 목적지 → 2점(SB→SSM)
+  const direct = SV.hopWaypoints(placed, { path: ["SB5"], src_port: "COM14", rx_port: "COM4" });
+  eq(direct.length, 2, "hop-wp-direct-two-points");
+  eq(direct[1].x, 450, "hop-wp-direct-dest");
+  // 경로 이름 미해소(빈 path) → src_port 로 시작점 + 목적지 → 2점
+  const bySrc = SV.hopWaypoints(placed, { path: [], src_port: "COM14", rx_port: "COM4" });
+  eq(bySrc.length, 2, "hop-wp-src-port-fallback");
+  eq(bySrc[0].x, 50, "hop-wp-src-port-start");
+  // 미매칭 경로 노드는 skip(부분 경로) — 목적지는 유지
+  eq(SV.hopWaypoints(placed, { path: ["SB5", "GHOST"], rx_port: "COM4" }).length, 2, "hop-wp-skips-unmatched");
+  // 자기수신(소스==목적지 노드) 중복 방지
+  eq(SV.hopWaypoints(placed, { path: ["SSM"], rx_port: "COM4" }).length, 1, "hop-wp-self-no-dup");
+  // 방어
   eq(SV.hopWaypoints(null, null).length, 0, "hop-wp-null-safe");
-  eq(SV.hopWaypoints(placed, []).length, 0, "hop-wp-empty-path");
+  eq(SV.hopWaypoints(placed, { path: [] }).length, 0, "hop-wp-empty-no-dest");
 }
 
 /* T-5. hopColor: ok=성공(초록), ok:false+timeout=실패, 그 외 confidence=미확정. 서로 다른 색.
