@@ -608,6 +608,17 @@ kbd {
 .tcanvas { position: relative; }   /* width/height 인라인 — 절대배치 노드 컨테이너 */
 .tedges { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }   /* 링크선 — 노드 뒤·클릭 비간섭 */
 .thop { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; z-index: 2; }   /* 홉 경로 강조 — 노드 위 */
+.topohops { font-family: var(--ui); display: flex; flex-direction: column; gap: 4px; padding: 2px; }   /* 홉 디테일 패널 */
+.topohops:empty { display: none; }
+.thd-head { display: flex; align-items: center; gap: 6px; }
+.thd-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.thd-title { font: 700 10px var(--ui); letter-spacing: .06em; color: var(--muted); }
+.thd-status { margin-left: auto; font: 700 10px var(--ui); padding: 1px 6px; border-radius: 999px; }
+.thd-ok { color: #3fb950; } .thd-fail { color: #f0786f; } .thd-pending { color: #e3b341; }
+.thd-path { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
+.thd-chip { font: 600 11px var(--ui); background: var(--bg-raised); border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 6px; }
+.thd-arrow { color: var(--muted); font-size: 10px; }
+.thd-meta { font: 500 10px var(--ui); color: var(--muted); }
 
 /* 노드 = 라벨(밖·위) + 박스(색). 단일 MCU(SSM/REPEAT/APU/APU_C)는 박스에 ESP 한 칸,
    SB 는 박스를 좌우로 나눠 ESP|STM 두 칸(각 칸이 포트 클릭 타깃·자체 상태점). */
@@ -667,6 +678,7 @@ body.rhythm-relaxed { --row-pad: 6px; --lh: 1.9; }
 
 <aside id="nav">
   <section class="portboard" id="portboard"></section>
+  <section class="topohops" id="topohops"></section>
 </aside>
 
 <div id="content">
@@ -1240,6 +1252,22 @@ function hopColor(hop) {
   return "#e3b341";                                    // unconfirmed/inferred/observed = 미확정
 }
 
+/* 홉 → 디테일 패널 모델(순수). 경로 칩(path, 없으면 src_name 폴백)·성패·confidence·RTT·색.
+   ⚠️ 홉엔 시각(ts)이 없다 — 순서/시간차 표현 금지, ok·confidence 로만 상태 판단(#1 제약).
+   segments/quality 는 correlator _emit 에 없어 다루지 않는다(있는 필드만). */
+function hopDetail(hop) {
+  if (!hop) return null;
+  var path = (hop.path && hop.path.length) ? hop.path.slice()
+             : (hop.src_name ? [hop.src_name] : []);
+  var status = hop.ok ? "ok" : (hop.confidence === "timeout" ? "fail" : "pending");
+  var rttNum = Number(hop.rtt_ms);
+  var rtt = (hop.rtt_ms != null && hop.rtt_ms !== "" && !isNaN(rttNum)) ? Math.round(rttNum) + "ms" : null;
+  return {
+    chips: path, status: status, confidence: hop.confidence || null,
+    rtt: rtt, deviceType: hop.device_type || null, color: hopColor(hop),
+  };
+}
+
 /* ---- export (browser global + node require 양쪽) ---- */
 var SViewer = {
   escapeHtml: escapeHtml, cleanCtrl: cleanCtrl, stripAnsi: stripAnsi,
@@ -1249,7 +1277,7 @@ var SViewer = {
   tsToMs: tsToMs, renderBodyHTML: renderBodyHTML, renderPayloadHTML: renderPayloadHTML,
   decoText: decoText,
   rssiColor: rssiColor, edgeSegments: edgeSegments,
-  hopWaypoints: hopWaypoints, hopColor: hopColor
+  hopWaypoints: hopWaypoints, hopColor: hopColor, hopDetail: hopDetail
 };
 if (typeof module !== "undefined" && module.exports) module.exports = SViewer;
 if (typeof window !== "undefined") window.SViewer = SViewer;
@@ -1471,6 +1499,7 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
       const wps = SV.hopWaypoints(view.lay.placed, hop.path);
       if (wps.length >= 2) animateHopPath(view.canvas, view.lay, wps, color);
     }
+    renderHopDetail(SV.hopDetail(hop));               // 디테일 패널(경로·성패·RTT) 갱신
   };
 
   function polylineLength(wps) {                    // 대시 애니메이션용 총 길이
@@ -1507,6 +1536,33 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
       requestAnimationFrame(step);
     }
     requestAnimationFrame(step);
+  }
+
+  // 디테일 패널: 최신 홉의 경로 칩·성패·confidence·RTT 를 #topohops 에 렌더(홉 없으면 비움).
+  // 시각은 싣지 않는다 — path·ok·confidence 만(순서로 인과 추론하지 않게, #1 제약).
+  function renderHopDetail(d) {
+    const root = document.getElementById("topohops");
+    if (!root) return;
+    if (!d || !d.chips.length) { root.innerHTML = ""; return; }
+    root.innerHTML = "";
+    const head = el("div", "thd-head");
+    const dot = el("span", "thd-dot"); dot.style.background = d.color;
+    head.appendChild(dot);
+    head.appendChild(txt("span", "최근 홉", "thd-title"));
+    const label = { ok: "성공", fail: "실패", pending: "미확정" }[d.status] || d.status;
+    head.appendChild(txt("span", label, "thd-status thd-" + d.status));
+    root.appendChild(head);
+    const pathRow = el("div", "thd-path");            // 경로 칩(노드 시퀀스) — 화살표로 연결
+    d.chips.forEach((name, i) => {
+      if (i) pathRow.appendChild(txt("span", "→", "thd-arrow"));
+      pathRow.appendChild(txt("span", name, "thd-chip"));
+    });
+    root.appendChild(pathRow);
+    const meta = [];                                  // confidence·RTT·device_type 메타
+    if (d.confidence) meta.push(d.confidence);
+    if (d.rtt) meta.push("RTT " + d.rtt);
+    if (d.deviceType) meta.push(d.deviceType);
+    if (meta.length) root.appendChild(txt("div", meta.join(" · "), "thd-meta"));
   }
 
   window.resetPortBoardSig = function () { lastSig = ""; };

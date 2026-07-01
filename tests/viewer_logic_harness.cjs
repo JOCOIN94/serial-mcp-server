@@ -237,5 +237,25 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   ok(isColor(SV.hopColor(null)), "hop-color-null-safe");
 }
 
+/* ===== 토폴로지 홉 디테일 패널 순수로직(모듈8 ③) — DOM 비의존 ===== */
+
+/* T-6. hopDetail: 홉 → 패널 모델(경로 칩·성패·confidence·RTT). path 비면 src_name 폴백.
+   ⚠️ 시각 없음(#1 제약) — 순서/시간차 표현 금지, ok·confidence 로만 상태 판단. */
+{
+  const d = SV.hopDetail({ ok: true, confidence: "observed", path: ["SB5", "SSM"], rtt_ms: 61, device_type: "SB" });
+  eq(d.chips.length, 2, "hop-detail-chips");
+  eq(d.chips[0], "SB5", "hop-detail-chip-order");
+  eq(d.status, "ok", "hop-detail-status-ok");
+  eq(d.rtt, "61ms", "hop-detail-rtt");
+  eq(d.deviceType, "SB", "hop-detail-devtype");
+  eq(SV.hopDetail({ ok: false, confidence: "timeout", path: ["SB1"] }).status, "fail", "hop-detail-fail");
+  eq(SV.hopDetail({ ok: false, confidence: "unconfirmed", path: [], src_name: "SB1" }).status, "pending", "hop-detail-pending");
+  eq(SV.hopDetail({ ok: false, confidence: "unconfirmed", path: [], src_name: "SB1" }).chips[0], "SB1", "hop-detail-srcname-fallback");
+  eq(SV.hopDetail({ ok: true, path: ["A"], rtt_ms: null }).rtt, null, "hop-detail-no-rtt");
+  eq(SV.hopDetail(null), null, "hop-detail-null-safe");
+  // status 별 색이 서로 달라야(성공·실패·미확정 구분)
+  ok(SV.hopDetail({ ok: true, path: ["A"] }).color !== SV.hopDetail({ ok: false, confidence: "timeout", path: ["A"] }).color, "hop-detail-color-differs");
+}
+
 if (fails.length) { console.error("FAILURES (" + fails.length + "):\n" + fails.map(f => " - " + f).join("\n")); process.exit(1); }
 console.log("all viewer-logic assertions passed");
