@@ -607,7 +607,7 @@ kbd {
 .tgroup-num { font: 700 10px var(--ui); letter-spacing: .08em; color: var(--muted); margin: 0 0 6px 2px; }
 .tcanvas { position: relative; }   /* width/height 인라인 — 절대배치 노드 컨테이너 */
 .tedges { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }   /* 링크선 — 노드 뒤·클릭 비간섭 */
-.thop { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; z-index: 2; }   /* 홉 경로 강조 — 노드 위 */
+.thop { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }   /* 홉 경로 강조 — 노드 뒤(정적 링크선과 같은 층) */
 .topohops { font-family: var(--ui); display: flex; flex-direction: column; gap: 4px; padding: 2px; }   /* 홉 디테일 패널 */
 .topohops:empty { display: none; }
 .thd-head { display: flex; align-items: center; gap: 6px; }
@@ -623,7 +623,7 @@ kbd {
 /* 노드 = 라벨(밖·위) + 박스(색). 단일 MCU(SSM/REPEAT/APU/APU_C)는 박스에 ESP 한 칸,
    SB 는 박스를 좌우로 나눠 ESP|STM 두 칸(각 칸이 포트 클릭 타깃·자체 상태점). */
 .tnode { position: absolute; box-sizing: border-box; display: flex; flex-direction: column;
-         align-items: stretch; user-select: none; }
+         align-items: stretch; user-select: none; z-index: 1; }   /* 노드는 링크선·홉선 위 */
 .tn-name { font: 700 11px var(--ui); color: var(--fg-bright); letter-spacing: .3px;
            text-align: center; margin-bottom: 3px; white-space: nowrap;
            overflow: hidden; text-overflow: ellipsis; }
@@ -1973,6 +1973,14 @@ async function refreshTopology() {
 }
 setInterval(refreshTopology, 5000);
 
+// 홉 SSE 수신 시 로스터(링크선)도 즉시 갱신 — 멤버십은 관측 따라 실시간 변하므로 폴링(5s)만으론
+// 링크선이 뒤처진다. 홉이 몰려도 400ms 디바운스로 fetch 폭주를 막는다(폴링은 홉 없을 때 fallback).
+let _topoRefreshTimer = null;
+function scheduleTopologyRefresh() {
+  if (_topoRefreshTimer) return;
+  _topoRefreshTimer = setTimeout(() => { _topoRefreshTimer = null; refreshTopology(); }, 400);
+}
+
 /* 토폴로지 홉 SSE — 포트 무관 단일 스트림(로그 /api/stream 과 별개). 수신 홉을 그래프 위에
    애니메이션(window.topologyHop). EventSource 는 끊기면 자동 재연결하므로 onerror 별도 처리
    불필요. init 에서 1회만 연결한다. */
@@ -1983,6 +1991,7 @@ function connectTopologyStream() {
   _topoES.onmessage = ev => {
     let hop; try { hop = JSON.parse(ev.data); } catch (e) { return; }
     if (window.topologyHop) window.topologyHop(hop);
+    scheduleTopologyRefresh();                          // 홉 관측 → 링크선도 즉시 갱신(멤버십 실시간)
   };
 }
 
