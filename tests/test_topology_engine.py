@@ -146,7 +146,7 @@ def test_roster_and_recent_hops_builds_roster_outside_engine_lock(monkeypatch):
     eng.flush()
     locked_during_build = []
 
-    def fake_build_roster(entries, routing=None, membership=None, now=None):
+    def fake_build_roster(entries, routing=None, membership=None, pairing=None, now=None):
         locked_during_build.append(eng._lock.locked())
         return {"groups": [{"id": "g", "edges": routing.edges(now)}], "unplaced": []}
 

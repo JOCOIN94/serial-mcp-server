@@ -112,9 +112,10 @@ def test_identify_uses_logs_when_no_alias():
     assert d["type"] == "SB" and d["mcu"] == "ESP" and d["number"] == 5
 
 
-def test_identify_sb_stm_number_from_bayid():
+def test_identify_sb_stm_number_from_logs_is_none():
+    # STM 은 정상 로그에 BayID 를 안 흘려(펌웨어 검증) 로그로 번호를 못 얻는다 — 번호는 카드상관 전담.
     d = identify_port("COM12", None, SB_STM_LINES, connected=True)
-    assert d["type"] == "SB" and d["mcu"] == "STM" and d["number"] == 5
+    assert d["type"] == "SB" and d["mcu"] == "STM" and d["number"] is None
 
 
 def test_identify_alias_beats_logs():
@@ -150,15 +151,19 @@ def test_roster_single_group_one_ssm():
     assert r["groups"][0]["ssm_port"] == "COM4"
 
 
-def test_roster_sb_esp_stm_merged_into_one_node():
-    r = build_roster(_live_entries())
-    nodes = r["groups"][0]["nodes"]
+def test_roster_sb_esp_stm_merged_via_card_pairing():
+    entries = _live_entries()
+    # 페어링 전: STM 은 로그에 번호가 없어 ESP 와 안 합쳐짐 → 별도 무번호 SB 노드(2개).
+    sb0 = [n for n in build_roster(entries)["groups"][0]["nodes"] if n["type"] == "SB"]
+    assert len(sb0) == 2
+    # 카드상관 페어링(COM12→bay5) → ESP(UnID5)와 한 노드로 병합.
+    nodes = build_roster(entries, pairing={"COM12": 5})["groups"][0]["nodes"]
     sb = [n for n in nodes if n["type"] == "SB"]
     assert len(sb) == 1                       # ESP+STM → 한 노드
     ports = {p["mcu"]: p["port"] for p in sb[0]["ports"]}
     assert ports == {"ESP": "COM14", "STM": "COM12"}
     assert [p["mcu"] for p in sb[0]["ports"]] == ["ESP", "STM"]   # 발견순 무관, ESP→STM 고정
-    assert sb[0]["label"] == "SB5"            # BayID/UnID 5
+    assert sb[0]["label"] == "SB5"            # UnID/페어링 번호 5
     assert sb[0]["number_collision"] is False  # ESP+STM 같은 베이 → 충돌 아님
 
 
@@ -320,10 +325,10 @@ def test_classify_device_info0_robust_to_nested_object_before_info():
     assert d["source"] == "info_json"
 
 
-def test_identify_sb_alias_without_chip_extracts_bayid():
-    # 칩 미표기 SB 별칭 + STM 로그: mcu 미상이어도 BayID 로 번호 보강(둘 다 시도).
+def test_identify_sb_alias_without_chip_no_bayid_number():
+    # 칩 미표기 SB 별칭 + BayID 로그: STM BayID 번호경로 제거로 번호 보강 안 됨(UnID 만 시도) → None.
     d = identify_port("COM12", "SB", ["BayID:5,"], True)
-    assert d["type"] == "SB" and d["number"] == 5
+    assert d["type"] == "SB" and d["number"] is None
 
 
 # ---- Phase B 모듈5: roster 확장(group kind · edges · 원격 mesh 노드 · 노드 enrich) ----
@@ -405,9 +410,9 @@ def test_roster_remote_deduped_against_direct_node():
     # 직접연결 SB5 가 [Passed Device] 에도 등장 → 원격 노드로 중복 생성 금지.
     rt = RoutingTable()
     rt.observe(_ev(kind="rx", unid=5, mac="AA:BB", passed="(05-SB5)"))
-    r = build_roster(_live_entries(), routing=rt, now=2.0)
+    r = build_roster(_live_entries(), routing=rt, pairing={"COM12": 5}, now=2.0)
     sb = [n for n in r["groups"][0]["nodes"] if n["type"] == "SB"]
-    assert len(sb) == 1 and sb[0]["ports"]      # 직접 SB5 하나뿐(원격 중복 없음)
+    assert len(sb) == 1 and sb[0]["ports"]      # 직접 SB5(ESP+STM 병합) 하나뿐(원격 중복 없음)
 
 
 def test_roster_direct_node_enriched_mac_unit_token():
@@ -423,7 +428,7 @@ def test_roster_label_prefers_routing_resolved_mesh_name():
     # 으로 중복 생성하지 않고, 살아남은 노드 라벨은 메시 이름(SB1)·UnID 는 unit_id 메타로 둔다.
     rt = RoutingTable()
     rt.observe(_ev(kind="rx", unid=5, mac="AA:BB", passed="(05-SB1)"))
-    sb = [n for n in build_roster(_live_entries(), routing=rt, now=2.0)["groups"][0]["nodes"]
+    sb = [n for n in build_roster(_live_entries(), routing=rt, pairing={"COM12": 5}, now=2.0)["groups"][0]["nodes"]
           if n["type"] == "SB"]
     assert len(sb) == 1                      # 같은 토큰(05) → 직접·원격 중복 없음
     assert sb[0]["label"] == "SB1"           # 메시 해소 이름 우선

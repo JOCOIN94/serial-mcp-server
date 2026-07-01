@@ -56,8 +56,7 @@ _SIGNATURES = [
     ("SB", "STM", 3, re.compile(r"Send state of STM32|Released to touch Card")),
 ]
 
-# 장비 자기 번호(BayID/UnID) 추출 — SB 의 ESP/STM 짝을 같은 번호로 묶는 데 쓴다.
-_RE_BAYID = re.compile(r"\bBayID\s*:\s*(\d+)")          # SB-STM
+# ESP 자기 번호(UnID=자기 BayID) 추출 — ESP↔STM 병합 번호원. STM 번호는 카드상관(CardPairing) 전담.
 _RE_UNID = re.compile(r'"UnID"\s*:\s*(\d+)')            # SB-ESP(자기 패킷의 UnID=자기 BayID)
 
 # 별칭(SERIAL_NAMES/AUTONAME) 파싱: 'SB1-ESP'→type SB·num 1·mcu ESP, 'SSM'→type SSM.
@@ -199,25 +198,15 @@ def classify_device(lines, alias: Optional[str] = None) -> dict:
 
 
 def _number_from_lines(typ: Optional[str], mcu: Optional[str], lines) -> Optional[int]:
-    """SB 의 자기 번호(BayID/UnID) 추출 — ESP/STM 짝을 묶는 키. SB 외(SSM/REPEAT/APU/APU_C)는 None.
+    """SB 의 자기 번호 추출 — ESP 는 자기 UnID(=BayID). SB 외(SSM/REPEAT/APU/APU_C)는 None.
 
-    mcu=STM→BayID, ESP→UnID. mcu 미상(예: 칩 미표기 SB 별칭)이면 둘 다 시도한다 — 한 포트
-    로그는 ESP/STM 한쪽 포맷이라 충돌하지 않는다.
+    STM 은 정상 운영 중 BayID 를 로그에 안 흘리므로(펌웨어 검증 2026-07-01) 여기선 번호를 안 뽑는다 —
+    STM 번호는 카드상관 페어링(엔진 CardPairing → build_roster pairing)이 전담한다. mcu 미상 SB 도 UnID 만 시도.
     """
-    if typ != "SB":
+    if typ != "SB" or mcu == "STM":
         return None
-    blob = _blob(lines)
-    if mcu == "STM":
-        rxes = (_RE_BAYID,)
-    elif mcu == "ESP":
-        rxes = (_RE_UNID,)
-    else:
-        rxes = (_RE_BAYID, _RE_UNID)
-    for rx in rxes:
-        m = rx.search(blob)
-        if m:
-            return int(m.group(1))
-    return None
+    m = _RE_UNID.search(_blob(lines))                 # ESP·미상 SB: 자기 UnID
+    return int(m.group(1)) if m else None
 
 
 def identify_port(port: str, alias: Optional[str], lines, connected: bool = True) -> dict:
@@ -259,14 +248,16 @@ def _local_port_to_ssm(membership: Optional[dict]) -> dict:
     return {lp: v[0] for lp, v in best.items()}
 
 
-def build_roster(entries, routing=None, membership=None, now=None) -> dict:
-    """포트 목록(+선택 라우팅 상태·멤버십) → 토폴로지 로스터.
+def build_roster(entries, routing=None, membership=None, pairing=None, now=None) -> dict:
+    """포트 목록(+선택 라우팅 상태·멤버십·카드페어링) → 토폴로지 로스터.
 
     entries: [{port, alias, lines, connected}] (lines 는 최근 수신 줄 list).
     routing: 선택 RoutingTable(모듈4) — 주면 링크그래프 edges·원격 mesh 노드·mac/토큰 enrich 를
       얹는다. 없으면(Phase A 호출부) edges=[]·원격노드 없음으로 하위호환 유지. now=fresh 판정 클럭.
     membership: 선택 {ssm_port:{unid:{device_type,local_port,last_ts}}}(엔진 모듈6) — 주면 각 leaf 를
       그 leaf 를 수신한 SSM 의 그룹에 배치한다(멀티-SSM 정확). 없거나 매칭 안 되면 첫 그룹 폴백.
+    pairing: 선택 {port: bay}(엔진 CardPairing 스냅샷) — STM 은 정상 로그에 번호가 없으므로, 카드상관으로
+      해소된 베이번호를 번호 미상 SB 포트에 채워 ESP 짝과 병합(_merge_sb)하게 한다. 없으면 번호 폴백 없음.
     반환: {"groups": [{id, label, ssm_port, kind, nodes:[node...], edges:[...]}], "unplaced":[port...]}.
       kind = "ssm"(SSM 보유) | "standalone"(SSM 부재). edges = [{from,to,rssi,fresh}](SSM 그룹 한정).
       node = {id, type, type_confidence, type_source, label, mac, unit_id, route_token,
@@ -278,6 +269,12 @@ def build_roster(entries, routing=None, membership=None, now=None) -> dict:
     """
     ids = [identify_port(e["port"], e.get("alias"), e.get("lines"), e.get("connected", True))
            for e in entries]
+    # 카드페어링 번호 폴백: 번호 미상 SB 포트(주로 STM)를 카드상관 베이번호로 채워 ESP 짝과 병합.
+    for d in ids:
+        if d["type"] == "SB" and d.get("number") is None and pairing:
+            bay = pairing.get(d["port"])
+            if bay is not None:
+                d["number"] = bay
     placed = [d for d in ids if d["type"]]
     unplaced = [d["port"] for d in ids if not d["type"]]
 

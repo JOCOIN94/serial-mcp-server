@@ -22,6 +22,7 @@ from typing import Optional
 from .topology import build_roster
 from .topology_correlator import Correlator
 from .topology_events import EventAssembler
+from .topology_pairing import CardPairing
 from .topology_routing import RoutingTable
 
 
@@ -59,6 +60,8 @@ class TopologyEngine:
         # SSM포트별 그룹 귀속 멤버십: {ssm_port: {unid: {device_type, local_port, last_ts}}}.
         # correlator 가 (UnID,Unique)+시간창으로 짝지은 rx-완료 홉(rx_port=SSM, src_port=leaf)에서 누적.
         self._membership: dict = {}
+        # 카드상관 페어링: STM 은 베이번호를 안 흘려서, 카드 sCuID+UnID 로 포트→베이를 잇는다(build_roster 번호 폴백).
+        self._pairing = CardPairing()
 
     def observe(self, port: str, ts: float, text: str) -> list:
         """리더 스레드가 수신 줄마다 호출(비차단·예외삼킴은 호출측 on_line 훅). 새 홉 리스트 반환."""
@@ -68,7 +71,13 @@ class TopologyEngine:
                 asm = EventAssembler(port)
                 self._assemblers[port] = asm
             self._last_ts[port] = ts
+            self._pairing.observe(port, ts, text)     # 카드 sCuID 상관(포트→베이) 라이브 급전
             return self._drain(asm.feed(ts, text), ts)
+
+    def forget_port(self, port: str) -> None:
+        """포트 disconnect/재오픈 시 그 포트의 카드페어링 흔적 제거(스테일 매핑 방지). server.py 가 호출."""
+        with self._lock:
+            self._pairing.forget_port(port)
 
     def sweep(self, now: float, flush_idle_s: float = 2.0) -> list:
         """유휴 pending 블록 flush + correlator 만료 처리. 새 홉 리스트 반환.
@@ -104,8 +113,9 @@ class TopologyEngine:
         with self._lock:
             snap = _RoutingSnapshot(self._routing.tokens(), self._routing.edges(now))
             membership = self._membership_copy()
+            pairing = self._pairing.snapshot()
             hops = [] if n <= 0 else list(self._hops)[-n:]
-        return build_roster(entries, routing=snap, membership=membership, now=now), hops
+        return build_roster(entries, routing=snap, membership=membership, pairing=pairing, now=now), hops
 
     def roster(self, entries, now: Optional[float] = None) -> dict:
         """관측된 routing(링크그래프·토큰맵)을 얹은 로스터 스냅샷. 읽기 전용."""

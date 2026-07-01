@@ -78,6 +78,7 @@ class SerialReader:
         reconnect_interval: float = 3.0,
         feed: Optional[RawFeed] = None,
         on_line: Optional[Callable[[datetime, str], None]] = None,
+        on_open: Optional[Callable[[], None]] = None,
         char_delay: float = 0.0,
     ) -> None:
         self.port = port
@@ -87,6 +88,7 @@ class SerialReader:
         self.reconnect_interval = reconnect_interval
         self.feed = feed   # 웹 뷰어 생중계 허브(없으면 발행 생략)
         self.on_line = on_line   # 서버측 라인 후킹(보드 자동 식별 등, 없으면 생략)
+        self.on_open = on_open   # 재오픈 후킹(카드페어링 무효화 등, 없으면 생략)
         self.char_delay = char_delay   # 전송 문자 간 지연(초) — 폴링 수신 펌웨어의 바이트 유실 대응
 
         self._thread = threading.Thread(target=self._run, name="serial-reader", daemon=True)
@@ -138,6 +140,11 @@ class SerialReader:
                 self.opened_at = datetime.now()
                 self.last_error = None
             _log(f"열림: {self.port} @ {self.baud}")
+            if self.on_open is not None:
+                try:
+                    self.on_open()   # 재오픈 후킹(비차단·예외삼킴) — 이전 연결의 스테일 상태 정리
+                except Exception as e:  # noqa: BLE001 - 후킹 실패가 리더/재연결을 막으면 안 됨
+                    _log(f"on_open 훅 오류({self.port}): {e!r}")
             return True
         except serial.SerialException as e:
             self.connected = False
@@ -539,6 +546,21 @@ def _topology_observe(port: str, text: str) -> None:
         _publish_topology_hops(eng.observe(port, time.monotonic(), text))
     except Exception as e:  # noqa: BLE001 - 토폴로지 실패는 코어로 전파 금지
         _log(f"topology observe 오류({port}): {e!r}")
+
+
+def _topology_forget_port(port: str) -> None:
+    """리더 스레드 on_open 훅 — 포트 재오픈 시 그 포트의 카드페어링을 무효화(재꽂/보드교체 스테일 매핑 방지).
+
+    엔진이 없으면 no-op. 초기 오픈 땐 페어링이 비어 무해. 토폴로지(보조) 실패가 리더/재연결을 막지
+    않게 예외를 삼킨다.
+    """
+    eng = _topology_engine
+    if eng is None:
+        return
+    try:
+        eng.forget_port(port)
+    except Exception as e:  # noqa: BLE001 - 토폴로지 실패는 코어로 전파 금지
+        _log(f"topology forget_port 오류({port}): {e!r}")
 
 
 def _publish_topology_hops(hops) -> None:
@@ -1665,6 +1687,7 @@ def _make_monitor(
     mon.reader = SerialReader(port=port, baud=baud, buffer=buf,
                               tee_path=_tee_path_for(cfg["tee"], name or port),
                               feed=feed, on_line=on_line,
+                              on_open=lambda p=port: _topology_forget_port(p),
                               char_delay=cfg["char_delay"])
     return mon
 
