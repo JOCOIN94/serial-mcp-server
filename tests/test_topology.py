@@ -362,14 +362,22 @@ def test_roster_no_routing_empty_edges_no_remote():
     assert all(n["ports"] for n in g["nodes"])
 
 
-def test_roster_edges_from_routing_link_graph():
-    rt = RoutingTable()
-    rt.observe(_ev(kind="route", ts=1.0, route={"from_mac": "AA", "to_mac": "BB", "rssi": -41}))
-    r = build_roster(_live_entries(), routing=rt, now=2.0)
+def test_roster_edges_from_membership_port_pairs():
+    # 정적 링크선 = correlator 가 (UnID,Unique) TX↔RX 로 관측한 leaf↔SSM 포트쌍(멤버십).
+    # REPRSSI 무선 이웃을 강제 링크로 긋지 않는다(plan §3, 사용자 강조: 링크 고정 강제 금지).
+    membership = {"COM4": {5: {"device_type": "4", "local_port": "COM14", "last_ts": 1.0}}}
+    r = build_roster(_live_entries(), membership=membership, now=2.0)
     edges = r["groups"][0]["edges"]
     assert len(edges) == 1
     e = edges[0]
-    assert e["from"] == "AA" and e["to"] == "BB" and e["rssi"] == -41 and e["fresh"] is True
+    assert e["from"] == "COM14" and e["to"] == "COM4" and e["fresh"] is True
+
+
+def test_roster_edges_stale_when_last_ts_old():
+    # 오래된 관측(last_ts)은 fresh=False → 프론트가 옅게. 관측 이력은 유지하되 최신성 감쇠(고정 아님).
+    membership = {"COM4": {5: {"device_type": "4", "local_port": "COM14", "last_ts": 1.0}}}
+    e = build_roster(_live_entries(), membership=membership, now=100.0)["groups"][0]["edges"][0]
+    assert e["fresh"] is False
 
 
 def test_roster_remote_node_from_passed_device():
@@ -451,9 +459,8 @@ def test_roster_node_carries_type_confidence_source():
 
 
 def test_roster_standalone_group_has_empty_edges():
-    # SSM 부재 standalone 그룹엔 링크그래프 간선이 없다(REPRSSI/[Route] Link 는 SSM 발신).
-    rt = RoutingTable()
-    rt.observe(_ev(kind="route", ts=1.0, route={"from_mac": "AA", "to_mac": "BB", "rssi": -41}))
+    # SSM 부재 standalone 그룹엔 링크선이 없다(멤버십 edge 는 SSM 그룹 한정 — ssm_port 가 None).
+    membership = {"COM4": {5: {"local_port": "COM14", "last_ts": 1.0}}}   # SSM 노드 없어 매칭 안 됨
     entries = [{"port": "COM14", "alias": None, "lines": SB_ESP_LINES, "connected": True}]
-    r = build_roster(entries, routing=rt, now=2.0)
+    r = build_roster(entries, membership=membership, now=2.0)
     assert r["groups"][0]["kind"] == "standalone" and r["groups"][0]["edges"] == []

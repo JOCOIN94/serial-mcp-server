@@ -1208,18 +1208,22 @@ function rssiColor(rssi) {
   return "hsl(" + hue + ",62%,55%)";
 }
 
-/* 로스터 edges({from,to = mac}) + 배치된 노드(placed:[{n:{mac},x,y,w,h}]) → 선분 목록.
-   노드 mac 으로 양 끝을 찾아 중심좌표로 선분화한다. 배치에 없는 mac(원격 mesh 노드 등)이나
-   자기루프는 그릴 대상이 없어 skip. 좌표 계산만 하고 DOM 은 board.js 가 그린다. */
+/* 로스터 edges({from,to = 포트}) + 배치된 노드(placed:[{n:{ports},x,y,w,h}]) → 선분 목록.
+   노드가 가진 포트(ports[].port)로 양 끝을 찾아 중심좌표로 선분화한다 — correlator 가 TX↔RX
+   로 관측한 멤버십 leaf↔SSM 포트쌍이다(plan §3, REPRSSI 무선이웃 강제 아님). 배치에 없는
+   포트(원격 노드 등)나 자기루프는 그릴 대상이 없어 skip. 좌표 계산만 하고 DOM 은 board.js 가 그린다. */
 function edgeSegments(placed, edges) {
-  var byMac = {}, ps = placed || [];
+  var byPort = {}, ps = placed || [];
   for (var i = 0; i < ps.length; i++) {
-    var p = ps[i], n = p && p.n, mac = n && n.mac;
-    if (mac) byMac[mac] = { x: p.x + (p.w || 0) / 2, y: p.y + (p.h || 0) / 2 };
+    var p = ps[i], n = p && p.n, ports = (n && n.ports) || [];
+    var c = { x: p.x + (p.w || 0) / 2, y: p.y + (p.h || 0) / 2 };
+    for (var k = 0; k < ports.length; k++) {
+      if (ports[k] && ports[k].port) byPort[ports[k].port] = c;   // 포트 → 그 포트를 가진 노드 중심
+    }
   }
   var out = [], es = edges || [];
   for (var j = 0; j < es.length; j++) {
-    var e = es[j] || {}, a = byMac[e.from], b = byMac[e.to];
+    var e = es[j] || {}, a = byPort[e.from], b = byPort[e.to];
     if (!a || !b || e.from === e.to) continue;
     out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, rssi: e.rssi, fresh: e.fresh });
   }
@@ -1363,9 +1367,9 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     return wrap;
   }
 
-  // 링크선(REPRSSI/[Route] Link) SVG 오버레이 — 노드 박스 뒤에 깔린다. edges 없으면 null.
-  // 좌표·매칭은 SViewer.edgeSegments(순수, 테스트됨), 간선 색은 rssiColor(강=초록·약=빨강).
-  // fresh=false(오래된 링크)는 옅게. path 실제경로가 아니라 '가능한 링크' 그래프임에 유의(plan §4).
+  // 링크선(멤버십 leaf↔SSM 포트쌍) SVG 오버레이 — 노드 박스 뒤에 깔린다. edges 없으면 null.
+  // 좌표·매칭은 SViewer.edgeSegments(순수, 테스트됨). rssi 없는 멤버십 링크는 중립색, fresh=false
+  // (오래된 관측)는 옅게. correlator 가 TX↔RX 로 관측한 실제 통신쌍이다(plan §3, 강제 링크 아님).
   function renderEdges(lay, edges) {
     const segs = SV.edgeSegments(lay.placed, edges);
     if (!segs.length) return null;

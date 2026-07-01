@@ -90,16 +90,20 @@ def test_membership_local_port_filled_when_rx_precedes_tx():
 
 # ---- 라우팅/로스터 통합 ----
 
-def test_roster_includes_link_edges_from_observed_webtx():
+def test_roster_includes_link_edges_from_observed_membership():
+    # 정적 링크선 = correlator 가 관측한 leaf↔SSM 포트쌍(멤버십). 소스 TX(COM14)+SSM RX(COM4) 완성 →
+    # edge {from:COM14, to:COM4}. REPRSSI 무선이웃 강제 링크는 폐기(plan §3).
     eng = TopologyEngine()
-    _feed(eng, "COM4", SSM_RX_BLOCK, t0=1.0)
+    eng.observe("COM14", 1.0, '[Tx - my INFO] {"UnID":5,"Unique":25,"INFO":["4"]}')
+    eng.observe("COM4", 1.2, '[Proc-WiFiRx] {"UnID":5,"Unique":25,"INFO":["4"]}')
     eng.flush()
-    entries = _ssm_entries()
-    r = eng.roster(entries, now=10.0)
-    g = r["groups"][0]
+    entries = [
+        {"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM14", "alias": "SB1-ESP", "lines": [], "connected": True},
+    ]
+    g = eng.roster(entries, now=2.0)["groups"][0]
     assert g["kind"] == "ssm"
-    # REPRSSI 가 링크 그래프 간선으로 잡힘(소스 macAddress → 이웃).
-    assert any(e["from"] == "30:AE:A4:4B:1A:0C" for e in g["edges"])
+    assert any(e["from"] == "COM14" and e["to"] == "COM4" for e in g["edges"])
 
 
 def test_roster_and_recent_hops_returns_matching_snapshots():
@@ -114,20 +118,22 @@ def test_roster_and_recent_hops_returns_matching_snapshots():
     assert hops == eng.recent_hops(10)
 
 
-def test_roster_and_recent_hops_keeps_causal_edge_with_hop():
+def test_roster_and_recent_hops_edge_and_hop_consistent():
+    # 완성 홉(소스 TX+SSM RX)이 recent_hops 에 있고, 그 포트쌍(src_port↔rx_port)이 로스터 정적
+    # 링크선 edge(from↔to)와 정합한다 — 같은 관측을 두 층(홉 펄스·링크선)이 공유(plan §3).
     eng = TopologyEngine()
-    _feed(eng, "COM4", SSM_RX_BLOCK, t0=1.0)
+    eng.observe("COM14", 1.0, '[Tx - my INFO] {"UnID":5,"Unique":25,"INFO":["4"]}')
+    eng.observe("COM4", 1.2, '[Proc-WiFiRx] {"UnID":5,"Unique":25,"INFO":["4"]}')
     eng.flush()
-    eng.sweep(now=100.0)                      # rx-only → grace 후 방출(홉 히스토리 적재)
+    entries = [
+        {"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM14", "alias": "SB1-ESP", "lines": [], "connected": True},
+    ]
+    roster, hops = eng.roster_and_recent_hops(entries, now=2.0, n=10)
 
-    roster, hops = eng.roster_and_recent_hops(_ssm_entries(), now=100.0, n=10)
-
-    assert any(h["key"] == (5, 25) and h["ok"] is True for h in hops)
-    edges = roster["groups"][0]["edges"]
-    assert any(
-        e["from"] == "30:AE:A4:4B:1A:0C" and e["to"] == "A0:85:E3:EA:5C:C4"
-        for e in edges
-    )
+    h = next(h for h in hops if h["key"] == (5, 25))
+    assert h["ok"] is True and h["src_port"] == "COM14" and h["rx_port"] == "COM4"
+    assert any(e["from"] == "COM14" and e["to"] == "COM4" for e in roster["groups"][0]["edges"])
 
 
 def test_roster_and_recent_hops_zero_or_negative_hops_empty():

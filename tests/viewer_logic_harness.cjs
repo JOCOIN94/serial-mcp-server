@@ -173,15 +173,15 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   ok(isColor(SV.rssiColor("-40")), "rssi-color-numeric-string");   // JSON 이 문자열로 줄 수도
 }
 
-/* T-2. edgeSegments: 노드 mac ↔ edge from/to 매칭 → 노드 중심좌표 선분. 미매칭 mesh 엣지는 skip. */
+/* T-2. edgeSegments: 노드 포트 ↔ edge from/to(멤버십 leaf↔SSM 포트쌍) 매칭 → 중심좌표 선분. 미매칭 skip. */
 {
   const placed = [
-    { n: { mac: "AA", id: "mac:AA" }, x: 0, y: 0, w: 100, h: 60 },
-    { n: { mac: "BB", id: "mac:BB" }, x: 200, y: 0, w: 100, h: 60 },
+    { n: { ports: [{ port: "COM14" }], id: "SB-5" }, x: 0, y: 0, w: 100, h: 60 },
+    { n: { ports: [{ port: "COM4" }], id: "SSM" }, x: 200, y: 0, w: 100, h: 60 },
   ];
   const edges = [
-    { from: "AA", to: "BB", rssi: -40, fresh: true },
-    { from: "AA", to: "ZZ", rssi: -50, fresh: false },   // ZZ 노드 배치에 없음 → 그릴 수 없어 skip
+    { from: "COM14", to: "COM4", fresh: true },
+    { from: "COM14", to: "COM99", fresh: false },   // COM99 노드 배치에 없음 → 그릴 수 없어 skip
   ];
   const segs = SV.edgeSegments(placed, edges);
   eq(segs.length, 1, "edge-seg-skips-unmatched");
@@ -189,18 +189,17 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   eq(segs[0].y1, 30, "edge-seg-y1-center");      // 0 + 60/2
   eq(segs[0].x2, 250, "edge-seg-x2-center");     // 200 + 100/2
   eq(segs[0].y2, 30, "edge-seg-y2-center");
-  eq(segs[0].rssi, -40, "edge-seg-rssi-kept");
   eq(segs[0].fresh, true, "edge-seg-fresh-kept");
 }
 
-/* T-3. edgeSegments 방어: null/빈 입력·mac 없는 노드·자기루프 안전(throw 없이 skip). */
+/* T-3. edgeSegments 방어: null/빈 입력·포트 없는 노드(원격 등)·자기루프 안전(throw 없이 skip). */
 {
   eq(SV.edgeSegments([], []).length, 0, "edge-seg-empty");
   eq(SV.edgeSegments(null, null).length, 0, "edge-seg-null-safe");
-  const noMac = [{ n: { id: "port:COM4" }, x: 0, y: 0, w: 100, h: 60 }];
-  eq(SV.edgeSegments(noMac, [{ from: "AA", to: "BB" }]).length, 0, "edge-seg-node-without-mac-skipped");
-  const p2 = [{ n: { mac: "AA" }, x: 0, y: 0, w: 100, h: 60 }];
-  eq(SV.edgeSegments(p2, [{ from: "AA", to: "AA" }]).length, 0, "edge-seg-self-loop-skipped");
+  const noPort = [{ n: { id: "REP1" }, x: 0, y: 0, w: 100, h: 60 }];   // ports 없는 원격 노드
+  eq(SV.edgeSegments(noPort, [{ from: "COM14", to: "COM4" }]).length, 0, "edge-seg-node-without-port-skipped");
+  const p2 = [{ n: { ports: [{ port: "COM4" }] }, x: 0, y: 0, w: 100, h: 60 }];
+  eq(SV.edgeSegments(p2, [{ from: "COM4", to: "COM4" }]).length, 0, "edge-seg-self-loop-skipped");
 }
 
 /* ===== 토폴로지 홉 애니메이션 순수로직(모듈8 ② hop) — DOM 비의존 ===== */

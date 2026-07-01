@@ -36,6 +36,7 @@ DEVICE_TYPE = {
 # (빈 행은 프론트 layout 이 접는다.)
 ROW_BY_TYPE = {"SSM": 0, "REPEAT": 1, "APU": 2, "APU_C": 3, "SB": 4}
 TYPE_RANK = {"SSM": 0, "REPEAT": 1, "APU": 2, "APU_C": 3, "SB": 4}   # 그룹 내 정렬용
+_MEMBERSHIP_FRESH_S = 30.0   # 멤버십 링크선 최신성 임계(초) — 넘으면 fresh=False(프론트 옅게). 실장비서 튜닝.
 
 # 로그 내용 식별 시그니처(약한 폴백 증거, conf 0.6): (type, mcu, weight, regex). 점수 합산.
 # 고유 수동(passive) 패턴이 있는 보드만 등록한다: SSM(Proc-*/Route)·SB-STM(BayID 등).
@@ -301,15 +302,15 @@ def build_roster(entries, routing=None, membership=None, pairing=None, now=None)
 
     token_map = routing.tokens() if routing is not None else {}
     unid_idx = _unid_index(token_map)                       # unid → (token, entry): mac/토큰 enrich
-    link_edges = _group_edges(routing.edges(now)) if routing is not None else []
 
     for i, g in enumerate(groups):
         descriptors = _merge_sb(g["_members"])              # 직접연결(SB ESP/STM 병합)
         if i == 0 and token_map:                            # 원격 mesh 노드는 1차(주) 그룹에 귀속
             descriptors += _remote_descriptors(descriptors, token_map)
         g["nodes"] = _layout_group(descriptors, unid_idx)
-        # edges 는 SSM 발신(REPRSSI/[Route] Link)이라 SSM 그룹 한정. 단일 SSM 가정 → 1차 그룹에 전부.
-        g["edges"] = link_edges if (i == 0 and g["kind"] == "ssm") else []
+        # 정적 링크선 = 그 SSM 그룹의 멤버십 포트쌍(correlator 가 관측한 leaf↔SSM). SSM별 멤버십이라
+        # 멀티-SSM 도 각 그룹에 자기 링크만(REPRSSI 무선이웃 강제 링크는 폐기, plan §3).
+        g["edges"] = _membership_edges(membership, g["ssm_port"], now) if g["kind"] == "ssm" else []
         del g["_members"]
     return {"groups": groups, "unplaced": unplaced}
 
@@ -323,10 +324,25 @@ def _unid_index(token_map: dict) -> dict:
     return idx
 
 
-def _group_edges(edges) -> list:
-    """라우팅 링크그래프 edges → 로스터 그룹 edges {from,to,rssi,fresh}(source 등 부가필드 제외)."""
-    return [{"from": e["from"], "to": e["to"], "rssi": e.get("rssi"), "fresh": e.get("fresh")}
-            for e in edges]
+def _membership_edges(membership, ssm_port, now, fresh_s=_MEMBERSHIP_FRESH_S) -> list:
+    """멤버십(ssm_port→leaf) → 정적 링크선 edges [{from:local_port, to:ssm_port, fresh}].
+
+    correlator 가 (UnID,Unique) TX↔RX 로 관측한 leaf↔SSM 포트쌍만 그린다 — REPRSSI 같은 무선
+    이웃 전부를 강제 링크로 긋지 않는다(plan §3, 사용자 강조: 링크 고정 강제 금지). last_ts 가
+    fresh_s 넘게 오래되면 fresh=False(프론트가 옅게) — 관측 이력은 유지하되 최신성만 감쇠시켜
+    '고정'이 아닌 '동적 관측'을 표현한다(관측 바뀌면 멤버십도 갱신). RSSI 품질 메타는 후속(선택).
+    """
+    if not membership or ssm_port is None:
+        return []
+    out = []
+    for ent in membership.get(ssm_port, {}).values():
+        lp = ent.get("local_port")
+        if not lp:
+            continue
+        last_ts = ent.get("last_ts")
+        fresh = now is None or last_ts is None or (now - last_ts) < fresh_s
+        out.append({"from": lp, "to": ssm_port, "fresh": bool(fresh)})
+    return out
 
 
 def _remote_descriptors(direct: list, token_map: dict) -> list:
