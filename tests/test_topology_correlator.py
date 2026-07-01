@@ -33,15 +33,18 @@ def test_hop_has_no_timestamp_field():
     # 홉은 시각을 노출하지 않는다(의도적) — 서버 도착시각은 포트 지터·펌웨어 출력순으로 RX 가
     # TX 보다 먼저 관측될 수 있어 인과/순서 추론에 부적합. AI 오용 방지로 ts 를 빼고 키 상관만.
     c = Correlator()
-    h = c.observe(ev("rx", port="COM4", ts=1.0, passed="(05-SB5)", takentime=61))[0]
+    c.observe(ev("rx", port="COM4", ts=1.0, passed="(05-SB5)", takentime=61))   # 완성 대기
+    h = c.sweep(now=100.0)[0]                                                    # rx-only grace 후 방출
     assert "ts" not in h
     assert h["ok"] is True and h["path"] == ["SB5"]   # 경로·성공은 그대로 제공
 
 
-def test_rx_emits_success_hop_with_path_and_rtt():
+def test_rx_only_success_hop_via_sweep():
+    # SSM RX 만 관측(소스 TX 미관측) → grace 후 sweep 이 성공 홉(path·rtt 보존)을 방출.
     c = Correlator()
-    hops = c.observe(ev("rx", port="COM4", ts=1.0, src="SB1",
-                        passed="(05-SB5)->(01-REP1)", takentime=61, dtype="4"))
+    assert c.observe(ev("rx", port="COM4", ts=1.0, src="SB1",
+                        passed="(05-SB5)->(01-REP1)", takentime=61, dtype="4")) == []
+    hops = c.sweep(now=100.0)
     assert len(hops) == 1
     h = hops[0]
     assert h["ok"] is True and h["confidence"] == "observed"
@@ -67,10 +70,34 @@ def test_hop_exposes_rx_and_src_ports():
 
 
 def test_rx_only_hop_has_rx_port_no_src_port():
-    # SSM RX 만 관측(소스 TX 미관측) → rx_port 만, src_port 는 None.
+    # SSM RX 만 관측(소스 TX 미관측) → grace 후 sweep 방출, rx_port 만·src_port 는 None.
     c = Correlator()
-    h = c.observe(ev("rx", port="COM4", ts=1.0, passed="(05-SB5)"))[0]
+    assert c.observe(ev("rx", port="COM4", ts=1.0, passed="(05-SB5)")) == []
+    h = c.sweep(now=100.0)[0]
     assert h["rx_port"] == "COM4" and h["src_port"] is None
+
+
+def test_rx_before_tx_captures_both_ports():
+    # 실장비: 펌웨어가 sendMessage 후 [Tx] 를 출력해 SSM RX 가 소스 TX 보다 먼저 관측된다(plan §4).
+    # RX 선행이어도 뒤늦은 TX 로 src_port·rx_port 가 둘 다 채워진 완성 홉이 나와야 한다(포트간 링크 관측).
+    c = Correlator()
+    assert c.observe(ev("rx", port="COM4", ts=1.0, passed="(05-SB5)")) == []   # RX 먼저 → 완성 대기(즉시 방출 금지)
+    hops = c.observe(ev("tx", port="COM12", ts=1.18, dtype="4"))               # 뒤늦은 TX → 완성 방출
+    assert len(hops) == 1
+    h = hops[0]
+    assert h["ok"] is True and h["confidence"] == "observed"
+    assert h["rx_port"] == "COM4" and h["src_port"] == "COM12"   # 둘 다 채워짐(src_port:null 버그 수정)
+    assert h["path"] == ["SB5"]
+
+
+def test_rx_only_emitted_via_sweep_after_grace():
+    # SSM RX 만 관측(소스 TX 미관측: 원격 mesh·미연결 leaf) → 짧은 grace 후 sweep 에서 rx-only 홉.
+    # 완성(뒤늦은 TX)을 잠깐 기다리되, TX 가 안 오면 rx_port 만으로 방출(src_port=None).
+    c = Correlator(rx_grace_s=1.0)
+    assert c.observe(ev("rx", port="COM4", ts=0.0, passed="(05-SB5)")) == []   # 완성 대기(즉시 방출 안 함)
+    assert c.sweep(now=0.5) == []                                              # grace 전 → 유보
+    hops = c.sweep(now=1.5)                                                    # grace 후 → 방출
+    assert len(hops) == 1 and hops[0]["rx_port"] == "COM4" and hops[0]["src_port"] is None
 
 
 # ---- 포트내 dedup + 완료 후 브로드캐스트 잔향 ----
@@ -79,7 +106,8 @@ def test_port_internal_dedup_same_packet():
     c = Correlator()
     h1 = c.observe(ev("rx", port="COM4", ts=1.0, passed="(05-SB5)"))
     h2 = c.observe(ev("rx", port="COM4", ts=1.0, passed="(05-SB5)"))   # 같은 패킷 중복 수신
-    assert len(h1) == 1 and h2 == []
+    assert h1 == [] and h2 == []             # 완성 대기(둘째는 포트내 dedup)
+    assert len(c.sweep(now=100.0)) == 1      # grace 후 한 홉만 방출(중복 흡수)
 
 
 # ---- 실패 레이어 vs unconfirmed ----
@@ -122,7 +150,8 @@ def test_key_reuse_after_window_is_new_packet():
     c = Correlator(window_s=10.0)
     c.observe(ev("tx", unid=5, unique=1, port="COM14", ts=0.0))
     c.sweep(now=20.0)                      # 첫 패킷 만료 처리
-    hops = c.observe(ev("rx", unid=5, unique=1, port="COM4", ts=21.0, passed="(05-SB5)"))
+    assert c.observe(ev("rx", unid=5, unique=1, port="COM4", ts=21.0, passed="(05-SB5)")) == []  # 완성 대기
+    hops = c.sweep(now=100.0)              # 새 패킷 rx-only grace 후 방출
     assert len(hops) == 1 and hops[0]["ok"] is True   # 같은 키지만 새 패킷
 
 

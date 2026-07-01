@@ -32,9 +32,9 @@ def _ssm_entries():
 def test_observe_rx_block_emits_success_hop():
     eng = TopologyEngine()
     _feed(eng, "COM4", SSM_RX_BLOCK, t0=1.0)
-    hops = eng.flush()                      # 마지막 pending 블록(webtx)까지 방출
-    rx_hops = eng.recent_hops(10)
-    succ = [h for h in rx_hops if h["ok"] is True]
+    eng.flush()                             # 마지막 pending 블록(webtx)까지 조립
+    eng.sweep(now=100.0)                     # rx-only(소스 TX 미관측) → grace 후 sweep 방출
+    succ = [h for h in eng.recent_hops(10) if h["ok"] is True]
     assert len(succ) >= 1
     assert succ[0]["path"] == ["SB1"] or succ[0]["src_name"] == "SB1"
     assert succ[0]["rtt_ms"] == 61
@@ -76,6 +76,18 @@ def test_membership_snapshot_preserves_local_port_on_later_rx_only():
     assert m["COM4"][5]["local_port"] == "COM14"   # 보존
 
 
+def test_membership_local_port_filled_when_rx_precedes_tx():
+    # 실장비: SSM RX(COM4)가 소스 TX(COM14)보다 먼저 관측돼도(펌웨어 출력순, plan §4) leaf 로컬포트가 채워진다.
+    # 완성 우선 상관은 순서 무관 — src_port:null 버그(RX 즉시완료로 뒤늦은 TX 를 잔향 차단) 회귀 방지.
+    eng = TopologyEngine()
+    eng.observe("COM4", 1.0, '[Proc-WiFiRx] {"UnID":5,"Unique":30,"INFO":["4","SB260526-002",-21]}')   # RX 먼저
+    eng.observe("COM14", 1.2, '[Tx - my INFO] {"UnID":5,"Unique":30,"INFO":["4","SB260526-002",-21]}')  # 뒤늦은 TX
+    eng.flush()                              # COM4(rx) → COM14(tx) 방출: RX 선행 후 TX 로 완성
+    m = eng.membership_snapshot()
+    assert m["COM4"][5]["device_type"] == "4"
+    assert m["COM4"][5]["local_port"] == "COM14"   # RX 선행이어도 leaf 포트 확보(버그 수정)
+
+
 # ---- 라우팅/로스터 통합 ----
 
 def test_roster_includes_link_edges_from_observed_webtx():
@@ -106,8 +118,9 @@ def test_roster_and_recent_hops_keeps_causal_edge_with_hop():
     eng = TopologyEngine()
     _feed(eng, "COM4", SSM_RX_BLOCK, t0=1.0)
     eng.flush()
+    eng.sweep(now=100.0)                      # rx-only → grace 후 방출(홉 히스토리 적재)
 
-    roster, hops = eng.roster_and_recent_hops(_ssm_entries(), now=10.0, n=10)
+    roster, hops = eng.roster_and_recent_hops(_ssm_entries(), now=100.0, n=10)
 
     assert any(h["key"] == (5, 25) and h["ok"] is True for h in hops)
     edges = roster["groups"][0]["edges"]
@@ -220,6 +233,7 @@ def test_recent_hops_bounded_and_tail():
     for u in range(6):
         eng.observe("COM4", float(u), f'[Proc-WiFiRx] {{"UnID":5,"Unique":{u},"INFO":["4"]}}')
         eng.observe("COM4", float(u), '[Proc-WiFiRx] {"UnID":5,"Unique":900,"INFO":["4"]}')  # flush 앞
+    eng.sweep(now=1000.0)                       # rx-only 홉들을 grace 후 방출(히스토리 적재)
     hist = eng.recent_hops(10)
     assert len(hist) <= 3                       # maxlen 상한
     assert eng.recent_hops(2) == hist[-2:]      # tail

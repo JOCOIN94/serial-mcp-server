@@ -9,7 +9,10 @@ SSM RX' leg + dedup 전용이다(plan §7-3 다중키: 라우팅=Rt, ACK=RS 등�
 - 윈도 클럭 = 서버 도착 ts(단조), 펌웨어 로그 RTC 아님(§4 C2).
 - 포트내 dedup — 메시 브로드캐스트로 같은 패킷이 한 포트에 여러 번 수신된다.
 - Unique 는 uint8 롤링이라 윈도 밖 같은 키는 별개 패킷(완료 키는 _recent 로 윈도만 차단).
-- SSM RX 도착 → 성공 Hop(ok=True, path=[Passed Device], rtt=takentime) 즉시 방출(단측 관측 허용).
+- 완성(소스 TX + SSM RX, 순서 무관) → 성공 Hop(ok=True, path=[Passed Device], rtt=takentime) 즉시 방출.
+  실장비는 펌웨어 출력순(sendMessage 후 [Tx])으로 SSM RX 가 소스 TX 보다 먼저 오므로(§4), RX 를 즉시
+  완료하지 않고 둘째 이벤트에서 방출해 src_port(leaf)+rx_port(SSM) 를 함께 실어야 '포트간 링크'가 관측된다.
+- SSM RX 만 있고 rx_grace 내 소스 TX 없음 → sweep 이 rx-only 로 방출(src_port=None, 원격/미연결 leaf).
 - 소스 TX 만 있고 윈도 내 SSM RX 없음 → sweep 방출: 그 장비(UnID)를 SSM 이 들은 적 있으면
   ok=False(실패 레이어), 없으면 unconfirmed(SSM 부재/다른 메시 standalone — 실패 단정 금지, §7-3).
   ※ UnID 단위 스코프라 SSM+standalone 공존을 전역 래치처럼 실패로 굳히지 않는다. 그룹/채널
@@ -40,8 +43,9 @@ class Correlator:
     """Event(rx/tx) 를 (UnID,Unique) 로 상관해 Hop 을 방출하는 순수 stateful 엔진."""
 
     def __init__(self, window_s: float = 15.0, max_flows: int = 2000,
-                 max_recent: int = 4000) -> None:
+                 max_recent: int = 4000, rx_grace_s: float = 1.0) -> None:
         self._window = window_s
+        self._rx_grace = rx_grace_s      # rx-only 홉(소스 TX 미관측)을 sweep 방출 전 대기 — 뒤늦은 TX 흡수용
         self._max_flows = max_flows
         self._max_recent = max_recent
         self._flows: "OrderedDict[tuple, dict]" = OrderedDict()   # 미완 흐름(key→flow)
@@ -74,7 +78,7 @@ class Correlator:
         if flow is None:
             flow = {"key": key, "first_ts": ts, "last_ts": ts, "ports": set(),
                     "seen": set(), "tx": False, "rx": False,
-                    "tx_port": None, "rx_port": None,
+                    "tx_port": None, "rx_port": None, "rx_ts": None,
                     "path": [], "src_name": None, "device_type": None, "rtt_ms": None}
             self._flows[key] = flow
             self._evict(self._flows, self._max_flows)
@@ -93,31 +97,50 @@ class Correlator:
             flow["tx"] = True
             if flow["tx_port"] is None:            # leaf 발신 로컬 포트(첫 관측 보존)
                 flow["tx_port"] = ev.get("port")
+            # RX 가 이미 관측됐으면(실장비: 펌웨어 출력순으로 RX 선행) 완성 → src_port+rx_port 둘 다 실어 방출.
+            if flow["rx"]:
+                out.append(self._emit(flow, ok=True, confidence="observed"))
+                self._complete(key, ts)
             return out
 
-        # kind == "rx" (SSM 수신) → 성공 즉시 방출(단측 관측만으로 충분)
+        # kind == "rx" (SSM 수신)
         self._ssm_rx_unids.add(key[0])
         flow["rx"] = True
         if flow["rx_port"] is None:                # SSM 수신 포트(그룹 귀속 키)
             flow["rx_port"] = ev.get("port")
+        if flow["rx_ts"] is None:                  # rx-only sweep grace 기준 시각
+            flow["rx_ts"] = ts
         flow["src_name"] = ev["hints"].get("src_name") or flow["src_name"]
         if ev["metrics"].get("takentime_ms") is not None:
             flow["rtt_ms"] = ev["metrics"]["takentime_ms"]
         flow["path"] = _parse_passed(ev["hints"].get("passed"))
-        out.append(self._emit(flow, ok=True, confidence="observed"))
-        self._complete(key, ts)
+        # 완성 우선: TX 를 이미 봤으면 즉시 방출(둘 다 채움). 아직이면 대기 — 뒤늦은 TX 를 흡수해
+        # src_port 를 채우거나(포트간 링크), TX 가 안 오면 sweep 이 grace 후 rx-only 로 방출한다.
+        if flow["tx"]:
+            out.append(self._emit(flow, ok=True, confidence="observed"))
+            self._complete(key, ts)
         return out
 
     def sweep(self, now: float) -> list:
-        """윈도 만료된 미완 흐름을 방출. TX-only → 실패(SSM 관측 시) 또는 unconfirmed."""
+        """미완 흐름을 방출.
+
+        - rx-only(SSM 수신했으나 소스 TX 미관측): rx_grace 후 성공 방출(src_port=None, 원격/미연결 leaf).
+        - tx-only(소스 TX 만): window 후 실패(SSM 이 그 장비를 들은 적 있음) 또는 unconfirmed(SSM 부재/타 메시).
+        완성(tx+rx)은 observe 에서 이미 방출됐으므로 여기 도달하지 않는다.
+        """
         out: list = []
         for key in list(self._flows.keys()):
             flow = self._flows[key]
-            if now - flow["first_ts"] < self._window:
+            if flow["rx"]:                      # rx-only: 뒤늦은 TX 를 grace 만큼 기다렸다 없으면 rx_port 만으로 방출
+                if now - (flow["rx_ts"] or flow["first_ts"]) < self._rx_grace:
+                    continue
+                self._flows.pop(key, None)
+                out.append(self._emit(flow, ok=True, confidence="observed"))
+                self._complete(key, flow["last_ts"])
+                continue
+            if now - flow["first_ts"] < self._window:    # tx-only: window 만료 대기
                 continue
             self._flows.pop(key, None)
-            if flow["rx"]:                      # 이론상 도달 안 함(rx 는 observe 에서 즉시 완료)
-                continue
             if flow["key"][0] in self._ssm_rx_unids:      # 그 장비를 SSM 이 들은 적 있음
                 out.append(self._emit(flow, ok=False, confidence="timeout"))   # 같은 장비 미도달=실패
             else:
