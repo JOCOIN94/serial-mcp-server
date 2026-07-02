@@ -126,6 +126,9 @@ class RoutingTable:
         # 숨기므로(펌웨어 if(BayID) UnID else Mac) 이 테이블이 mac 공간↔논리 노드 공간의 유일한 다리다.
         self._table: "OrderedDict[str, dict]" = OrderedDict()     # mac→{name,unid,rf,ts}
         self._ssm_mac: dict = {}                                  # port→그 포트 SSM 자신의 mac(자기 행)
+        # 이름 해소 원천(_tokens·_table·_ssm_mac) 변경 카운터 — 소비자(엔진 _names 캐시)가
+        # 매 이벤트 재빌드 대신 version 비교로 무효화한다. 값이 같으면 이름 원천 불변이 보장된다.
+        self._version = 0
 
     def observe(self, ev) -> None:
         """이벤트 1개로 링크 그래프·토큰맵을 갱신(방출 없음 — 스냅샷은 edges()/resolve_token())."""
@@ -178,6 +181,7 @@ class RoutingTable:
         ent = self._table.setdefault(mac, {"name": None, "unid": None, "rf": None, "ts": None})
         ent.update({"name": name or ent["name"], "unid": unid if unid is not None else ent["unid"],
                     "rf": rf if rf is not None else ent["rf"], "ts": ts})
+        self._version += 1                    # 테이블 행 = 이름 원천 갱신(주기 출력이라 저빈도)
         self._table.move_to_end(mac)
         while len(self._table) > self._max_table:
             self._table.popitem(last=False)   # drop-oldest
@@ -218,19 +222,28 @@ class RoutingTable:
         ent = self._tokens.get(tok)
         return dict(ent) if ent is not None else None
 
+    def version(self) -> int:
+        """이름 원천(_tokens·_table·_ssm_mac) 변경 카운터. 같으면 이름 캐시 재사용 가능."""
+        return self._version
+
     def _register_tokens(self, ev) -> None:
         ids = ev.get("ids") or {}
         tok = _token_of_unid(ids.get("unid"))            # 예약/파싱불가 토큰이면 None → 자기등록 skip
         if tok is not None:
             ent = self._tokens.setdefault(tok, {"name": None, "mac": None, "unid": None})
-            ent["unid"] = ids.get("unid")
-            if ids.get("mac"):
+            if ent["unid"] != ids.get("unid"):           # 실제 변경 시에만 version 증가(캐시 유효성 유지)
+                ent["unid"] = ids.get("unid")
+                self._version += 1
+            if ids.get("mac") and ent["mac"] != ids["mac"]:
                 ent["mac"] = ids["mac"]
+                self._version += 1
         for ptok, name in _parse_passed_tokens((ev.get("hints") or {}).get("passed")):
             if ptok in _RESERVED_TOKENS:                 # 예약 토큰은 이름도 등록 안 함
                 continue
             ent = self._tokens.setdefault(ptok, {"name": None, "mac": None, "unid": None})
-            ent["name"] = name
+            if ent["name"] != name:
+                ent["name"] = name
+                self._version += 1
 
     def _add_link(self, frm, to, rssi, source, ts) -> None:
         key = (frm, to)

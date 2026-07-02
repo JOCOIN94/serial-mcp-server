@@ -150,7 +150,7 @@ class ChainLog:
             self._observe_wifirx(ent, ev, port_names)
 
         after = self._public(ent)
-        if after != before or ent["id"] == after["id"]:
+        if after != before:
             changed.append(after)
         return changed
 

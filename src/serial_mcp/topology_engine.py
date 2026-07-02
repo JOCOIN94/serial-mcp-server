@@ -74,7 +74,8 @@ class TopologyEngine:
         self._peer_scope_cache: dict = {}
         self._peer_scope_dirty = True
         self._names_cache: dict = {}
-        self._names_dirty = True
+        self._names_dirty = True              # membership 유래 무효화(라우팅 유래는 version 비교)
+        self._names_routing_ver = -1
         # 카드상관 페어링: STM 은 베이번호를 안 흘려서, 카드 sCuID+UnID 로 포트→베이를 잇는다(build_roster 번호 폴백).
         self._pairing = CardPairing()
 
@@ -88,7 +89,6 @@ class TopologyEngine:
             self._last_ts[port] = ts
             self._pairing.observe(port, ts, text)     # 카드 sCuID 상관(포트→베이) 라이브 급전
             self._routing.observe_table_line(port, ts, text)   # SSM INFO 테이블 행(mac 다리) 급전
-            self._names_dirty = True
             return self._drain(asm.feed(ts, text), ts)
 
     def forget_port(self, port: str) -> None:
@@ -205,7 +205,6 @@ class TopologyEngine:
         out: list = []
         for ev in events:
             self._routing.observe(ev)
-            self._names_dirty = True
             scope = self._peer_scope()
             names = self._names()
             self._record_chain_updates(self._chains.observe(ev, scope, resolver=self._routing,
@@ -249,8 +248,14 @@ class TopologyEngine:
             self._chain_updates[ent["id"]] = ent
 
     def _names(self) -> dict:
-        """ChainLog 노드 표기용 {port:name} 캐시."""
-        if not self._names_dirty:
+        """ChainLog 노드 표기용 {port:name} 캐시.
+
+        무효화 원천 2개: membership 변경(_names_dirty — _record_membership/forget_port)과
+        라우팅 이름 원천 변경(RoutingTable.version() — 토큰맵·INFO 테이블·ssm_mac).
+        둘 다 불변이면 재빌드 없이 재사용한다(리더 스레드 Lock 구간에서 이벤트마다 사본 생성 방지).
+        """
+        routing_ver = self._routing.version()
+        if not self._names_dirty and routing_ver == self._names_routing_ver:
             return self._names_cache
         names = {}
         info = self._routing.info_table()
@@ -273,6 +278,7 @@ class TopologyEngine:
                     names[lp] = unid_to_name[unid]
         self._names_cache = names
         self._names_dirty = False
+        self._names_routing_ver = routing_ver
         return names
 
     def _peer_scope(self) -> dict:

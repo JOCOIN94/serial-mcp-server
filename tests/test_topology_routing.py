@@ -303,3 +303,32 @@ def test_info_table_unitid_zero_not_bridged():
     ent = rt.info_table()["by_mac"]["10:06:1C:16:97:AC"]
     assert ent["unid"] is None and ent["rf"] == -35
     assert rt.resolve_token("00") is None
+
+
+# ---- 이름 원천 version (엔진 _names 캐시 무효화 신호) ----
+
+def test_version_bumps_only_on_name_source_change():
+    rt = RoutingTable()
+    v0 = rt.version()
+
+    rt.observe(info_ev(5, mac="AA:BB:CC:DD:EE:01"))     # 토큰 자기등록(unid+mac) → 변경
+    v1 = rt.version()
+    assert v1 > v0
+
+    rt.observe(info_ev(5, mac="AA:BB:CC:DD:EE:01"))     # 동일 관측 반복 → 원천 불변
+    assert rt.version() == v1
+
+    rt.observe(info_ev(5, passed="(05-SB5)"))           # passed 이름 신규 해소 → 변경
+    v2 = rt.version()
+    assert v2 > v1
+    rt.observe(info_ev(5, passed="(05-SB5)"))           # 같은 이름 재관측 → 불변
+    assert rt.version() == v2
+
+
+def test_version_bumps_on_info_table_row():
+    rt = RoutingTable()
+    v0 = rt.version()
+    rt.observe_table_line(
+        "COM4", 1.0,
+        "| SB5 | 4 | -60 | A0,85,E3,EA,5C,C4( 5) | 4 | S00:01 | R00:02 |")
+    assert rt.version() > v0

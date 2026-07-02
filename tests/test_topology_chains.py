@@ -205,6 +205,13 @@ def test_port_kind_dedup_returns_no_update():
     assert log.recent(1)[0]["id"] == first["id"]
 
 
+def test_non_mutating_observation_emits_no_update():
+    # up 키가 실린 wifitx 는 가드로 노드 변형이 없다 — 변경 없는 관측은 SSE 변경분을 내지 않는다.
+    log = ChainLog(window_s=10)
+
+    assert log.observe(ev("wifitx", "COM4", ts=1.0)) == []
+
+
 def test_up_wifirx_is_heard_only_not_main_path():
     log = ChainLog(window_s=10)
     log.observe(ev("tx", "COM1", ts=1.0), port_names={"COM1": "SB5"})
