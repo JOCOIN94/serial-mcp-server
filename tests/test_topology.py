@@ -455,6 +455,48 @@ def test_roster_edges_carry_rssi():
     assert e["rssi"] == -42
 
 
+def test_roster_membership_edge_has_handled_via_and_beats_duplicate_peer_edge():
+    # 같은 포트쌍이 멤버십과 peer 에 동시에 있으면 RSSI 보유 멤버십 edge 우선, via 는 handled.
+    membership = {"COM4": {5: {"device_type": "4", "local_port": "COM14", "last_ts": 1.0, "rssi": -42}}}
+    peer_links = [{"from": "COM14", "to": "COM4", "via": "heard", "fresh": True}]
+    edges = build_roster(_live_entries(), membership=membership, peer_links=peer_links, now=2.0)["groups"][0]["edges"]
+
+    assert len(edges) == 1
+    assert edges[0]["from"] == "COM14" and edges[0]["to"] == "COM4"
+    assert edges[0]["rssi"] == -42 and edges[0]["via"] == "handled"
+
+
+def test_roster_standalone_group_includes_peer_edge():
+    entries = [
+        {"port": "COM12", "alias": "REPEAT1", "lines": [], "connected": True},
+        {"port": "COM14", "alias": "SB2-ESP", "lines": [], "connected": True},
+    ]
+    peer_links = [{"from": "COM12", "to": "COM14", "via": "heard", "fresh": True}]
+
+    edges = build_roster(entries, peer_links=peer_links, now=2.0)["groups"][0]["edges"]
+
+    assert edges == [{"from": "COM12", "to": "COM14", "fresh": True, "via": "heard",
+                      "rssi": None, "rssi_source": None}]
+
+
+def test_roster_drops_peer_edge_when_ports_are_in_different_groups():
+    entries = [
+        {"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM9", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM12", "alias": "SB1-ESP", "lines": [], "connected": True},
+        {"port": "COM20", "alias": "SB2-ESP", "lines": [], "connected": True},
+    ]
+    membership = {
+        "COM4": {1: {"device_type": "4", "local_port": "COM12", "last_ts": 1.0}},
+        "COM9": {2: {"device_type": "4", "local_port": "COM20", "last_ts": 1.0}},
+    }
+    peer_links = [{"from": "COM12", "to": "COM20", "via": "heard", "fresh": True}]
+
+    groups = build_roster(entries, membership=membership, peer_links=peer_links, now=2.0)["groups"]
+
+    assert all(not any({e["from"], e["to"]} == {"COM12", "COM20"} for e in g["edges"]) for g in groups)
+
+
 def test_roster_remote_node_from_passed_device():
     # SB5 직접연결 + REP1 은 [Passed Device] 로만 등장하는 원격 mesh 노드(직접 포트 없음).
     rt = RoutingTable()

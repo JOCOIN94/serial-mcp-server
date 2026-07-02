@@ -166,6 +166,23 @@ def test_roster_includes_link_edges_from_observed_membership():
     assert any(e["from"] == "COM14" and e["to"] == "COM4" for e in g["edges"])
 
 
+def test_roster_includes_peer_edge_without_ssm_events():
+    # SSM 이벤트 없이 두 리프 포트만 같은 Unique 패킷을 관측해도 standalone 그룹에 peer edge 가 뜬다.
+    eng = TopologyEngine()
+    eng.observe("COM12", 1.0, '[Tx - resp for WHO] {"UnID":7,"Unique":44,"INFO":["5","REP1",-35]}')
+    eng.observe("COM14", 1.1, '[WiFi_Rx] {"UnID":7,"Unique":44,"INFO":["5","REP1",-35]}')
+    entries = [
+        {"port": "COM12", "alias": "REPEAT1", "lines": [], "connected": True},
+        {"port": "COM14", "alias": "SB2-ESP", "lines": [], "connected": True},
+    ]
+
+    g = eng.roster(entries, now=2.0)["groups"][0]
+
+    assert g["kind"] == "standalone"
+    assert any(e["from"] == "COM12" and e["to"] == "COM14" and e["via"] == "heard"
+               for e in g["edges"])
+
+
 def test_roster_and_recent_hops_returns_matching_snapshots():
     eng = TopologyEngine()
     _feed(eng, "COM4", SSM_RX_BLOCK, t0=1.0)
@@ -225,9 +242,9 @@ def test_roster_and_recent_hops_builds_roster_outside_engine_lock(monkeypatch):
     eng.flush()
     locked_during_build = []
 
-    def fake_build_roster(entries, routing=None, membership=None, pairing=None, now=None):
+    def fake_build_roster(entries, routing=None, membership=None, pairing=None, peer_links=None, now=None):
         locked_during_build.append(eng._lock.locked())
-        return {"groups": [{"id": "g", "edges": routing.edges(now)}], "unplaced": []}
+        return {"groups": [{"id": "g", "edges": routing.edges(now), "peer_links": peer_links}], "unplaced": []}
 
     monkeypatch.setattr(topology_engine, "build_roster", fake_build_roster)
 
@@ -235,6 +252,7 @@ def test_roster_and_recent_hops_builds_roster_outside_engine_lock(monkeypatch):
 
     assert locked_during_build == [False]
     assert roster["groups"][0]["edges"]
+    assert roster["groups"][0]["peer_links"] == []
     assert hops == eng.recent_hops(10)
 
 

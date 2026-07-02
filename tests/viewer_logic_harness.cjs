@@ -180,7 +180,7 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
     { n: { ports: [{ port: "COM4" }], id: "SSM" }, x: 200, y: 0, w: 100, h: 60 },
   ];
   const edges = [
-    { from: "COM14", to: "COM4", fresh: true, rssi: -48, rssi_source: "route_link" },
+    { from: "COM14", to: "COM4", fresh: true, rssi: -48, rssi_source: "route_link", via: "handled" },
     { from: "COM14", to: "COM99", fresh: false },   // COM99 노드 배치에 없음 → 그릴 수 없어 skip
   ];
   const segs = SV.edgeSegments(placed, edges);
@@ -192,7 +192,9 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   eq(segs[0].fresh, true, "edge-seg-fresh-kept");
   eq(segs[0].rssi, -48, "edge-seg-rssi-kept");
   eq(segs[0].source, "route_link", "edge-seg-rssi-source-kept");   // ladder 출처(툴팁용)
+  eq(segs[0].via, "handled", "edge-seg-via-kept");
   eq(SV.edgeSegments(placed, [{ from: "COM14", to: "COM4" }])[0].source, null, "edge-seg-source-null-default");
+  eq(SV.edgeSegments(placed, [{ from: "COM14", to: "COM4" }])[0].via, null, "edge-seg-via-null-default");
 }
 
 /* T-3. edgeSegments 방어: null/빈 입력·포트 없는 노드(원격 등)·자기루프 안전(throw 없이 skip). */

@@ -83,6 +83,37 @@ def test_tx_info_event_carries_keys_and_type():
     assert tx[0]["hints"]["device_type"] == "4"
 
 
+def test_leaf_tx_variants_are_tx_events():
+    lines = [
+        '[Tx - resp for WHO] {"UnID":5,"Unique":16,"INFO":["4"]}',
+        '[Tx_RESP] {"UnID":5,"Unique":17}',
+        '[Tx_RSSI] {"UnID":5,"Unique":18}',
+        '[Tx_REGMAC] {"UnID":5,"Unique":19}',
+        '[Tx_REQRESP] {"UnID":5,"Unique":20}',
+        '[WiFi_Tx-PendingRFTimeout] {"UnID":5,"Unique":21}',
+        'ForceQuit_Tx {"UnID":5,"Unique":22}',
+    ]
+    evs = _run(lines)
+    assert [e["kind"] for e in evs] == ["tx"] * len(lines)
+    assert [e["ids"]["unique"] for e in evs] == [16, 17, 18, 19, 20, 21, 22]
+
+
+def test_proc_wifitx_stays_wifitx_not_leaf_tx():
+    evs = _run(['[Proc_WiFiTx] {"UnID":5,"Cidx":475}'])
+    assert len(evs) == 1
+    assert evs[0]["kind"] == "wifitx"
+    assert evs[0]["ids"]["cidx"] == 475
+
+
+def test_data_pass_event_carries_ids_and_rt_tokens():
+    evs = _run(['[Data_Pass] {"UnID":5,"Unique":23,"Rt":["05","01"],"Alive":"SSM"}'])
+    assert len(evs) == 1
+    assert evs[0]["kind"] == "pass"
+    assert evs[0]["ids"]["unid"] == 5
+    assert evs[0]["ids"]["unique"] == 23
+    assert evs[0]["ids"]["rt_tokens"] == ["05", "01"]
+
+
 def test_route_link_event_parsed():
     evs = _run(["[Route] Link A0,85,E3,EA,5C,C4 -> 10,06,1C,16,97,AC rssi=-41"])
     rt = [e for e in evs if e["kind"] == "route"]
@@ -117,6 +148,15 @@ def test_tx_emitted_immediately_without_next_header_or_flush():
     evs = a.feed(0.0, '[Tx - my INFO] {"UnID":5,"Unique":1,"INFO":["4"]}')
     assert len(evs) == 1 and evs[0]["kind"] == "tx" and evs[0]["ids"]["unique"] == 1
     assert a.flush() == []                    # 이미 방출됨 — flush 에 남지 않는다(이중 방출 금지)
+
+
+def test_wifirx_and_data_pass_emit_immediately_without_flush():
+    a = EventAssembler("COM14")
+    rx = a.feed(0.0, '[WiFi_Rx] {"UnID":5,"Unique":1}')
+    assert len(rx) == 1 and rx[0]["kind"] == "wifirx"
+    ps = a.feed(0.1, '[Data_Pass] {"UnID":5,"Unique":2,"Rt":["05"]}')
+    assert len(ps) == 1 and ps[0]["kind"] == "pass"
+    assert a.flush() == []
 
 
 def test_tx_header_also_completes_previous_block():
