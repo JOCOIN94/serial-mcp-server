@@ -1770,6 +1770,15 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     return item;
   }
 
+  // 그룹 이동 행을 id 오름차순 위치에 삽입(신규 행은 최대 id라 사실상 append).
+  function insertRowSorted(box, item, id) {
+    const rows = box.querySelectorAll(".tch-row");
+    for (const r of rows) {
+      if (Number(r.dataset.cid) > Number(id)) { box.insertBefore(item, r); return; }
+    }
+    box.appendChild(item);
+  }
+
   window.renderChainLog = function (chains, groups) {
     const root = document.getElementById("topohops");
     if (!root) return;
@@ -1804,13 +1813,18 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
         const sig = JSON.stringify(row);
         const rec = _chainRows[id];
         if (rec && rec.sig === sig) {
-          if (rec.el.parentNode !== box || rec.el !== box.lastElementChild) box.appendChild(rec.el);
+          // 정렬이 id 오름차순 고정이라 같은 박스 안 재배치는 불필요 — DOM 이동은 CSS
+          // 애니메이션을 재시작시켜 전체가 깜빡인다. 그룹 이동(미분류→귀속)일 때만 옮긴다.
+          if (rec.el.parentNode !== box) insertRowSorted(box, rec.el, row.id);
           rec.group = gkey;
           return;
         }
         const item = buildChainRow(row);
-        if (rec && rec.el.parentNode) rec.el.parentNode.replaceChild(item, rec.el);
-        else box.appendChild(item);
+        if (rec && rec.el.parentNode === box) box.replaceChild(item, rec.el);
+        else {
+          if (rec && rec.el.parentNode) rec.el.parentNode.removeChild(rec.el);   // 그룹 이동 — 옛 박스에서 제거
+          insertRowSorted(box, item, row.id);
+        }
         _chainRows[id] = { el: item, sig: sig, group: gkey };
       });
     });
@@ -2199,7 +2213,7 @@ async function refreshBuffer() {
   box.innerHTML = "";
   const ctx = {};
   for (const e of d.entries || []) {
-    appendEntry(box, { ts: e.first_ts, text: e.text, count: e.count, firstTs: e.first_ts, lastTs: e.last_ts }, ctx, { noFold: true });
+    appendEntry(box, { ts: e.first_ts, text: e.text, count: e.count, firstTs: e.first_ts, lastTs: e.last_ts }, ctx, { noFold: true, noEnter: true });   // 폴링 전체 재렌더 — enter 애니메이션 금지(2초마다 깜빡임 방지)
   }
   $("cBuffer").textContent = (d.entries || []).length + "/" + (d.capacity != null ? d.capacity : "?");
   scheduleRecount();
