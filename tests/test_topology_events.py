@@ -62,7 +62,7 @@ def test_rx_block_assembled_into_one_event():
     assert e["hints"]["src_name"] == "SB1"           # <<< From SB1
     assert e["metrics"]["takentime_ms"] == 61
     assert e["metrics"]["avr_takentime_ms"] == 121.0
-    assert e["metrics"]["rssi"] == -21               # INFO[2] = 수신 RSSI(dBm) — 링크 품질색 소스
+    assert e["metrics"]["rssi"] == -21               # INFO[2] = 장비 보고 이웃평균 RSSI(ladder 'info_rssi')
 
 
 def test_webtx_is_separate_event_with_reprssi():
@@ -108,6 +108,23 @@ def test_passed_device_attached_to_rx():
         '[Passed Device]  (05-SB5)->(01-REP1)',
     ])
     assert evs[0]["hints"]["passed"] == "(05-SB5)->(01-REP1)"
+
+
+def test_tx_emitted_immediately_without_next_header_or_flush():
+    # tx 는 헤더 한 줄에 페이로드 완결 → 즉시 방출. 버퍼링하면 리프 침묵 시 유휴 flush(2s+스윕
+    # 위상)까지 밀려 correlator rx_grace(1s)가 먼저 만료돼 src_port 가 확률 유실된다(2026-07-02).
+    a = EventAssembler("COM14")
+    evs = a.feed(0.0, '[Tx - my INFO] {"UnID":5,"Unique":1,"INFO":["4"]}')
+    assert len(evs) == 1 and evs[0]["kind"] == "tx" and evs[0]["ids"]["unique"] == 1
+    assert a.flush() == []                    # 이미 방출됨 — flush 에 남지 않는다(이중 방출 금지)
+
+
+def test_tx_header_also_completes_previous_block():
+    # tx 헤더가 직전 블록(rx)을 닫으면서 자신도 즉시 방출 — 한 feed 가 2개 반환.
+    a = EventAssembler("COM4")
+    assert a.feed(0.0, '[Proc-WiFiRx] {"UnID":5,"Unique":9,"INFO":["4"]}') == []
+    evs = a.feed(0.1, '[Tx - my INFO] {"UnID":7,"Unique":2,"INFO":["4"]}')
+    assert [e["kind"] for e in evs] == ["rx", "tx"]
 
 
 def test_two_headers_make_two_events():

@@ -1,14 +1,17 @@
 """topology_correlator.py — Event 스트림 → 멀티홉 Hop 상관(순수 stateful, Phase B 모듈3).
 
-(UnID, Unique) 1차 키로 같은 패킷의 이벤트를 여러 포트에서 모은다. 키는 송신자가 발급하고
-릴레이가 verbatim 보존하므로(펌웨어 §4) 소스 TX([Tx - my INFO])와 SSM RX([Proc-WiFiRx])가
-같은 키로 묶인다. 단 INFO 요청(ReqInfoTo)엔 Unique 가 없어 (UnID,Unique)는 '장비 응답 TX ↔
-SSM RX' leg + dedup 전용이다(plan §7-3 다중키: 라우팅=Rt, ACK=RS 등은 모듈4/후속).
+(식별자, Unique) 1차 키로 같은 패킷의 이벤트를 여러 포트에서 모은다. 식별자는 UnID 우선,
+없으면 Mac — 펌웨어 전 리프 공통으로 `if(ConfigBay.BayID) UnID else Mac` 이라(SB/REP/APU
+동일, 2026-07-02 소스 확인) BayID 미설정 장비는 payload 에 UnID 대신 Mac 이 실린다. 키는
+송신자가 발급하고 릴레이가 verbatim 보존하므로(펌웨어 §4) 소스 TX([Tx - my INFO])와 SSM
+RX([Proc-WiFiRx])가 같은 키로 묶인다. 단 INFO 요청(ReqInfoTo)엔 Unique 가 없어 이 키는
+'장비 응답 TX ↔ SSM RX' leg + dedup 전용이다(plan §7-3 다중키: 라우팅=Rt, ACK=RS 등은 모듈4/후속).
 
 설계 못:
 - 윈도 클럭 = 서버 도착 ts(단조), 펌웨어 로그 RTC 아님(§4 C2).
 - 포트내 dedup — 메시 브로드캐스트로 같은 패킷이 한 포트에 여러 번 수신된다.
-- Unique 는 uint8 롤링이라 윈도 밖 같은 키는 별개 패킷(완료 키는 _recent 로 윈도만 차단).
+- Unique 는 1..99 롤링(펌웨어 MACUNIQUEVALUE=99, 전 리프 공통·0 금지)이라 윈도 밖 같은 키는
+  별개 패킷(완료 키는 _recent 로 윈도만 차단).
 - 완성(소스 TX + SSM RX, 순서 무관) → 성공 Hop(ok=True, path=[Passed Device], rtt=takentime) 즉시 방출.
   실장비는 펌웨어 출력순(sendMessage 후 [Tx])으로 SSM RX 가 소스 TX 보다 먼저 오므로(§4), RX 를 즉시
   완료하지 않고 둘째 이벤트에서 방출해 src_port(leaf)+rx_port(SSM) 를 함께 실어야 '포트간 링크'가 관측된다.
@@ -50,15 +53,26 @@ class Correlator:
         self._max_recent = max_recent
         self._flows: "OrderedDict[tuple, dict]" = OrderedDict()   # 미완 흐름(key→flow)
         self._recent: "OrderedDict[tuple, float]" = OrderedDict()  # 최근 완료 key→ts(잔향 차단)
-        self._ssm_rx_unids: set = set()   # SSM RX 로 관측된 송신자 UnID(실패 vs unconfirmed 스코프)
+        self._ssm_rx_idents: set = set()  # SSM RX 로 관측된 송신자 식별자(UnID/Mac — 실패 vs unconfirmed 스코프)
 
     @staticmethod
     def _key(ev) -> Optional[tuple]:
+        """상관 키 (식별자, Unique). 식별자 = UnID(BayID 설정 장비) 폴백 Mac(BayID=0 장비).
+
+        펌웨어 전 리프 공통 `if(ConfigBay.BayID) UnID else Mac` — UnID 만 요구하면 BayID=0
+        장비(공장 기본 REP 등)는 상관·멤버십·링크선이 통째로 조용히 빠진다. Mac 은 파서가
+        이미 정규형(대문자 콜론)으로 뽑아 TX/RX 양쪽 표기가 일치한다. int(UnID)와 str(Mac)은
+        타입이 달라 키 충돌이 없다."""
         ids = ev.get("ids") or {}
-        unid, unique = ids.get("unid"), ids.get("unique")
-        if unid is None or unique is None:
+        unique = ids.get("unique")
+        if unique is None:
             return None
-        return (unid, unique)
+        ident = ids.get("unid")
+        if ident is None:
+            ident = ids.get("mac")
+        if ident is None:
+            return None
+        return (ident, unique)
 
     def observe(self, ev) -> list:
         """이벤트 1개 처리. 성공 Hop(보통 0~1개)을 반환. webtx/route 등은 모듈4 담당."""
@@ -104,7 +118,7 @@ class Correlator:
             return out
 
         # kind == "rx" (SSM 수신)
-        self._ssm_rx_unids.add(key[0])
+        self._ssm_rx_idents.add(key[0])
         flow["rx"] = True
         if flow["rx_port"] is None:                # SSM 수신 포트(그룹 귀속 키)
             flow["rx_port"] = ev.get("port")
@@ -113,7 +127,7 @@ class Correlator:
         flow["src_name"] = ev["hints"].get("src_name") or flow["src_name"]
         if ev["metrics"].get("takentime_ms") is not None:
             flow["rtt_ms"] = ev["metrics"]["takentime_ms"]
-        if ev["metrics"].get("rssi") is not None:      # SB→SSM 수신 RSSI(INFO[2]) — 링크 품질색
+        if ev["metrics"].get("rssi") is not None:      # 장비 보고 이웃평균 RSSI(INFO[2]) — ladder 'info_rssi' 폴백
             flow["rssi"] = ev["metrics"]["rssi"]
         flow["path"] = _parse_passed(ev["hints"].get("passed"))
         # 완성 우선: TX 를 이미 봤으면 즉시 방출(둘 다 채움). 아직이면 대기 — 뒤늦은 TX 를 흡수해
@@ -143,7 +157,7 @@ class Correlator:
             if now - flow["first_ts"] < self._window:    # tx-only: window 만료 대기
                 continue
             self._flows.pop(key, None)
-            if flow["key"][0] in self._ssm_rx_unids:      # 그 장비를 SSM 이 들은 적 있음
+            if flow["key"][0] in self._ssm_rx_idents:     # 그 장비를 SSM 이 들은 적 있음
                 out.append(self._emit(flow, ok=False, confidence="timeout"))   # 같은 장비 미도달=실패
             else:
                 out.append(self._emit(flow, ok=None, confidence="unconfirmed"))  # SSM 이 모르는 장비/메시

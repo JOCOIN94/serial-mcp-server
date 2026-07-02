@@ -8,11 +8,11 @@ from serial_mcp.topology_correlator import Correlator, _parse_passed
 
 
 def ev(kind, unid=5, unique=1, port="COM4", ts=0.0, src=None, passed=None,
-       takentime=None, dtype=None, rssi=None):
+       takentime=None, dtype=None, rssi=None, mac=None):
     """테스트용 최소 Event dict(topology_events 산출 형태의 부분집합)."""
     return {
         "kind": kind, "port": port, "ts": ts,
-        "ids": {"unid": unid, "unique": unique, "rt_tokens": []},
+        "ids": {"unid": unid, "unique": unique, "mac": mac, "rt_tokens": []},
         "hints": {"src_name": src, "passed": passed, "device_type": dtype},
         "metrics": {"takentime_ms": takentime, "reprssi": [], "rssi": rssi},
     }
@@ -163,11 +163,35 @@ def test_key_reuse_after_window_is_new_packet():
     assert len(hops) == 1 and hops[0]["ok"] is True   # 같은 키지만 새 패킷
 
 
+# ---- Mac 폴백 키(BayID=0 장비) ----
+
+def test_mac_fallback_key_correlates_when_no_unid():
+    # 펌웨어 전 리프 공통 `if(ConfigBay.BayID) UnID else Mac` — BayID=0 장비는 payload 에
+    # UnID 대신 Mac. (Mac, Unique) 키로도 TX↔RX 상관이 성립해야 한다(공장 기본 REP 등).
+    c = Correlator()
+    mac = "30:AE:A4:4B:1A:0C"
+    assert c.observe(ev("rx", unid=None, mac=mac, unique=7, port="COM4", ts=1.0)) == []
+    hops = c.observe(ev("tx", unid=None, mac=mac, unique=7, port="COM12", ts=1.2, dtype="5"))
+    assert len(hops) == 1
+    h = hops[0]
+    assert h["ok"] is True and h["key"] == (mac, 7)
+    assert h["rx_port"] == "COM4" and h["src_port"] == "COM12"
+
+
+def test_unid_still_preferred_over_mac_when_both():
+    # 릴레이 중계 이벤트엔 UnID·Mac 이 함께 있을 수 있다 — UnID 우선(BayID 장비 표준 키 유지).
+    c = Correlator()
+    c.observe(ev("rx", unid=5, mac="AA:BB", unique=3, port="COM4", ts=1.0))
+    h = c.observe(ev("tx", unid=5, mac="AA:BB", unique=3, port="COM14", ts=1.1))[0]
+    assert h["key"] == (5, 3)
+
+
 # ---- 키 없는 이벤트·비대상 kind ----
 
 def test_missing_key_ignored():
     c = Correlator()
     assert c.observe(ev("rx", unid=None, unique=None)) == []
+    assert c.observe(ev("rx", unid=None, mac=None, unique=1)) == []   # 식별자 없음 → 무시
 
 
 def test_non_rxtx_kind_ignored():
