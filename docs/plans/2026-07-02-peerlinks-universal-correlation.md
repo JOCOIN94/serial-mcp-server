@@ -1,5 +1,7 @@
 # PeerLinks — 범용 H.W↔H.W 링크 상관 구현 핸드오프 (2026-07-02)
 
+> 상태(2026-07-02): 구현 완료. 검증: `py -m compileall -q src`, `uv run python -m pytest`.
+
 > **▶ 새 세션/에이전트 진입점 (자족적 맥락 캡슐).** 이 문서만 읽고 대화 맥락 없이 구현할 수
 > 있게 쓴다. 선행 맥락: `docs/plans/2026-07-01-topology-link-unique-txrx.md`(링크=관측 원칙 확립),
 > `docs/plans/2026-07-02-topology-review-fixes.md`(직전 수정 — 복합키·TX 즉시방출·INFO테이블·ladder).
