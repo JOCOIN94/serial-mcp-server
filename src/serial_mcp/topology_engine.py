@@ -129,7 +129,7 @@ class TopologyEngine:
             self._record_chain_updates(self._chains.sweep(now))
             swept = self._correlator.sweep(now)
             for hop in swept:
-                self._record_chain_update(self._chains.apply_hop(hop))
+                self._record_chain_update(self._chains.apply_hop(hop, self._port_idents()))
             self._hops.extend(swept)                      # correlator.sweep 분만 추가 적재
             return flushed + swept
 
@@ -217,8 +217,8 @@ class TopologyEngine:
             self._peerlinks.observe(ev, scope)
             out += self._correlator.observe(ev)
         for hop in out:
-            self._record_membership(hop, ts)
-            self._record_chain_update(self._chains.apply_hop(hop))
+            self._record_membership(hop, ts)                   # 홉이 membership 을 먼저 갱신하고
+            self._record_chain_update(self._chains.apply_hop(hop, self._port_idents()))  # 그 최신 ident 매핑으로 접목
         self._hops.extend(out)
         return out
 

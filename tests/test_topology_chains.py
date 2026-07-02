@@ -63,6 +63,32 @@ def assert_public(entry):
         assert "inferred" in node
 
 
+def test_src_without_tx_gets_port_from_ident_map():
+    # 리프 TX 태그가 없는 메시지 — src 가 <<<From 이름만으로 만들어질 때, 발신자
+    # ident(key)가 membership(port_idents)으로 포트를 알면 src 에 부착한다(로스터 라벨 대상 —
+    # 안 하면 같은 장비가 체인마다 mesh 이름/로스터 라벨로 다르게 표기됨).
+    log = ChainLog(window_s=10)
+
+    entry = log.observe(ev("rx", "COM4", ts=1.0, unid=5, unique=44, src_name="SB1", ms=61),
+                        port_idents={"COM12": 5})[0]
+
+    src = entry["nodes"][0]
+    assert src["role"] == "src"
+    assert src["port"] == "COM12"
+    assert src["name"] == "SB1"          # mesh 이름은 보존(라벨 우선순위·툴팁용)
+
+
+def test_apply_hop_attaches_src_port_from_ident_map():
+    log = ChainLog(window_s=10)
+    log.observe(ev("rx", "COM4", ts=1.0, unid=7, unique=9, src_name="REP1"))
+
+    out = log.apply_hop({"key": (7, 9), "ok": True, "confidence": "observed",
+                         "rssi": -50, "rx_port": "COM4"}, port_idents={"COM9": 7})
+
+    src = out["nodes"][0]
+    assert src["role"] == "src" and src["port"] == "COM9"
+
+
 def test_up_direct_tx_rx_single_entry_with_src_rssi_and_dst_ms():
     log = ChainLog(window_s=10)
     names = {"COM1": "SB5", "COM4": "SSM"}

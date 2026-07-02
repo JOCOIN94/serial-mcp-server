@@ -170,13 +170,14 @@ class ChainLog:
             self._observe_wifitx(ent, ev, port_names)
         elif kind == "wifirx":
             self._observe_wifirx(ent, ev, port_names, port_idents)
+        self._attach_src_port(ent, port_idents)
 
         after = self._public(ent)
         if after != before:
             changed.append(after)
         return changed
 
-    def apply_hop(self, hop: dict) -> Optional[dict]:
+    def apply_hop(self, hop: dict, port_idents: Optional[dict] = None) -> Optional[dict]:
         """Correlator Hop 을 같은 상행 키 항목에 접목한다."""
         if not hop:
             return None
@@ -205,6 +206,7 @@ class ChainLog:
         elif hop.get("rx_port"):
             self._ensure_dst(ent, hop.get("rx_port"), hop.get("rx_port"), hop.get("rtt_ms"))
 
+        self._attach_src_port(ent, port_idents)
         if hop.get("confidence") in ("timeout", "unconfirmed"):
             self._complete(ent)
         return self._public(ent)
@@ -319,6 +321,24 @@ class ChainLog:
         if ids.get("unid") is not None:
             return ids.get("unid")
         return ids.get("mac")
+
+    def _attach_src_port(self, ent: dict, port_idents: Optional[dict]) -> None:
+        """상행 키 ident 가 어느 로컬 포트 장비인지 알면(membership) 포트 없는 src 에 부착.
+
+        리프 TX 태그가 없는 메시지는 src 가 <<<From 이름만으로 만들어져 로스터 라벨
+        (포트 기반)을 못 받는다 — 발신자 ident=key[1] 은 membership 이 포트를 아는
+        관측 사실이므로 부착해도 '관측만 그린다' 원칙과 어긋나지 않는다.
+        """
+        if not port_idents or ent.get("key", (None,))[0] != "u":
+            return
+        src = self._src(ent)
+        if src is None or src.get("port"):
+            return
+        ident = ent["key"][1]
+        for port, pid in port_idents.items():
+            if pid == ident:
+                src["port"] = port
+                return
 
     @staticmethod
     def _correct_direction(ent: dict, direction: str) -> None:
