@@ -258,7 +258,7 @@ def _local_port_to_ssm(membership: Optional[dict]) -> dict:
     return {lp: v[0] for lp, v in best.items()}
 
 
-def build_roster(entries, routing=None, membership=None, pairing=None, now=None) -> dict:
+def build_roster(entries, routing=None, membership=None, pairing=None, now=None, peer_links=None) -> dict:
     """포트 목록(+선택 라우팅 상태·멤버십·카드페어링) → 토폴로지 로스터.
 
     entries: [{port, alias, lines, connected}] (lines 는 최근 수신 줄 list).
@@ -268,8 +268,10 @@ def build_roster(entries, routing=None, membership=None, pairing=None, now=None)
       그 leaf 를 수신한 SSM 의 그룹에 배치한다(멀티-SSM 정확). 없거나 매칭 안 되면 첫 그룹 폴백.
     pairing: 선택 {port: bay}(엔진 CardPairing 스냅샷) — STM 은 정상 로그에 번호가 없으므로, 카드상관으로
       해소된 베이번호를 번호 미상 SB 포트에 채워 ESP 짝과 병합(_merge_sb)하게 한다. 없으면 번호 폴백 없음.
+    peer_links: 선택 [{from,to,via,fresh}] — PeerLinks 가 관측한 범용 H.W↔H.W 포트쌍. 양끝이
+      같은 그룹에 배치된 링크만 병합한다(프론트 canvas 가 그룹 단위라 cross-group v1 드랍).
     반환: {"groups": [{id, label, ssm_port, kind, nodes:[node...], edges:[...]}], "unplaced":[port...]}.
-      kind = "ssm"(SSM 보유) | "standalone"(SSM 부재). edges = [{from,to,rssi,fresh}](SSM 그룹 한정).
+      kind = "ssm"(SSM 보유) | "standalone"(SSM 부재). edges = [{from,to,rssi,fresh,via}].
       node = {id, type, type_confidence, type_source, label, mac, unit_id, route_token,
               row, col, status, ports:[{mcu, port, connected}]}.
       - SB 의 ESP/STM(같은 번호)은 한 노드로 병합(ports 2개, 프론트가 [ESP|STM] 분할).
@@ -324,11 +326,12 @@ def build_roster(entries, routing=None, membership=None, pairing=None, now=None)
         for n in g["nodes"]:                                # SSM 자신의 mac 은 INFO 테이블 자기 행에서
             if n["type"] == "SSM" and not n.get("mac"):
                 n["mac"] = ssm_macs.get(g["ssm_port"])
-        # 정적 링크선 = 그 SSM 그룹의 멤버십 포트쌍(correlator 가 관측한 leaf↔SSM). SSM별 멤버십이라
-        # 멀티-SSM 도 각 그룹에 자기 링크만(REPRSSI 무선이웃 강제 링크는 폐기, plan §3).
-        g["edges"] = (_membership_edges(membership, g["ssm_port"], now,
-                                        routing_edges=routing_edges, info=info)
-                      if g["kind"] == "ssm" else [])
+        # 정적 링크선 = 멤버십 leaf↔SSM 포트쌍 + PeerLinks 범용 포트쌍. peer edge 는 양끝이
+        # 이 그룹에 배치된 경우만 병합한다(cross-group 링크는 v1 프론트 canvas 에 그릴 곳이 없어 드랍).
+        membership_edges = (_membership_edges(membership, g["ssm_port"], now,
+                                              routing_edges=routing_edges, info=info)
+                            if g["kind"] == "ssm" else [])
+        g["edges"] = _merge_group_edges(membership_edges, peer_links, _ports_in_nodes(g["nodes"]))
         del g["_members"]
     return {"groups": groups, "unplaced": unplaced}
 
@@ -387,8 +390,62 @@ def _membership_edges(membership, ssm_port, now, fresh_s=_MEMBERSHIP_FRESH_S,
                     cand[link.get("source") or "route_link"] = link["rssi"]
         picked = pick_link_metric(cand)
         out.append({"from": lp, "to": ssm_port, "fresh": bool(fresh),
-                    "rssi": picked["value"], "rssi_source": picked["source"]})
+                    "rssi": picked["value"], "rssi_source": picked["source"],
+                    "via": "handled"})
     return out
+
+
+def _ports_in_nodes(nodes: list[dict]) -> set:
+    """배치된 노드 목록에서 이 그룹에 속한 실제 시리얼 포트 집합을 뽑는다."""
+    ports = set()
+    for n in nodes:
+        for p in n.get("ports") or []:
+            port = p.get("port")
+            if port:
+                ports.add(port)
+    return ports
+
+
+def _merge_group_edges(membership_edges: list, peer_links: Optional[list], group_ports: set) -> list:
+    """멤버십 edge 와 peer edge 를 무방향 dedup 병합한다.
+
+    멤버십 edge 는 RSSI ladder 를 보유하므로 우선한다. peer edge 는 양끝 포트가 같은 그룹에
+    배치된 경우만 넣고, 순수 peer edge 는 RSSI 없이 via/fresh 만 싣는다.
+    """
+    merged: dict = {}
+    order: list = []
+
+    def add(edge: dict, prefer_existing: bool) -> None:
+        src, dst = edge.get("from"), edge.get("to")
+        if not src or not dst or src == dst:
+            return
+        key = frozenset((src, dst))
+        cur = merged.get(key)
+        if cur is None:
+            merged[key] = dict(edge)
+            order.append(key)
+            return
+        if prefer_existing:
+            if cur.get("via") is None and edge.get("via") is not None:
+                cur["via"] = edge.get("via")
+            return
+        if cur.get("rssi") is None and edge.get("rssi") is not None:
+            cur["rssi"] = edge.get("rssi")
+            cur["rssi_source"] = edge.get("rssi_source")
+        if edge.get("via") == "handled" or cur.get("via") is None:
+            cur["via"] = edge.get("via")
+        cur["fresh"] = bool(cur.get("fresh")) or bool(edge.get("fresh"))
+
+    for edge in membership_edges or []:
+        add(edge, prefer_existing=False)
+    for link in peer_links or []:
+        src, dst = link.get("from"), link.get("to")
+        if src not in group_ports or dst not in group_ports:
+            continue
+        add({"from": src, "to": dst, "fresh": bool(link.get("fresh")),
+             "via": link.get("via"), "rssi": None, "rssi_source": None},
+            prefer_existing=True)
+    return [merged[key] for key in order]
 
 
 def _remote_descriptors(direct: list, token_map: dict) -> list:

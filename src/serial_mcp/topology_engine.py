@@ -2,7 +2,8 @@
 
 순수 모듈(events·correlator·routing·roster)을 한데 묶는다:
   리더 스레드 → observe(port, ts, text) → 포트별 EventAssembler 로 블록 조립 → 각 Event 를
-  routing(링크그래프·토큰맵)·correlator(다중홉 상관)에 흘려 홉을 방출하고 히스토리에 적재.
+  routing(링크그래프·토큰맵)·peerlinks(범용 포트쌍)·correlator(다중홉 상관)에 흘려
+  홉을 방출하고 히스토리에 적재.
   sweep(now) → 유휴 pending 블록 flush + correlator 만료 처리(TX-without-RX).
   roster(entries) → routing 을 얹은 로스터 스냅샷. recent_hops(n) → 최근 홉(get_topology 용).
   roster_and_recent_hops(entries,n) → 로스터 routing 스냅샷과 최근 홉을 같은 Lock 세션에서 캡처.
@@ -23,6 +24,7 @@ from .topology import build_roster
 from .topology_correlator import Correlator
 from .topology_events import EventAssembler
 from .topology_pairing import CardPairing
+from .topology_peerlinks import PeerLinks
 from .topology_routing import RoutingTable
 
 
@@ -64,6 +66,9 @@ class TopologyEngine:
         # SSM포트별 그룹 귀속 멤버십: {ssm_port: {unid: {device_type, local_port, last_ts}}}.
         # correlator 가 (UnID,Unique)+시간창으로 짝지은 rx-완료 홉(rx_port=SSM, src_port=leaf)에서 누적.
         self._membership: dict = {}
+        self._peerlinks = PeerLinks(window_s=window_s)
+        self._peer_scope_cache: dict = {}
+        self._peer_scope_dirty = True
         # 카드상관 페어링: STM 은 베이번호를 안 흘려서, 카드 sCuID+UnID 로 포트→베이를 잇는다(build_roster 번호 폴백).
         self._pairing = CardPairing()
 
@@ -89,11 +94,13 @@ class TopologyEngine:
         """
         with self._lock:
             self._pairing.forget_port(port)
+            self._peerlinks.forget_port(port)
             self._membership.pop(port, None)          # 이 포트가 SSM(rx_port)이던 그룹 멤버십 제거
             for members in self._membership.values():  # 이 포트를 leaf 로컬포트로 갖던 매핑 무효화
                 for ent in members.values():
                     if ent.get("local_port") == port:
                         ent["local_port"] = None
+            self._peer_scope_dirty = True
 
     def sweep(self, now: float, flush_idle_s: float = 2.0) -> list:
         """유휴 pending 블록 flush + correlator 만료 처리. 새 홉 리스트 반환.
@@ -122,7 +129,7 @@ class TopologyEngine:
     def roster_and_recent_hops(self, entries, now: Optional[float] = None, n: int = 20) -> tuple[dict, list]:
         """로스터용 routing 스냅샷과 최근 홉을 한 Lock 세션에서 캡처해 반환한다.
 
-        _drain 은 같은 Lock 안에서 routing.observe → correlator.observe 순서로 홉을 적재하므로,
+        _drain 은 같은 Lock 안에서 routing/peerlinks/correlator 를 갱신하고 홉을 적재하므로,
         routing 스냅샷과 _hops tail 을 함께 뜨면 recent_hops 에만 있는 링크 skew 를 피할 수 있다.
         CPU 무거운 build_roster(포트별 정규식 분류)는 Lock 밖에서 수행해 관측 비차단을 유지한다.
         """
@@ -131,8 +138,10 @@ class TopologyEngine:
                                     self._routing.info_table())
             membership = self._membership_copy()
             pairing = self._pairing.snapshot()
+            peer_links = self._peerlinks.snapshot(now)
             hops = [] if n <= 0 else list(self._hops)[-n:]
-        return build_roster(entries, routing=snap, membership=membership, pairing=pairing, now=now), hops
+        return build_roster(entries, routing=snap, membership=membership, pairing=pairing,
+                            peer_links=peer_links, now=now), hops
 
     def roster(self, entries, now: Optional[float] = None) -> dict:
         """관측된 routing(링크그래프·토큰맵)을 얹은 로스터 스냅샷. 읽기 전용."""
@@ -160,16 +169,17 @@ class TopologyEngine:
                 for ssm, members in self._membership.items()}
 
     def _drain(self, events, ts=None) -> list:
-        """방출된 Event 들을 routing·correlator 에 흘려 홉을 모은다(Lock 보유 중 호출).
+        """방출된 Event 들을 routing·peerlinks·correlator 에 흘려 홉을 모은다(Lock 보유 중 호출).
 
         observe/flush/sweep(유휴 flush) 모두 이 경로로 홉을 적재한다 — _drain 이 self._hops 에
-        직접 extend 하므로(routing 은 부수상태 갱신, 방출 없음), 호출측은 반환값만 쓰고 _hops 에
-        다시 넣지 않는다(이중 적재 주의). correlator.sweep 산출분은 _drain 을 안 거치므로 sweep 이
-        그 분만 따로 _hops 에 적재한다. rx-완료 홉은 멤버십(SSM포트→leaf)에도 누적한다.
+        직접 extend 하므로(routing/peerlinks 는 부수상태 갱신, 방출 없음), 호출측은 반환값만 쓰고
+        _hops 에 다시 넣지 않는다(이중 적재 주의). correlator.sweep 산출분은 _drain 을 안 거치므로
+        sweep 이 그 분만 따로 _hops 에 적재한다. rx-완료 홉은 멤버십(SSM포트→leaf)에도 누적한다.
         """
         out: list = []
         for ev in events:
             self._routing.observe(ev)
+            self._peerlinks.observe(ev, self._peer_scope())
             out += self._correlator.observe(ev)
         for hop in out:
             self._record_membership(hop, ts)
@@ -195,3 +205,26 @@ class TopologyEngine:
             "last_ts": ts if ts is not None else prev.get("last_ts"),
             "rssi": hop.get("rssi") if hop.get("rssi") is not None else prev.get("rssi"),
         }
+        self._peer_scope_dirty = True
+
+    def _peer_scope(self) -> dict:
+        """PeerLinks 그룹 veto 용 {port:ssm_port} 캐시."""
+        if not self._peer_scope_dirty:
+            return self._peer_scope_cache
+        scope = {}
+        best: dict = {}
+        for ssm_port, members in self._membership.items():
+            scope[ssm_port] = ssm_port
+            for ent in members.values():
+                lp = ent.get("local_port")
+                if not lp:
+                    continue
+                ts = ent.get("last_ts")
+                cur = best.get(lp)
+                if cur is None or (ts is not None and (cur[1] is None or ts >= cur[1])):
+                    best[lp] = (ssm_port, ts)
+        for lp, (ssm_port, _ts) in best.items():
+            scope[lp] = ssm_port
+        self._peer_scope_cache = scope
+        self._peer_scope_dirty = False
+        return scope

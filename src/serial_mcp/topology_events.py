@@ -24,8 +24,9 @@ _HEADERS = [
     ("rx",     re.compile(r"\[Proc-WiFiRx\]")),
     ("webtx",  re.compile(r"\[Proc-WebRTx\]")),
     ("wifitx", re.compile(r"\[Proc_WiFiTx\]|\[Proc_Alarm\]")),
-    ("tx",     re.compile(r"\[Tx - my INFO\]")),
+    ("tx",     re.compile(r"\[(?:WiFi_)?Tx\b[^\]]*\]|\[Tx_[^\]]*\]|ForceQuit_Tx")),
     ("wifirx", re.compile(r"\[WiFi_Rx\]")),
+    ("pass",   re.compile(r"\[Data_Pass\]")),
     ("route",  re.compile(r"\[Route\]\s*Link\b")),
 ]
 
@@ -147,9 +148,9 @@ def _attach(ev: dict, text: str) -> None:
     m = _RE_PASSED.search(text)
     if m:
         ev["hints"]["passed"] = m.group(1).strip()
-    # [Proc-Raw Packet](SSM)·[Data_Pass](릴레이)는 Rt 제거 전 원시 패킷이라 실제 경로 토큰 보유.
+    # [Proc-Raw Packet](SSM)은 Rt 제거 전 원시 패킷이라 실제 경로 토큰 보유.
     # SSM 은 [Proc-WiFiRx] 출력 전 Rt 를 remove 하므로(SSM_esp32.ino), rt_tokens 출처는 여기다.
-    if "[Proc-Raw Packet]" in text or "[Data_Pass]" in text:
+    if "[Proc-Raw Packet]" in text:
         obj = extract_json(text)
         if isinstance(obj, dict) and isinstance(obj.get("Rt"), list):
             ev["ids"]["rt_tokens"] = [str(t) for t in obj["Rt"] if t is not None]
@@ -162,11 +163,11 @@ class EventAssembler:
     헤더 사이의 연속 줄(takentime/<<<From/[Passed Device]/[Proc-Raw Packet] 등)은 현재 블록에
     부착된다. 한 이벤트 지연(다음 헤더가 와야 직전 이벤트 방출)이 있으나 윈도 상관에는 무해하다.
 
-    예외: **tx([Tx - my INFO])는 헤더 한 줄에 페이로드가 완결**(UnID/Mac·Unique·INFO 전부
-    인라인, 부착 줄이 기여하는 필드 없음)이라 **즉시 방출**한다. 버퍼링하면 리프가 전송 후
-    침묵할 때 다음 헤더/유휴 flush(2s+스윕 위상)까지 방출이 밀려, correlator 의 rx_grace(1s)가
-    먼저 만료돼 src_port 가 확률적으로 유실된다(2026-07-02 재검토 — RX 선행 수정 63495ed 의
-    잔여 경쟁). 즉시 방출로 완성 상관이 스윕 위상과 무관해진다.
+    예외: **tx/pass/wifirx는 헤더 한 줄에 페이로드가 완결**(UnID/Mac·Unique/Cidx/Rt 전부
+    인라인, 부착 줄이 기여하는 필드 없음)이라 **즉시 방출**한다. tx 를 버퍼링하면 리프가
+    전송 후 침묵할 때 다음 헤더/유휴 flush(2s+스윕 위상)까지 방출이 밀려, correlator 의
+    rx_grace(1s)가 먼저 만료돼 src_port 가 확률적으로 유실된다(2026-07-02 재검토 — RX 선행
+    수정 63495ed 의 잔여 경쟁). pass/wifirx 도 PeerLinks 포트쌍 상관에 즉시 필요하다.
 
     전제: SSM 기본 모드(fprintAllReceivedPackets=false, §14 실측 확증). VRXALLPKTS 토글로 true 면
     [Proc-Raw Packet]/[Passed Device] 가 [Proc-WiFiRx] 앞에 출력돼 순서가 달라진다(모듈3 시간창 결합으로 보강).
@@ -177,7 +178,7 @@ class EventAssembler:
         self._cur: Optional[dict] = None
 
     def feed(self, ts: float, text: str) -> list:
-        """줄 1개 처리. 완성된 Event 목록을 반환(보통 0~1개, tx 는 직전 블록과 함께 최대 2개)."""
+        """줄 1개 처리. 완성된 Event 목록을 반환(보통 0~1개, 즉시형은 직전 블록과 함께 최대 2개)."""
         out: list = []
         kind = _header_kind(text)
         if kind:
@@ -185,7 +186,7 @@ class EventAssembler:
                 out.append(self._cur)
                 self._cur = None
             ev = _new_event(self._port, ts, kind, text)
-            if kind == "tx":
+            if kind in ("tx", "pass", "wifirx"):
                 out.append(ev)         # 헤더 한 줄에 완결 — 즉시 방출(클래스 docstring 예외)
             else:
                 self._cur = ev

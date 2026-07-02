@@ -1227,7 +1227,7 @@ function edgeSegments(placed, edges) {
     if (!a || !b || e.from === e.to) continue;
     // source = rssi 출처(ladder): route_link/reprssi=링크별, info_rssi/info_table_rf=장비 평균.
     out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, rssi: e.rssi, fresh: e.fresh,
-               source: e.rssi_source || null });
+               source: e.rssi_source || null, via: e.via || null });
   }
   return out;
 }
@@ -1394,15 +1394,22 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     if (!segs.length) return null;
     const svg = svgEl("svg", { "class": "tedges", width: lay.w, height: lay.h });
     for (const s of segs) {
+      const heard = s.via === "heard";
       const ln = svgEl("line", {
         x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2,
         stroke: SV.rssiColor(s.rssi), "stroke-width": "2",
-        "stroke-opacity": s.fresh === false ? "0.3" : "0.85", "stroke-linecap": "round",
+        "stroke-opacity": s.fresh === false ? "0.3" : heard ? "0.55" : "0.85",
+        "stroke-linecap": "round",
       });
-      if (s.rssi != null) {                     // 출처 툴팁 — 링크별(route_link/reprssi) vs 장비평균 구분
+      if (heard) ln.setAttribute("stroke-dasharray", "4 4");
+      if (s.rssi != null || s.source || s.via) { // 출처 툴팁 — via + RSSI ladder 출처 구분
         ln.style.pointerEvents = "stroke";      // .tedges 는 pointer-events:none — 선 획만 hover 허용
         const t = svgEl("title", {});
-        t.textContent = "RSSI " + s.rssi + " dBm" + (s.source ? " · " + s.source : "");
+        const parts = [];
+        if (s.via) parts.push("via " + s.via);
+        if (s.rssi != null) parts.push("RSSI " + s.rssi + " dBm");
+        if (s.source) parts.push(s.source);
+        t.textContent = parts.join(" · ");
         ln.appendChild(t);
       }
       svg.appendChild(ln);
