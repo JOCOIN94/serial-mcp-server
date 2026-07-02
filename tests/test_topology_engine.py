@@ -229,6 +229,18 @@ def test_drain_chain_updates_is_one_shot():
     assert eng.drain_chain_updates() == []
 
 
+def test_epoch_of_converts_published_chain_ts():
+    # server.py 는 observe 에 단조시각(time.monotonic)을 주입한다 — 공개 체인 ts 는
+    # epoch_of 로 epoch 초로 변환돼야 뷰어 점프 앵커(버퍼 wall-clock 비교) 계약과 맞는다.
+    eng = TopologyEngine(epoch_of=lambda mono: mono + 1_000_000.0)
+    eng.observe("COM14", 42.5, '[Tx - my INFO] {"UnID":5,"Unique":25,"INFO":["4","SB5",-40]}')
+
+    updates = eng.drain_chain_updates()
+
+    assert len(updates) == 1
+    assert updates[0]["ts"] == 1_000_042.5
+
+
 def test_chainlog_self_echo_uses_membership_port_ident():
     eng = TopologyEngine()
     eng.observe("COM12", 1.0, '[Tx - my INFO] {"UnID":5,"Unique":30,"INFO":["4","SB5"]}')

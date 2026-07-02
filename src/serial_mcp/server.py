@@ -718,7 +718,11 @@ def _acquire_owner_locked() -> Optional[dict]:
             _log(f"소유권 잠금: {_owner_url(port)} bind 성공(UI 미서빙)")
         _owner_active = True
         # 토폴로지 엔진은 모니터 기동 전에 생성한다(리더 on_line 이 관측 입력하므로).
-        _topology_engine = TopologyEngine()
+        # epoch_of: 엔진 내부 윈도 클럭은 단조시각이지만, 공개 체인 ts 는 뷰어가 버퍼
+        # wall-clock(HH:MM:SS)과 비교하는 epoch s 계약이라 발행 시점 오프셋으로 변환한다
+        # (변환 시점 계산이라 NTP 보정도 자동 추종).
+        _topology_engine = TopologyEngine(
+            epoch_of=lambda mono: mono + (time.time() - time.monotonic()))
         _topology_owner_ts = time.monotonic()
         _topology_bootstrapped = set()
         _start_monitors_locked(cfg)

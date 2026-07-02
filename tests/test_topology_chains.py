@@ -284,6 +284,15 @@ def test_public_entry_carries_first_observation_ts():
     assert entry["ts"] == 42.5
 
 
+def test_public_ts_converted_by_epoch_of():
+    # 서버 관측 ts 는 단조시각(time.monotonic)인데 뷰어는 공개 ts 를 epoch 초로 믿고
+    # 버퍼 라인 HH:MM:SS 와 30s 근접 비교한다(점프 시각 앵커) — 공개 시점에 epoch_of 로
+    # 변환한다. 내부 윈도 클럭(_first_ts/_last_ts·만료 판정)은 단조시각을 유지한다.
+    log = ChainLog(window_s=10, epoch_of=lambda mono: mono + 1_000_000.0)
+    entry = log.observe(ev("tx", "COM12", ts=42.5), port_names={"COM12": "SB5"})[0]
+    assert entry["ts"] == pytest.approx(1_000_042.5)
+
+
 def test_rx_observation_corrects_active_down_misclassification():
     log = ChainLog(window_s=10)
     log.observe(

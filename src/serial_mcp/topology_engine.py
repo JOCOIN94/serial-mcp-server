@@ -58,14 +58,17 @@ class _RoutingSnapshot:
 class TopologyEngine:
     """관측 줄 → 홉/로스터. 순수 상태(Lock 보호), I/O 비의존."""
 
-    def __init__(self, window_s: float = 15.0, hop_history: int = 200) -> None:
+    def __init__(self, window_s: float = 15.0, hop_history: int = 200,
+                 epoch_of=None) -> None:
         self._lock = threading.Lock()
         self._assemblers: dict[str, EventAssembler] = {}     # port → 누산기
         self._last_ts: dict[str, float] = {}                 # port → 최근 관측 ts(유휴 flush 판정)
         self._correlator = Correlator(window_s=window_s)
         self._routing = RoutingTable()
         self._hops: deque = deque(maxlen=hop_history)         # 최근 홉(상한·drop-oldest)
-        self._chains = ChainLog(window_s=window_s)            # 메시지 단위 체인 로그
+        # 메시지 단위 체인 로그. epoch_of=공개 ts 변환기(단조→epoch s, server.py 주입) —
+        # 내부 윈도 클럭은 단조 유지, 뷰어/도구 공개 항목만 epoch 로 나간다.
+        self._chains = ChainLog(window_s=window_s, epoch_of=epoch_of)
         self._chain_updates: dict[int, dict] = {}             # SSE 발행용 변경분(id→최신 사본)
         # SSM포트별 그룹 귀속 멤버십: {ssm_port: {unid: {device_type, local_port, last_ts}}}.
         # correlator 가 (UnID,Unique)+시간창으로 짝지은 rx-완료 홉(rx_port=SSM, src_port=leaf)에서 누적.

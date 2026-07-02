@@ -118,10 +118,14 @@ class ChainLog:
     """메시지 키별 체인 로그를 유지하는 순수 stateful 엔진."""
 
     def __init__(self, window_s: float = 15.0, max_entries: int = 300,
-                 max_active: int = 500) -> None:
+                 max_active: int = 500, epoch_of=None) -> None:
         self._window = window_s
         self._max_entries = max_entries
         self._max_active = max_active
+        # 공개 ts 변환기(단조시각→epoch s). 서버가 observe ts 로 time.monotonic 을 주입하므로
+        # 뷰어 점프 앵커(버퍼 wall-clock HH:MM:SS 와 30s 근접 비교) 계약을 지키려면 변환이 필요.
+        # None 이면 무변환(테스트·epoch 주입 호출자). 내부 윈도 클럭(_first_ts/_last_ts)은 원본 유지.
+        self._epoch_of = epoch_of
         self._next_id = 1
         self._active: "OrderedDict[tuple, dict]" = OrderedDict()
         self._entries: deque = deque()
@@ -573,8 +577,7 @@ class ChainLog:
             if self._active.get(old.get("key")) is old:
                 self._active.pop(old.get("key"), None)
 
-    @staticmethod
-    def _public(ent: dict) -> dict:
+    def _public(self, ent: dict) -> dict:
         nodes = [dict(n) for n in ent.get("nodes", [])]
         for node in nodes:
             node["inferred"] = bool(node.get("inferred"))
@@ -582,6 +585,9 @@ class ChainLog:
             group = ent.get("group")
             nodes.insert(0, _node(name=None, port=group, role="src",
                                   resolved=group is not None, inferred=True))
+        ts = ent.get("_first_ts")
+        if self._epoch_of is not None and ts is not None:
+            ts = self._epoch_of(ts)       # 단조시각→epoch s (서버 주입 변환기)
         return {
             "id": ent["id"],
             "key": list(ent["key"]),
@@ -594,5 +600,5 @@ class ChainLog:
             "confidence": ent.get("confidence"),
             "rtt_ms": ent.get("rtt_ms"),
             "complete": bool(ent.get("complete")),
-            "ts": ent.get("_first_ts"),   # 첫 관측 시각(서버 도착, epoch s) — 뷰어 점프의 시각 앵커
+            "ts": ts,                     # 첫 관측 시각(epoch s) — 뷰어 점프의 시각 앵커
         }
