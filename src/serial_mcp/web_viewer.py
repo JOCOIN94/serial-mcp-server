@@ -1225,7 +1225,9 @@ function edgeSegments(placed, edges) {
   for (var j = 0; j < es.length; j++) {
     var e = es[j] || {}, a = byPort[e.from], b = byPort[e.to];
     if (!a || !b || e.from === e.to) continue;
-    out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, rssi: e.rssi, fresh: e.fresh });
+    // source = rssi 출처(ladder): route_link/reprssi=링크별, info_rssi/info_table_rf=장비 평균.
+    out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, rssi: e.rssi, fresh: e.fresh,
+               source: e.rssi_source || null });
   }
   return out;
 }
@@ -1272,13 +1274,14 @@ function hopColor(hop) {
   return "#e3b341";                                    // unconfirmed/inferred/observed = 미확정
 }
 
-/* 홉 → 디테일 패널 모델(순수). 경로 칩(path, 없으면 src_name 폴백)·성패·confidence·RTT·색.
+/* 홉 → 디테일 패널 모델(순수). 경로 칩: path → src_name → src_port 폴백(hopWaypoints 의
+   시작점 폴백과 같은 사슬 — 펄스는 그려지는데 패널만 비는 불일치 방지).
    ⚠️ 홉엔 시각(ts)이 없다 — 순서/시간차 표현 금지, ok·confidence 로만 상태 판단(#1 제약).
    segments/quality 는 correlator _emit 에 없어 다루지 않는다(있는 필드만). */
 function hopDetail(hop) {
   if (!hop) return null;
   var path = (hop.path && hop.path.length) ? hop.path.slice()
-             : (hop.src_name ? [hop.src_name] : []);
+             : (hop.src_name ? [hop.src_name] : (hop.src_port ? [hop.src_port] : []));
   var status = hop.ok ? "ok" : (hop.confidence === "timeout" ? "fail" : "pending");
   var rttNum = Number(hop.rtt_ms);
   var rtt = (hop.rtt_ms != null && hop.rtt_ms !== "" && !isNaN(rttNum)) ? Math.round(rttNum) + "ms" : null;
@@ -1391,11 +1394,18 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     if (!segs.length) return null;
     const svg = svgEl("svg", { "class": "tedges", width: lay.w, height: lay.h });
     for (const s of segs) {
-      svg.appendChild(svgEl("line", {
+      const ln = svgEl("line", {
         x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2,
         stroke: SV.rssiColor(s.rssi), "stroke-width": "2",
         "stroke-opacity": s.fresh === false ? "0.3" : "0.85", "stroke-linecap": "round",
-      }));
+      });
+      if (s.rssi != null) {                     // 출처 툴팁 — 링크별(route_link/reprssi) vs 장비평균 구분
+        ln.style.pointerEvents = "stroke";      // .tedges 는 pointer-events:none — 선 획만 hover 허용
+        const t = svgEl("title", {});
+        t.textContent = "RSSI " + s.rssi + " dBm" + (s.source ? " · " + s.source : "");
+        ln.appendChild(t);
+      }
+      svg.appendChild(ln);
     }
     return svg;
   }
@@ -1494,6 +1504,11 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     const s = JSON.stringify(roster) + "|" + (session || "") + "|" + (active || "");
     if (s === lastSig) return;
     lastSig = s;
+    // 진행 중 홉 펄스(.thop)를 그룹 인덱스별로 건져뒀다가 재렌더 후 새 canvas 에 이식한다 —
+    // SSE 홉 → 400ms 디바운스 재조회가 로스터 변경(rssi 등)과 겹치면 전체 재렌더(innerHTML="")가
+    // 1.1s 펄스를 중간 사멸시키는 문제 방지. 배치는 로스터 절대배치라 같은 그룹 인덱스면 좌표
+    // 유지(그룹 구성이 바뀐 순간의 펄스는 best-effort — 수명 1.6s 라 무해).
+    const liveHops = _groupViews.map(v => Array.from(v.canvas.querySelectorAll("svg.thop")));
     root.innerHTML = "";
     _groupViews = [];                                // 재렌더 — 이전 그룹뷰 폐기(스테일 canvas 참조 방지)
     root.appendChild(buildSession(session, allPorts(roster), onRelease));
@@ -1506,6 +1521,10 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
       groups.forEach((g, i) => wrap.appendChild(renderGroup(g, i, active, onSelect)));
     }
     root.appendChild(wrap);
+    liveHops.forEach((svgs, i) => {                  // 펄스 이식(rAF 루프가 같은 요소를 계속 구동)
+      const v = _groupViews[i];
+      if (v) for (const sv of svgs) v.canvas.appendChild(sv);
+    });
   };
 
   // ── 홉 경로 애니메이션(모듈8 ②) ──
