@@ -92,10 +92,16 @@ def test_leaf_tx_variants_are_tx_events():
         '[Tx_REQRESP] {"UnID":5,"Unique":20}',
         '[WiFi_Tx-PendingRFTimeout] {"UnID":5,"Unique":21}',
         'ForceQuit_Tx {"UnID":5,"Unique":22}',
+        # Tx 뒤 숫자·_ 변형(SB_ESP32.ino 실태그) — \b 정규식이 놓치던 계열.
+        '[WiFi_Tx8] {"UnID":5,"Unique":23}',
+        '[WiFi_Tx11-Hybrid] {"UnID":5,"Unique":24}',
+        '[WiFi_Tx_CODE] {"UnID":5,"Unique":25}',
+        '[WiFi_Tx_CuID] {"UnID":5,"Unique":26}',
+        '[WiFi_Tx_ResonseOfBinCmd] {"UnID":5,"Unique":27}',
     ]
     evs = _run(lines)
     assert [e["kind"] for e in evs] == ["tx"] * len(lines)
-    assert [e["ids"]["unique"] for e in evs] == [16, 17, 18, 19, 20, 21, 22]
+    assert [e["ids"]["unique"] for e in evs] == list(range(16, 28))
 
 
 def test_proc_wifitx_stays_wifitx_not_leaf_tx():

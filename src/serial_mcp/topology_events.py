@@ -24,7 +24,9 @@ _HEADERS = [
     ("rx",     re.compile(r"\[Proc-WiFiRx\]")),
     ("webtx",  re.compile(r"\[Proc-WebRTx\]")),
     ("wifitx", re.compile(r"\[Proc_WiFiTx\]|\[Proc_Alarm\]")),
-    ("tx",     re.compile(r"\[(?:WiFi_)?Tx\b[^\]]*\]|\[Tx_[^\]]*\]|ForceQuit_Tx")),
+    # Tx 뒤가 소문자만 아니면 태그로 본다 — 펌웨어에 [WiFi_Tx8]·[WiFi_Tx_CODE] 처럼
+    # 숫자·_ 가 붙는 변형이 다수라 \b 로는 놓친다(2026-07-02 SB_ESP32.ino 전수 대조).
+    ("tx",     re.compile(r"\[(?:WiFi_)?Tx(?![a-z])[^\]]*\]|ForceQuit_Tx")),
     ("wifirx", re.compile(r"\[WiFi_Rx\]")),
     ("pass",   re.compile(r"\[Data_Pass\]")),
     ("route",  re.compile(r"\[Route\]\s*Link\b")),
