@@ -273,6 +273,11 @@ class ChainLog:
             self._ensure_dst(ent, port, _name_for_port(port, port_names), metrics.get("takentime_ms"))
         if metrics.get("takentime_ms") is not None:
             ent["rtt_ms"] = metrics.get("takentime_ms")
+        if (ent.get("key") or (None,))[0] == "c":
+            # Cidx 키(Unique 없음, ACK류)는 correlator 상관 밖 — RX 관측 자체가 도착 증거다.
+            # 홉이 영영 안 오므로 ok=None(미확정) 고정 대신 여기서 관측 성공으로 표기한다.
+            ent["ok"] = True
+            ent["confidence"] = "observed"
 
     def _observe_pass(self, ent: dict, ev: dict, resolver, port_names: Optional[dict]) -> None:
         port = ev.get("port")

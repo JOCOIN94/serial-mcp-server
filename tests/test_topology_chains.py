@@ -239,6 +239,24 @@ def test_rev_true_wifirx_response_stays_up():
     assert entry["nodes"][0]["inferred"] is True and entry["nodes"][0]["resolved"] is False
 
 
+def test_uplink_cidx_ack_rx_marks_observed_success():
+    # Unique 없이 Cidx만 실린 ACK 상행({"Stat":"OK","Rev":true,"Cidx":N})은 correlator
+    # 상관 밖(키=(ident,Unique) 필수)이다 — SSM RX 관측 자체가 도착 증거이므로
+    # ok=None(미확정) 고정 대신 관측 성공으로 표기한다.
+    log = ChainLog(window_s=10)
+
+    entry = log.observe(
+        ev("rx", "COM4", ts=1.0, unid=5, unique=None, cidx=3028, src_name="SB1",
+           json_obj={"UnID": 5, "Stat": "OK", "Asn": 58, "Rev": True, "Cidx": 3028}),
+        scope={"COM4": "COM4"},
+        port_names={"COM4": "SSM"},
+    )[0]
+
+    assert entry["dir"] == "up"
+    assert entry["ok"] is True
+    assert entry["confidence"] == "observed"
+
+
 def test_rx_observation_corrects_active_down_misclassification():
     log = ChainLog(window_s=10)
     log.observe(
