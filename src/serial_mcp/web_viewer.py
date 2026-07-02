@@ -235,7 +235,7 @@ _HTML = r"""<!DOCTYPE html>
   --ui:   -apple-system, 'Segoe UI', Roboto, system-ui, sans-serif;
 }
 
-* { box-sizing: border-box; }
+* { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
 html { height: 100%; }
 body {
   margin: 0; min-height: 100vh; height: 100vh; overflow: hidden;
@@ -405,7 +405,7 @@ select.board:focus-visible { outline: none; border-color: var(--accent); }
 .row.toggle.on .switch::after { left: 15px; background: #fff; }
 
 /* ============================ LOG AREA ============================ */
-main { padding: 8px 14px 80px; flex: 1 1 auto; min-height: 0;
+main { padding: 8px 14px 0; flex: 1 1 auto; min-height: 0;
        display: flex; flex-direction: column; }
 #stream, #buffer {
   flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-anchor: auto;
@@ -617,27 +617,25 @@ kbd {
 .tgroup { background: var(--bg); border: 1px solid var(--border-2); border-radius: 10px; padding: 12px 12px 14px; }
 .tgroup-num { font: 700 10px var(--ui); letter-spacing: .08em; color: var(--muted); margin: 0 0 6px 2px; }
 .tcanvas { position: relative; }   /* width/height 인라인 — 절대배치 노드 컨테이너 */
-.tedges { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }   /* 링크선 — 노드 뒤·클릭 비간섭 */
-.tedges line { transition: stroke .15s, stroke-width .15s, stroke-opacity .15s; }
-.tedges line.eactive { stroke: #3fb950; stroke-width: 2.5; stroke-opacity: 1; }
-.thop { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }   /* 홉 경로 강조 — 노드 뒤(정적 링크선과 같은 층) */
-/* 체인 로그 패널 — 사이드바 하단 정렬(margin-top:auto), 뷰포트 절반까지. */
-.topohops { font-family: var(--ui); display: flex; flex-direction: column; gap: 5px; padding: 2px; margin-top: auto; max-height: 50vh; overflow-y: auto; overflow-anchor: auto; }
+.tedges { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }   /* 링크선 — 노드 뒤·클릭 비간섭. 통신 플래시는 WAAPI(flashTopologyEdges) */
+/* 체인 로그 패널 — 사이드바 하단 도킹(margin-top:auto + 음수 마진으로 #nav padding 상쇄),
+   뷰포트 절반까지. 로그 영역이므로 포트 로그와 같은 배경(--bg)으로 그래프 섹션과 구분. */
+.topohops { font-family: var(--ui); display: flex; flex-direction: column; background: var(--bg); border-top: 1px solid var(--border); margin: auto -10px -10px; padding: 0 10px 8px; max-height: 50vh; overflow-y: auto; overflow-anchor: auto; }
 .topohops:empty { display: none; }
-.tch-bar { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; background: var(--bg-raised); padding: 2px 0 4px; }
+.tch-bar { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; background: var(--bg); border-bottom: 1px solid var(--border); padding: 6px 0 5px; }
 .tch-bar-title { font: 700 10px var(--ui); letter-spacing: .06em; color: var(--muted); }
 .tch-follow { margin-left: auto; font: 700 11px var(--ui); color: var(--muted); background: var(--bg); border: 1px solid var(--border-2); border-radius: 5px; padding: 0 7px; cursor: pointer; }
-.tch-follow.on { color: #3fb950; border-color: #3fb950; }
+.tch-follow.on { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
 .tch-gno { font: 700 9px var(--ui); color: var(--muted); border: 1px solid var(--border-2); border-radius: 4px; padding: 0 4px; flex: none; white-space: nowrap; }
 .thd-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .thd-status { margin-left: auto; font: 700 10px var(--ui); white-space: nowrap; }
 .thd-ok { color: #3fb950; } .thd-fail { color: #f0786f; } .thd-pending { color: #e3b341; }
 .thd-path { display: flex; flex-wrap: nowrap; align-items: center; gap: 3px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
 .thd-chip { font: 600 11px var(--ui); background: var(--bg-raised); border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 6px; min-width: 64px; max-width: 120px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.thd-chip.dim { color: var(--muted); border-style: dashed; opacity: .72; }
+.thd-chip.dim { color: var(--muted); opacity: .72; }
 .thd-arrow { color: var(--muted); font-size: 10px; }
 .thd-meta { font: 500 10px var(--ui); color: var(--muted); }
-.tch-row { border-left: 2px solid var(--border-2); padding: 3px 0 4px 7px; display: flex; min-width: 0; }
+.tch-row { border-left: 2px solid var(--border-2); margin-top: 5px; padding: 3px 0 4px 7px; display: flex; min-width: 0; }
 .tch-head { display: flex; align-items: center; gap: 6px; min-width: 0; width: 100%; }
 .tch-enter { animation: tchEnter .15s ease-out; }
 @keyframes tchEnter {
@@ -1413,6 +1411,60 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
    VIEWER-PURE-END
    ============================================================================ */
 
+/* SVScroll — 공용 스크롤 헬퍼(체인 로그·포트 로그 공유, DOM 의존이라 VIEWER-PURE 밖).
+   pinBottom: 점프 대신 짧은 rAF 보간으로 바닥까지 스크롤 — 기존 줄이 위로 밀려 올라가는 연출.
+   bindFollow: 팔로우 해제는 사용자 의도 이벤트(휠 위로·드래그 중 바닥 이탈)에서만 일어나고
+   scroll 이벤트는 바닥 복귀 재활성 전용 — 시간 가드 없이 프로그램 스크롤 오인을 원천 차단. */
+"use strict";
+window.SVScroll = (function () {
+  function near(box, px) {
+    return box.scrollHeight - box.scrollTop - box.clientHeight < px;
+  }
+  const _runs = new WeakMap();                     // box → 진행 중 보간 상태(박스당 rAF 루프 1개)
+  function pinBottom(box, dur) {
+    if (!box) return;
+    const target = () => box.scrollHeight - box.clientHeight;
+    // 백그라운드 탭·한 화면 이상 밀림·즉시 요청 — 보간 없이 스냅
+    if (!dur || dur <= 0 || document.hidden || target() - box.scrollTop > box.clientHeight) {
+      const r = _runs.get(box);
+      if (r) r.stop = true;
+      box.scrollTop = target();
+      return;
+    }
+    const run = _runs.get(box);
+    if (run) { run.until = performance.now() + dur; return; }   // 진행 중이면 deadline 연장만 — burst 수렴
+    const st = { until: performance.now() + dur, stop: false };
+    _runs.set(box, st);
+    function step(t) {
+      if (st.stop) { _runs.delete(box); return; }
+      const remain = target() - box.scrollTop;                  // 매 프레임 target 재계산(append 계속돼도 추적)
+      if (remain <= 0.5 || t >= st.until) { box.scrollTop = target(); _runs.delete(box); return; }
+      box.scrollTop += Math.max(1, remain * 0.25);              // ease-out — 잔여의 1/4씩
+      requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+  function bindFollow(box, opts) {
+    let held = false;                              // 스크롤바/터치 드래그 중 — 이때의 바닥 이탈만 사용자 의도
+    box.addEventListener("wheel", e => {
+      if (e.deltaY < 0 && opts.isOn() && box.scrollHeight - box.clientHeight > 1) opts.setOn(false);
+    }, { passive: true });
+    box.addEventListener("mousedown", () => { held = true; });
+    window.addEventListener("mouseup", () => { held = false; });
+    box.addEventListener("touchstart", () => { held = true; }, { passive: true });
+    box.addEventListener("touchend", () => { held = false; });
+    box.addEventListener("scroll", () => {
+      if (near(box, opts.threshold)) {
+        if (!opts.isOn()) opts.setOn(true);        // 바닥 복귀 — 재활성(isOn 가드로 재귀 방지)
+        if (opts.onBottom) opts.onBottom();
+      } else if (held && opts.isOn()) {
+        opts.setOn(false);
+      }
+    });
+  }
+  return { near: near, pinBottom: pinBottom, bindFollow: bindFollow };
+})();
+
 /* board.js — 왼쪽 네비게이션의 포트 상태.
    소유권 모델: AI가 MCP를 호출하면 그 MCP 서버(= 단일 AI 세션)가 모든 포트를 통째로 점유.
    레이아웃: [AI 세션 + 해제] 를 맨 위, 그 아래 H.W 유닛별 박스(SSM, SB, SB1 … 늘어날 수 있음).
@@ -1424,7 +1476,6 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
   let lastSig = "";
   const SV = window.SViewer;                       // 순수 로직(edgeSegments·rssiColor) — VIEWER-PURE 에서 export
   const SVGNS = "http://www.w3.org/2000/svg";
-  let _groupViews = [];                            // 렌더된 그룹 [{canvas, lay}] — 홉 애니메이션이 참조
 
   function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
   function txt(tag, t, cls) { const e = el(tag, cls); e.textContent = t; return e; }
@@ -1476,7 +1527,7 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     wrap.appendChild(txt("div", n.label, "tn-name"));        // 타입/식별 라벨은 노드 밖(위)
     const box = el("div", "tn-box");
     box.style.borderColor = tint(tc, .55);
-    box.style.background = "linear-gradient(0deg," + tint(tc, .1) + "," + tint(tc, .1) + "),var(--bg-raised)";
+    box.style.background = "linear-gradient(0deg," + tint(tc, .1) + "," + tint(tc, .1) + "),rgba(17,21,28,.8)";   // 바닥층 반투명 — 뒤의 엣지선이 은은히 비친다
     const ports = n.ports || [];
     if (ports.some(pt => pt.port === active)) box.classList.add("active");
     for (const pt of ports) {                                // 단일=1칸, SB=2칸(ESP|STM)
@@ -1525,6 +1576,8 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     return svg;
   }
 
+  // 통신 플래시 — 빛처럼 즉시 점등 후 빠르게 소등(280ms). WAAPI 라 연발 통신에도 매번
+  // 재트리거되고(이전 핸들 cancel), 종점은 그 선의 원래 속성값이라 옅은(fresh=false) 선도 원상 복귀.
   window.flashTopologyEdges = function (pairs) {
     const keys = new Set();
     for (const pair of pairs || []) {
@@ -1534,12 +1587,13 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     if (!keys.size) return;
     document.querySelectorAll(".tedges line[data-ekey]").forEach(line => {
       if (!keys.has(line.dataset.ekey)) return;
-      line.classList.add("eactive");
-      if (line._edgeTimer) clearTimeout(line._edgeTimer);
-      line._edgeTimer = setTimeout(() => {
-        line.classList.remove("eactive");
-        line._edgeTimer = null;
-      }, 500);
+      if (line._flashAnim) line._flashAnim.cancel();
+      line._flashAnim = line.animate([
+        { stroke: "#9ecbff", strokeWidth: "1.8", strokeOpacity: "1", offset: 0 },
+        { stroke: "#9ecbff", strokeWidth: "1.8", strokeOpacity: "1", offset: 0.22 },
+        { stroke: line.getAttribute("stroke"), strokeWidth: line.getAttribute("stroke-width"),
+          strokeOpacity: line.getAttribute("stroke-opacity"), offset: 1 },
+      ], { duration: 280, easing: "cubic-bezier(0.2,0,0.4,1)" });
     });
   };
 
@@ -1557,7 +1611,6 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     for (const pl of lay.placed) canvas.appendChild(renderNode(pl, active, onSelect));
     box.appendChild(canvas);
     wrap.appendChild(box);
-    _groupViews.push({ canvas: canvas, lay: lay });   // 홉 애니메이션이 이 canvas·좌표를 참조
     return wrap;
   }
 
@@ -1637,13 +1690,7 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     const s = JSON.stringify(roster) + "|" + (session || "") + "|" + (active || "");
     if (s === lastSig) return;
     lastSig = s;
-    // 진행 중 홉 펄스(.thop)를 그룹 인덱스별로 건져뒀다가 재렌더 후 새 canvas 에 이식한다 —
-    // SSE 홉 → 400ms 디바운스 재조회가 로스터 변경(rssi 등)과 겹치면 전체 재렌더(innerHTML="")가
-    // 1.1s 펄스를 중간 사멸시키는 문제 방지. 배치는 로스터 절대배치라 같은 그룹 인덱스면 좌표
-    // 유지(그룹 구성이 바뀐 순간의 펄스는 best-effort — 수명 1.6s 라 무해).
-    const liveHops = _groupViews.map(v => Array.from(v.canvas.querySelectorAll("svg.thop")));
     root.innerHTML = "";
-    _groupViews = [];                                // 재렌더 — 이전 그룹뷰 폐기(스테일 canvas 참조 방지)
     root.appendChild(buildSession(session, allPorts(roster), onRelease));
     const groups = roster.groups || [], unplaced = roster.unplaced || [];
     const wrap = el("div", "topo");
@@ -1654,75 +1701,19 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
       groups.forEach((g, i) => wrap.appendChild(renderGroup(g, i, active, onSelect)));
     }
     root.appendChild(wrap);
-    liveHops.forEach((svgs, i) => {                  // 펄스 이식(rAF 루프가 같은 요소를 계속 구동)
-      const v = _groupViews[i];
-      if (v) for (const sv of svgs) v.canvas.appendChild(sv);
-    });
   };
-
-  // ── 홉 경로 애니메이션(모듈8 ②) ──
-  // /api/topology/stream 이 준 hop 을 현재 렌더된 그래프 위에 잠깐 강조한다. hop.path(이름) 를
-  // 노드 label 로 매칭(SViewer.hopWaypoints)해 waypoint 를 잇는다. 홉엔 시각이 없으므로 순서·
-  // 시간차는 표현하지 않고 경로와 성패(색)만 보여준다(#1 제약).
-  window.topologyHop = function (hop) {
-    if (!hop || !SV) return;
-    const color = SV.hopColor(hop);
-    for (const view of _groupViews) {
-      const wps = SV.hopWaypoints(view.lay.placed, hop);   // 경로 노드 + 목적지(SSM) — 1홉이든 N홉이든 수용
-      if (wps.length >= 2) animateHopPath(view.canvas, view.lay, wps, color);
-    }
-  };
-
-  function polylineLength(wps) {                    // 대시 애니메이션용 총 길이
-    let d = 0;
-    for (let i = 1; i < wps.length; i++) {
-      const dx = wps[i].x - wps[i - 1].x, dy = wps[i].y - wps[i - 1].y;
-      d += Math.sqrt(dx * dx + dy * dy);
-    }
-    return d;
-  }
-
-  // 경로 폴리라인을 그렸다가(대시가 흐르는 rAF) 끝나면 fade-out 제거. 홉마다 자기 레이어(짧음).
-  function animateHopPath(canvas, lay, wps, color) {
-    const svg = svgEl("svg", { "class": "thop", width: lay.w, height: lay.h });
-    const line = svgEl("polyline", {
-      points: wps.map(w => w.x + "," + w.y).join(" "), fill: "none", stroke: color,
-      "stroke-width": "3", "stroke-linecap": "round", "stroke-linejoin": "round",
-    });
-    svg.appendChild(line);
-    canvas.appendChild(svg);
-    const total = polylineLength(wps) || 1;
-    line.setAttribute("stroke-dasharray", total);
-    const DUR = 1100;
-    let start = null;
-    function step(t) {
-      if (start === null) start = t;
-      const k = Math.min(1, (t - start) / DUR);
-      line.setAttribute("stroke-dashoffset", (total * (1 - k)).toFixed(1));   // 시작→끝으로 그려짐
-      if (k >= 1) {
-        svg.style.transition = "opacity .45s"; svg.style.opacity = "0";
-        setTimeout(() => { if (svg.parentNode) svg.parentNode.removeChild(svg); }, 480);
-        return;
-      }
-      requestAnimationFrame(step);
-    }
-    requestAnimationFrame(step);
-  }
 
   let _chainRows = {};
   let _chainHeader = null;
   let _chainFollowBtn = null;
   let _chainFollow = true;
   let _chainScrollBound = false;
-  let _chainScrollGuard = false;
 
   function chainNearBottom(root) {
-    return root.scrollHeight - root.scrollTop - root.clientHeight < 30;
+    return window.SVScroll.near(root, 30);
   }
   function chainScrollBottom(root) {
-    _chainScrollGuard = true;
-    root.scrollTop = root.scrollHeight;
-    setTimeout(() => { _chainScrollGuard = false; }, 50);
+    window.SVScroll.pinBottom(root, 140);            // 보간 스크롤 — 기존 행이 위로 밀려 올라간다
   }
   function setChainFollow(root, v) {
     _chainFollow = v;
@@ -1732,9 +1723,10 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
   function bindChainScroll(root) {
     if (_chainScrollBound) return;
     _chainScrollBound = true;
-    root.addEventListener("scroll", () => {
-      if (_chainScrollGuard) return;
-      setChainFollow(root, chainNearBottom(root));   // 위로 스크롤=해제, 바닥 복귀=재고정
+    window.SVScroll.bindFollow(root, {               // 해제=사용자 의도 이벤트만, 바닥 복귀=재활성
+      isOn: () => _chainFollow,
+      setOn: v => setChainFollow(root, v),
+      threshold: 30,
     });
   }
   function ensureChainHeader(root) {
@@ -2100,24 +2092,13 @@ function nextMatch(dir) {
 /* ============================ 스트림 (SSE) ============================ */
 let es = null;
 let streamCtx = {};
-let scrollQueued = false;
-let programmaticScroll = false;
 function logBox(tab) { return $(tab || state.tab); }
 function nearBottom(tab) {
   const box = logBox(tab);
-  return !box || box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  return !box || SVScroll.near(box, 60);
 }
 function scrollLogBottom(tab, behavior) {
-  if (scrollQueued) return;
-  scrollQueued = true;
-  requestAnimationFrame(() => {
-    scrollQueued = false;
-    const box = logBox(tab);
-    if (!box) return;
-    programmaticScroll = true;
-    box.scrollTo({ top: box.scrollHeight, behavior: behavior || "auto" });
-    setTimeout(() => { programmaticScroll = false; }, 60);
-  });
+  SVScroll.pinBottom(logBox(tab), behavior === "smooth" ? 320 : 140);   // 보간 스크롤 — 밀어내기 연출
 }
 function trimStreamBox(box) {
   const compensate = !(state.follow && state.tab === "stream");
@@ -2135,6 +2116,7 @@ function connectStream(port) {
   state.port = port;
   state.streamItems = [];
   $("stream").innerHTML = ""; $("buffer").innerHTML = "";
+  _bufSig = "";                                    // 버퍼 비움 — 다음 폴링에서 강제 재렌더
   state.streamLines = 0; state.newCount = 0;
   streamCtx = {};
   $("newpill").classList.remove("show");
@@ -2176,20 +2158,30 @@ function renderStreamAll() {
 function updateStreamCount() { $("cStream").textContent = state.streamLines + "/" + MAX_STREAM; }
 
 /* ============================ 버퍼 (폴링) ============================ */
+let _bufSig = "";                                  // 직전 렌더 시그니처 — 무변경 폴링의 재렌더(깜빡임) 방지
 async function refreshBuffer() {
   if (state.tab !== "buffer" || state.paused || !state.port) return;
   let d;
   try { d = await (await fetch("/api/buffer?port=" + encodeURIComponent(state.port))).json(); }
   catch (e) { return; }
+  const entries = d.entries || [];
+  $("cBuffer").textContent = entries.length + "/" + (d.capacity != null ? d.capacity : "?");
+  const last = entries.length ? entries[entries.length - 1] : null;
+  let total = 0;
+  for (const e of entries) total += e.count || 1;
+  const sig = state.port + "|" + entries.length + "|" + (last ? last.last_ts + "|" + last.count : "") + "|" + total;
+  if (sig === _bufSig) return;                     // 내용 동일 — DOM 재구성 skip
+  _bufSig = sig;
   const box = $("buffer");
+  const st = box.scrollTop;
   box.innerHTML = "";
   const ctx = {};
-  for (const e of d.entries || []) {
-    appendEntry(box, { ts: e.first_ts, text: e.text, count: e.count, firstTs: e.first_ts, lastTs: e.last_ts }, ctx, { noFold: true, noEnter: true });   // 폴링 전체 재렌더 — enter 애니메이션 금지(2초마다 깜빡임 방지)
+  for (const e of entries) {
+    appendEntry(box, { ts: e.first_ts, text: e.text, count: e.count, firstTs: e.first_ts, lastTs: e.last_ts }, ctx, { noFold: true, noEnter: true });   // 폴링 전체 재렌더 — enter 애니메이션 금지
   }
-  $("cBuffer").textContent = (d.entries || []).length + "/" + (d.capacity != null ? d.capacity : "?");
   scheduleRecount();
   if (state.follow && state.tab === "buffer") scrollLogBottom("buffer");
+  else box.scrollTop = st;                         // follow off — 읽던 위치 복원
 }
 setInterval(refreshBuffer, 2000);
 
@@ -2268,9 +2260,9 @@ function scheduleChainRender() {
   _chainRenderTimer = setTimeout(() => { _chainRenderTimer = null; renderChainLogNow(); }, 400);
 }
 
-/* 토폴로지 홉 SSE — 포트 무관 단일 스트림(로그 /api/stream 과 별개). 수신 홉을 그래프 위에
-   애니메이션(window.topologyHop). EventSource 는 끊기면 자동 재연결하므로 onerror 별도 처리
-   불필요. init 에서 1회만 연결한다. */
+/* 토폴로지 홉 SSE — 포트 무관 단일 스트림(로그 /api/stream 과 별개). 수신 홉·체인을 엣지
+   플래시(window.flashTopologyEdges)와 체인 로그로 반영. EventSource 는 끊기면 자동 재연결하므로
+   onerror 별도 처리 불필요. init 에서 1회만 연결한다. */
 let _topoES = null;
 function connectTopologyStream() {
   if (_topoES) return;                                  // 중복 연결 방지(init 1회)
@@ -2285,7 +2277,6 @@ function connectTopologyStream() {
     }
     if (obj && obj.src_port && obj.rx_port && window.flashTopologyEdges)
       window.flashTopologyEdges([[obj.src_port, obj.rx_port]]);
-    if (window.topologyHop) window.topologyHop(obj);
     scheduleTopologyRefresh();                          // 홉 관측 → 링크선도 즉시 갱신(멤버십 실시간)
   };
 }
@@ -2332,6 +2323,7 @@ $("follow").onclick = () => setFollow(!state.follow);
 $("clear").onclick = () => {
   $(state.tab).innerHTML = "";
   if (state.tab === "stream") { state.streamItems = []; streamCtx = {}; state.streamLines = 0; updateStreamCount(); }
+  else _bufSig = "";                               // 버퍼 비움 — 다음 폴링에서 강제 재렌더
   recount();
 };
 
@@ -2397,10 +2389,11 @@ function toggleVariants(ln) {
 $("newpill").onclick = () => { setTab("stream"); setFollow(true); };
 function bindLogScroll(name) {
   const box = $(name);
-  box.addEventListener("scroll", () => {
-    if (programmaticScroll || state.tab !== name) return;
-    if (!nearBottom(name) && state.follow) setFollow(false, { noScroll: true });
-    if (nearBottom(name)) { state.newCount = 0; $("newpill").classList.remove("show"); }
+  SVScroll.bindFollow(box, {                       // 해제=사용자 의도 이벤트만, 바닥 복귀=자동 재활성
+    isOn: () => state.follow && state.tab === name,
+    setOn: v => { if (state.tab === name) setFollow(v, v ? undefined : { noScroll: true }); },
+    threshold: 60,
+    onBottom: () => { state.newCount = 0; $("newpill").classList.remove("show"); },
   });
 }
 bindLogScroll("stream");
@@ -2522,7 +2515,7 @@ document.addEventListener("keydown", e => {
 async function init() {
   await refreshStatus();
   await refreshTopology();
-  connectTopologyStream();       // 홉 SSE 구독 — 경로 애니메이션(모듈8 ②)
+  connectTopologyStream();       // 홉 SSE 구독 — 엣지 플래시·체인 로그 갱신
   recount();
 }
 init();
