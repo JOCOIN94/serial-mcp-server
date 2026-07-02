@@ -1,5 +1,7 @@
 # ChainLog — 홉 체인 로그("최근 홉" 개편) 구현 핸드오프 (2026-07-02)
 
+> 상태(2026-07-02): 구현 완료 — `ChainLog`, 엔진/서버 배선, `recent_chains`, 뷰어 체인 로그, 테스트·문서 갱신.
+
 > **▶ 새 세션/에이전트 진입점 (자족적 맥락 캡슐).** 이 문서만 읽고 대화 맥락 없이 구현할 수
 > 있게 쓴다. 선행 맥락: `docs/plans/2026-07-02-peerlinks-universal-correlation.md`(범용 포트쌍
 > 상관·펌웨어 태그 전수), `docs/plans/2026-07-01-topology-link-unique-txrx.md`(링크=관측 원칙).

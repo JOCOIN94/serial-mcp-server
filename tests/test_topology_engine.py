@@ -189,10 +189,11 @@ def test_roster_and_recent_hops_returns_matching_snapshots():
     eng.flush()
     entries = _ssm_entries()
 
-    roster, hops = eng.roster_and_recent_hops(entries, now=10.0, n=10)
+    roster, hops, chains = eng.roster_and_recent_hops(entries, now=10.0, n=10, chains_n=10)
 
     assert roster == eng.roster(entries, now=10.0)
     assert hops == eng.recent_hops(10)
+    assert chains == eng.recent_chains(10)
 
 
 def test_roster_and_recent_hops_edge_and_hop_consistent():
@@ -206,22 +207,65 @@ def test_roster_and_recent_hops_edge_and_hop_consistent():
         {"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
         {"port": "COM14", "alias": "SB1-ESP", "lines": [], "connected": True},
     ]
-    roster, hops = eng.roster_and_recent_hops(entries, now=2.0, n=10)
+    roster, hops, chains = eng.roster_and_recent_hops(entries, now=2.0, n=10, chains_n=10)
 
     h = next(h for h in hops if h["key"] == (5, 25))
     assert h["ok"] is True and h["src_port"] == "COM14" and h["rx_port"] == "COM4"
     assert any(e["from"] == "COM14" and e["to"] == "COM4" for e in roster["groups"][0]["edges"])
+    c = next(c for c in chains if c["key"] == ["u", 5, 25])
+    assert [n["port"] for n in c["nodes"]] == ["COM14", "COM4"]
+    assert c["ok"] is True and c["rtt_ms"] is None
+
+
+def test_drain_chain_updates_is_one_shot():
+    eng = TopologyEngine()
+    eng.observe("COM14", 1.0, '[Tx - my INFO] {"UnID":5,"Unique":25,"INFO":["4","SB5",-40]}')
+
+    updates = eng.drain_chain_updates()
+
+    assert len(updates) == 1
+    assert updates[0]["key"] == ["u", 5, 25]
+    assert updates[0]["nodes"][0]["port"] == "COM14"
+    assert eng.drain_chain_updates() == []
+
+
+def test_sweep_timeout_hop_is_applied_to_chain_update():
+    eng = TopologyEngine(window_s=1.0)
+    eng.observe("COM4", 0.0, '[Proc-WiFiRx] {"UnID":5,"Unique":1,"INFO":["4"]}')
+    eng.observe("COM4", 0.1, '[Proc-WiFiRx] {"UnID":5,"Unique":99,"INFO":["4"]}')  # 앞 rx flush
+    eng.observe("COM14", 1.0, '[Tx - my INFO] {"UnID":5,"Unique":2,"INFO":["4","SB5"]}')
+    eng.observe("COM14", 1.1, '[Tx - my INFO] {"UnID":5,"Unique":3,"INFO":["4","SB5"]}')
+    eng.drain_chain_updates()
+
+    eng.sweep(now=5.0)
+    updates = eng.drain_chain_updates()
+
+    chain = next(c for c in updates if c["key"] == ["u", 5, 2])
+    assert chain["ok"] is False
+    assert chain["confidence"] == "timeout"
+    assert chain["complete"] is True
+
+
+def test_forget_port_completes_recent_chain():
+    eng = TopologyEngine()
+    eng.observe("COM14", 1.0, '[Tx - my INFO] {"UnID":5,"Unique":25,"INFO":["4","SB5"]}')
+
+    eng.forget_port("COM14")
+
+    assert eng.recent_chains(1)[0]["complete"] is True
 
 
 def test_roster_and_recent_hops_zero_or_negative_hops_empty():
     eng = TopologyEngine()
     _feed(eng, "COM4", SSM_RX_BLOCK, t0=1.0)
 
-    _, zero_hops = eng.roster_and_recent_hops(_ssm_entries(), now=10.0, n=0)
-    _, negative_hops = eng.roster_and_recent_hops(_ssm_entries(), now=10.0, n=-1)
+    _, zero_hops, zero_chains = eng.roster_and_recent_hops(_ssm_entries(), now=10.0, n=0, chains_n=0)
+    _, negative_hops, negative_chains = eng.roster_and_recent_hops(_ssm_entries(), now=10.0, n=-1, chains_n=-1)
 
     assert zero_hops == []
     assert negative_hops == []
+    assert zero_chains == []
+    assert negative_chains == []
 
 
 def test_roster_matches_atomic_roster_part_after_delegation():
@@ -230,9 +274,10 @@ def test_roster_matches_atomic_roster_part_after_delegation():
     eng.flush()
     entries = _ssm_entries()
 
-    atomic_roster, hops = eng.roster_and_recent_hops(entries, now=10.0, n=0)
+    atomic_roster, hops, chains = eng.roster_and_recent_hops(entries, now=10.0, n=0, chains_n=0)
 
     assert hops == []
+    assert chains == []
     assert eng.roster(entries, now=10.0) == atomic_roster
 
 
@@ -248,12 +293,13 @@ def test_roster_and_recent_hops_builds_roster_outside_engine_lock(monkeypatch):
 
     monkeypatch.setattr(topology_engine, "build_roster", fake_build_roster)
 
-    roster, hops = eng.roster_and_recent_hops(_ssm_entries(), now=10.0, n=10)
+    roster, hops, chains = eng.roster_and_recent_hops(_ssm_entries(), now=10.0, n=10, chains_n=10)
 
     assert locked_during_build == [False]
     assert roster["groups"][0]["edges"]
     assert roster["groups"][0]["peer_links"] == []
     assert hops == eng.recent_hops(10)
+    assert chains == eng.recent_chains(10)
 
 
 # ---- sweep: 만료 pending(TX-without-RX) ----

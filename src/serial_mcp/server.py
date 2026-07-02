@@ -340,7 +340,9 @@ _TOPOLOGY_HOPS_CAVEAT = (
     "recent_hops 는 최신순(끝이 가장 최근)이며 시각(timestamp)을 제공하지 않는다 — 의도적이다. "
     "펌웨어가 sendMessage 후 [Tx] 를 출력하고 포트별 도착 지터가 있어 RX 가 TX 보다 먼저 관측될 "
     "수 있으니, 홉의 나열·도착 순서로 송수신 인과나 시간차를 추론하지 마라. 경로·성공·실패·미확정은 "
-    "각 홉의 path·ok·confidence(키 상관 결과)로만 판단하라."
+    "각 홉의 path·ok·confidence(키 상관 결과)로만 판단하라. recent_chains 의 id/나열 순서는 "
+    "로그 표시용이며 시각이 아니다. 체인 내 노드 순서는 ordered=true 일 때만 [Passed Device]/Rt "
+    "근거의 경로 순서다."
 )
 
 
@@ -544,6 +546,7 @@ def _topology_observe(port: str, text: str) -> None:
         return
     try:
         _publish_topology_hops(eng.observe(port, time.monotonic(), text))
+        _publish_topology_chains(eng.drain_chain_updates())
     except Exception as e:  # noqa: BLE001 - 토폴로지 실패는 코어로 전파 금지
         _log(f"topology observe 오류({port}): {e!r}")
 
@@ -573,6 +576,18 @@ def _publish_topology_hops(hops) -> None:
             _topology_feed.publish(ts, hop)
     except Exception as e:  # noqa: BLE001 - 뷰어 보조기능 실패가 관측 경로를 막으면 안 됨
         _log(f"topology stream publish 오류: {e!r}")
+
+
+def _publish_topology_chains(updates) -> None:
+    """TopologyEngine chain 변경분을 뷰어 SSE feed로 발행한다(논블로킹·실패 격리)."""
+    if not updates:
+        return
+    try:
+        ts = datetime.now()
+        for entry in updates:
+            _topology_feed.publish(ts, {"chain": entry})
+    except Exception as e:  # noqa: BLE001 - 뷰어 보조기능 실패가 관측 경로를 막으면 안 됨
+        _log(f"topology chain stream publish 오류: {e!r}")
 
 
 def _bootstrap_due(now: float, owner_ts: float, boot_window_s: float, sent: set,
@@ -625,6 +640,7 @@ def _topology_loop(interval: float, stop: threading.Event, bootstrap_enabled: bo
             eng = _topology_engine
             if eng is not None:
                 _publish_topology_hops(eng.sweep(time.monotonic()))
+                _publish_topology_chains(eng.drain_chain_updates())
             if bootstrap_enabled:
                 _topology_bootstrap_tick()
         except Exception as e:  # noqa: BLE001 - 데몬 루프 보호
@@ -1080,10 +1096,11 @@ def get_serial_status(port: str = "", ctx: Optional[Context] = None) -> dict:
 def get_topology(ctx: Optional[Context] = None) -> dict:
     """[언제 호출] 메시/멀티포트 장비에서 "어느 보드가 어디로 지나갔는지"를
     해석하기 전에 호출한다. AI가 웹 뷰어를 보지 않고도 SSM/Repeater/APU/SB
-    로스터와 최근 홉 경로를 한 번에 읽는 전 포트 스냅샷 도구다.
+    로스터, 최근 홉, 최근 체인 로그를 한 번에 읽는 전 포트 스냅샷 도구다.
 
     [무엇을 반환] roster 는 현재 포트 로그와 routing 관측으로 만든 그룹/노드/엣지
     구조이고, recent_hops 는 최근 20개 실제 경로 후보/성공/실패/미확정 요약이다.
+    recent_chains 는 같은 메시지 키의 관측을 병합한 최근 체인 로그다.
     이 도구는 전 포트 토폴로지를 반환하므로 port 인자를 받지 않는다. 포트별 원문은
     get_recent_logs/query_serial_logs 로 이어서 확인하라.
 
@@ -1097,25 +1114,30 @@ def get_topology(ctx: Optional[Context] = None) -> dict:
     """
     busy = _ensure_owner(ctx)
     if busy:
-        return {**busy, "roster": {"groups": [], "unplaced": []}, "recent_hops": []}
+        return {**busy, "roster": {"groups": [], "unplaced": []},
+                "recent_hops": [], "recent_chains": []}
 
     eng = _topology_engine
     try:
         if eng is not None:
-            roster, recent_hops = eng.roster_and_recent_hops(
-                _topology_entries(), now=time.monotonic(), n=20)
+            roster, recent_hops, recent_chains = eng.roster_and_recent_hops(
+                _topology_entries(), now=time.monotonic(), n=20, chains_n=20)
         else:
-            roster, recent_hops = build_roster(_topology_entries()), []
+            roster, recent_hops, recent_chains = build_roster(_topology_entries()), [], []
     except Exception as e:  # noqa: BLE001 - 토폴로지 보조 조회 실패는 빈 스냅샷으로 격리
         _log(f"topology 스냅샷 생성 실패: {e!r}")
-        roster, recent_hops = {"groups": [], "unplaced": []}, []
+        roster, recent_hops, recent_chains = {"groups": [], "unplaced": []}, [], []
 
     groups = roster.get("groups", []) if isinstance(roster, dict) else []
     return {
         "status": "ok",
-        "message": f"토폴로지 그룹 {len(groups)}개, 최근 홉 {len(recent_hops)}개",
+        "message": (
+            f"토폴로지 그룹 {len(groups)}개, 최근 홉 {len(recent_hops)}개, "
+            f"최근 체인 {len(recent_chains)}개"
+        ),
         "roster": roster,
         "recent_hops": recent_hops,
+        "recent_chains": recent_chains,
         "hops_caveat": _TOPOLOGY_HOPS_CAVEAT,   # 시각 순서로 인과 추론 금지(AI 오용 방지)
         "viewer_url": _viewer_url(),
     }
@@ -1481,11 +1503,13 @@ def _viewer_topology_info() -> dict:
         entries = _topology_entries()
         eng = _topology_engine
         if eng is not None:
-            return eng.roster(entries, now=time.monotonic())   # routing enrich(edges·원격노드)
-        return build_roster(entries)
+            roster, _hops, chains = eng.roster_and_recent_hops(
+                entries, now=time.monotonic(), n=0, chains_n=30)
+            return {**roster, "chains": chains}   # routing enrich(edges·원격노드) + 체인 seed
+        return {**build_roster(entries), "chains": []}
     except Exception as e:   # noqa: BLE001 - 뷰어 보조기능: 어떤 실패도 코어로 전파 금지
         _log(f"토폴로지 로스터 생성 실패: {e}")
-        return {"groups": [], "unplaced": []}
+        return {"groups": [], "unplaced": [], "chains": []}
 
 
 def _viewer_release_port(port: str) -> dict:

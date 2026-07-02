@@ -80,6 +80,23 @@ def test_api_status_returns_port_array(viewer):
     assert "released" not in d["ports"][1]
 
 
+def test_api_topology_returns_chains_key():
+    v = ViewerServer(
+        ports_info=lambda: [],
+        feed_for=lambda p: None,
+        buffer_info=lambda p: {},
+        status_info=lambda: {"ports": []},
+        topology_info=lambda: {"groups": [], "unplaced": [], "chains": [{"id": 1}]},
+        port=0,
+    )
+    v.start()
+    try:
+        d = _get_json(v.url + "/api/topology")
+    finally:
+        v.stop()
+    assert d["chains"] == [{"id": 1}]
+
+
 def test_api_buffer_routes_by_port(viewer):
     v, _, _ = viewer
     assert _get_json(v.url + "/api/buffer?port=COM_B")["port"] == "COM_B"
@@ -155,6 +172,31 @@ def test_topology_stream_sse_publishes_hop():
             line = resp.readline().decode("utf-8")
             payload = json.loads(line[len("data: "):])
             assert payload == hop
+        finally:
+            resp.close()
+    finally:
+        v.stop()
+
+
+def test_topology_stream_sse_publishes_chain_payload():
+    feed = RawFeed()
+    v = ViewerServer(
+        ports_info=lambda: [],
+        feed_for=lambda p: None,
+        buffer_info=lambda p: {},
+        status_info=lambda: {"ports": []},
+        topology_feed=feed,
+        port=0,
+    )
+    v.start()
+    try:
+        resp = urllib.request.urlopen(v.url + "/api/topology/stream", timeout=5)
+        try:
+            chain = {"chain": {"id": 1, "key": ["u", 5, 9], "nodes": []}}
+            feed.publish(BASE, chain)
+            line = resp.readline().decode("utf-8")
+            payload = json.loads(line[len("data: "):])
+            assert payload == chain
         finally:
             resp.close()
     finally:

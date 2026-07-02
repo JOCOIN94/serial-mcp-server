@@ -6,7 +6,8 @@
   홉을 방출하고 히스토리에 적재.
   sweep(now) → 유휴 pending 블록 flush + correlator 만료 처리(TX-without-RX).
   roster(entries) → routing 을 얹은 로스터 스냅샷. recent_hops(n) → 최근 홉(get_topology 용).
-  roster_and_recent_hops(entries,n) → 로스터 routing 스냅샷과 최근 홉을 같은 Lock 세션에서 캡처.
+  recent_chains(n) → 메시지 단위 체인 로그. roster_and_recent_hops(entries,n,chains_n) →
+  로스터 routing 스냅샷과 최근 홉/체인을 같은 Lock 세션에서 캡처.
 
 리더 스레드(observe)·도구 호출(roster/recent_hops)·sweep 타이머가 공유 상태에 동시 접근하므로
 단일 Lock 으로 보호한다(AGENTS.md 버퍼/공유상태 Lock). 윈도 클럭은 **서버 도착 단조시각 ts**
@@ -21,6 +22,7 @@ from collections import deque
 from typing import Optional
 
 from .topology import build_roster
+from .topology_chains import ChainLog
 from .topology_correlator import Correlator
 from .topology_events import EventAssembler
 from .topology_pairing import CardPairing
@@ -63,12 +65,16 @@ class TopologyEngine:
         self._correlator = Correlator(window_s=window_s)
         self._routing = RoutingTable()
         self._hops: deque = deque(maxlen=hop_history)         # 최근 홉(상한·drop-oldest)
+        self._chains = ChainLog(window_s=window_s)            # 메시지 단위 체인 로그
+        self._chain_updates: dict[int, dict] = {}             # SSE 발행용 변경분(id→최신 사본)
         # SSM포트별 그룹 귀속 멤버십: {ssm_port: {unid: {device_type, local_port, last_ts}}}.
         # correlator 가 (UnID,Unique)+시간창으로 짝지은 rx-완료 홉(rx_port=SSM, src_port=leaf)에서 누적.
         self._membership: dict = {}
         self._peerlinks = PeerLinks(window_s=window_s)
         self._peer_scope_cache: dict = {}
         self._peer_scope_dirty = True
+        self._names_cache: dict = {}
+        self._names_dirty = True
         # 카드상관 페어링: STM 은 베이번호를 안 흘려서, 카드 sCuID+UnID 로 포트→베이를 잇는다(build_roster 번호 폴백).
         self._pairing = CardPairing()
 
@@ -82,6 +88,7 @@ class TopologyEngine:
             self._last_ts[port] = ts
             self._pairing.observe(port, ts, text)     # 카드 sCuID 상관(포트→베이) 라이브 급전
             self._routing.observe_table_line(port, ts, text)   # SSM INFO 테이블 행(mac 다리) 급전
+            self._names_dirty = True
             return self._drain(asm.feed(ts, text), ts)
 
     def forget_port(self, port: str) -> None:
@@ -95,12 +102,14 @@ class TopologyEngine:
         with self._lock:
             self._pairing.forget_port(port)
             self._peerlinks.forget_port(port)
+            self._chains.forget_port(port)
             self._membership.pop(port, None)          # 이 포트가 SSM(rx_port)이던 그룹 멤버십 제거
             for members in self._membership.values():  # 이 포트를 leaf 로컬포트로 갖던 매핑 무효화
                 for ent in members.values():
                     if ent.get("local_port") == port:
                         ent["local_port"] = None
             self._peer_scope_dirty = True
+            self._names_dirty = True
 
     def sweep(self, now: float, flush_idle_s: float = 2.0) -> list:
         """유휴 pending 블록 flush + correlator 만료 처리. 새 홉 리스트 반환.
@@ -114,7 +123,10 @@ class TopologyEngine:
             for port, asm in list(self._assemblers.items()):
                 if now - self._last_ts.get(port, now) >= flush_idle_s:
                     flushed += self._drain(asm.flush(), now)   # _drain 이 이미 _hops 에 적재함
+            self._record_chain_updates(self._chains.sweep(now))
             swept = self._correlator.sweep(now)
+            for hop in swept:
+                self._record_chain_update(self._chains.apply_hop(hop))
             self._hops.extend(swept)                      # correlator.sweep 분만 추가 적재
             return flushed + swept
 
@@ -126,8 +138,9 @@ class TopologyEngine:
                 new += self._drain(asm.flush())
             return new
 
-    def roster_and_recent_hops(self, entries, now: Optional[float] = None, n: int = 20) -> tuple[dict, list]:
-        """로스터용 routing 스냅샷과 최근 홉을 한 Lock 세션에서 캡처해 반환한다.
+    def roster_and_recent_hops(self, entries, now: Optional[float] = None, n: int = 20,
+                               chains_n: int = 0) -> tuple[dict, list, list]:
+        """로스터용 routing 스냅샷과 최근 홉/체인을 한 Lock 세션에서 캡처해 반환한다.
 
         _drain 은 같은 Lock 안에서 routing/peerlinks/correlator 를 갱신하고 홉을 적재하므로,
         routing 스냅샷과 _hops tail 을 함께 뜨면 recent_hops 에만 있는 링크 skew 를 피할 수 있다.
@@ -140,12 +153,13 @@ class TopologyEngine:
             pairing = self._pairing.snapshot()
             peer_links = self._peerlinks.snapshot(now)
             hops = [] if n <= 0 else list(self._hops)[-n:]
+            chains = self._chains.recent(chains_n)
         return build_roster(entries, routing=snap, membership=membership, pairing=pairing,
-                            peer_links=peer_links, now=now), hops
+                            peer_links=peer_links, now=now), hops, chains
 
     def roster(self, entries, now: Optional[float] = None) -> dict:
         """관측된 routing(링크그래프·토큰맵)을 얹은 로스터 스냅샷. 읽기 전용."""
-        roster, _ = self.roster_and_recent_hops(entries, now=now, n=0)
+        roster, _, _ = self.roster_and_recent_hops(entries, now=now, n=0, chains_n=0)
         return roster
 
     def recent_hops(self, n: int = 20) -> list:
@@ -154,6 +168,18 @@ class TopologyEngine:
             if n <= 0:
                 return []
             return list(self._hops)[-n:]
+
+    def recent_chains(self, n: int = 30) -> list:
+        """최근 체인 로그 n개(get_topology·뷰어 seed용). id 오름차순 tail."""
+        with self._lock:
+            return self._chains.recent(n)
+
+    def drain_chain_updates(self) -> list:
+        """관측 이후 변경된 체인 항목을 한 번만 반환한다(SSE 발행용)."""
+        with self._lock:
+            out = [self._chain_updates[k] for k in sorted(self._chain_updates)]
+            self._chain_updates.clear()
+            return out
 
     def membership_snapshot(self) -> dict:
         """SSM포트별 그룹 귀속 멤버십 사본 {ssm_port: {unid: {device_type, local_port, last_ts}}}.
@@ -179,10 +205,16 @@ class TopologyEngine:
         out: list = []
         for ev in events:
             self._routing.observe(ev)
-            self._peerlinks.observe(ev, self._peer_scope())
+            self._names_dirty = True
+            scope = self._peer_scope()
+            names = self._names()
+            self._record_chain_updates(self._chains.observe(ev, scope, resolver=self._routing,
+                                                            port_names=names))
+            self._peerlinks.observe(ev, scope)
             out += self._correlator.observe(ev)
         for hop in out:
             self._record_membership(hop, ts)
+            self._record_chain_update(self._chains.apply_hop(hop))
         self._hops.extend(out)
         return out
 
@@ -206,6 +238,42 @@ class TopologyEngine:
             "rssi": hop.get("rssi") if hop.get("rssi") is not None else prev.get("rssi"),
         }
         self._peer_scope_dirty = True
+        self._names_dirty = True
+
+    def _record_chain_updates(self, updates: list) -> None:
+        for ent in updates or []:
+            self._record_chain_update(ent)
+
+    def _record_chain_update(self, ent: Optional[dict]) -> None:
+        if ent:
+            self._chain_updates[ent["id"]] = ent
+
+    def _names(self) -> dict:
+        """ChainLog 노드 표기용 {port:name} 캐시."""
+        if not self._names_dirty:
+            return self._names_cache
+        names = {}
+        info = self._routing.info_table()
+        by_mac = info.get("by_mac", {})
+        unid_to_name = {}
+        for ent in self._routing.tokens().values():
+            if ent.get("unid") is not None and ent.get("name"):
+                unid_to_name[ent["unid"]] = ent["name"]
+        for ent in by_mac.values():
+            if ent.get("unid") is not None and ent.get("name"):
+                unid_to_name[ent["unid"]] = ent["name"]
+        for port, mac in (info.get("ssm_mac") or {}).items():
+            ent = by_mac.get(mac) or {}
+            if ent.get("name"):
+                names[port] = ent["name"]
+        for members in self._membership.values():
+            for unid, ent in members.items():
+                lp = ent.get("local_port")
+                if lp and unid in unid_to_name:
+                    names[lp] = unid_to_name[unid]
+        self._names_cache = names
+        self._names_dirty = False
+        return names
 
     def _peer_scope(self) -> dict:
         """PeerLinks 그룹 veto 용 {port:ssm_port} 캐시."""

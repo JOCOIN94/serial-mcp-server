@@ -173,15 +173,19 @@ def test_get_topology_returns_roster_and_recent_hops(monkeypatch, dual):
             self.entries = None
             self.now = None
             self.recent_n = None
+            self.chains_n = None
 
-        def roster_and_recent_hops(self, entries, now=None, n=20):
+        def roster_and_recent_hops(self, entries, now=None, n=20, chains_n=0):
             self.entries = entries
             self.now = now
             self.recent_n = n
+            self.chains_n = chains_n
             return {
                 "groups": [{"id": "group:SSM", "nodes": [{"id": "node:SSM"}], "edges": []}],
                 "unplaced": [],
-            }, [{"id": "hop-1", "path": ["node:SB5", "node:SSM"], "ok": True}]
+            }, [{"id": "hop-1", "path": ["node:SB5", "node:SSM"], "ok": True}], [
+                {"id": 1, "key": ["u", 5, 25], "nodes": [], "dir": "up"}
+            ]
 
     engine = FakeTopologyEngine()
     monkeypatch.setattr(srv, "_topology_engine", engine, raising=False)
@@ -191,9 +195,12 @@ def test_get_topology_returns_roster_and_recent_hops(monkeypatch, dual):
     assert out["status"] == "ok"
     assert out["roster"]["groups"][0]["id"] == "group:SSM"
     assert out["recent_hops"] == [{"id": "hop-1", "path": ["node:SB5", "node:SSM"], "ok": True}]
+    assert out["recent_chains"] == [{"id": 1, "key": ["u", 5, 25], "nodes": [], "dir": "up"}]
     # 시각 순서로 인과 추론을 막는 경고가 응답에 항상 동봉된다(AI 오용 방지 장치).
     assert "추론하지 마라" in out["hops_caveat"]
+    assert "recent_chains" in out["hops_caveat"]
     assert engine.recent_n == 20
+    assert engine.chains_n == 20
     assert engine.now is not None
     assert [entry["port"] for entry in engine.entries] == ["COM_A", "COM_B"]
     assert engine.entries[0]["alias"] == "SSM"
@@ -215,6 +222,23 @@ def test_get_topology_busy_keeps_snapshot_shape(monkeypatch):
     assert out["status"] == "error"
     assert out["roster"] == {"groups": [], "unplaced": []}
     assert out["recent_hops"] == []
+    assert out["recent_chains"] == []
+
+
+def test_viewer_topology_info_includes_chain_seed(monkeypatch, dual):
+    class FakeTopologyEngine:
+        def roster_and_recent_hops(self, entries, now=None, n=20, chains_n=0):
+            return {
+                "groups": [{"id": "group:SSM"}],
+                "unplaced": [],
+            }, [], [{"id": 7, "key": ["u", 5, 9], "nodes": []}]
+
+    monkeypatch.setattr(srv, "_topology_engine", FakeTopologyEngine(), raising=False)
+
+    out = srv._viewer_topology_info()
+
+    assert out["groups"] == [{"id": "group:SSM"}]
+    assert out["chains"] == [{"id": 7, "key": ["u", 5, 9], "nodes": []}]
 
 
 # ---- get_recent_logs / query_serial_logs / get_log_buffer_info ----

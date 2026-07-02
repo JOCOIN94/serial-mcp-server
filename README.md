@@ -15,7 +15,7 @@ ESP32·STM32 등 시리얼로 텍스트 로그를 출력하는 임베디드 보�
 |---|---|
 | `list_serial_ports` | 포트 목록 + VID/PID/description + 별칭 `name` (보드 식별은 별칭으로 — VID/PID는 어댑터 칩 확인용) |
 | `get_serial_status` | 연결 상태 / 포트 / 보드레이트 / 마지막 에러 |
-| `get_topology` | 전 포트 메시 토폴로지 로스터 + 최근 홉 20개(웹 뷰어 없이 AI가 경로 해석) |
+| `get_topology` | 전 포트 메시 토폴로지 로스터 + 최근 홉/체인 로그 20개(웹 뷰어 없이 AI가 경로 해석) |
 | `get_recent_logs(lines=200)` | 최근 N줄 (접힌 묶음 표기 포함) |
 | `query_serial_logs(pattern, max_results=100)` | 정규식 검색 |
 | `get_log_buffer_info` | 버퍼 크기 / 최신·최오래 항목 |
@@ -23,7 +23,7 @@ ESP32·STM32 등 시리얼로 텍스트 로그를 출력하는 임베디드 보�
 | `send_serial_command(command, port="", eol="\n", wait_ms=500)` | 보드 CLI/AT 명령 전송 + 직후 응답 회수(매 호출 승인) |
 | `reset_board(port="", wait_ms=2000)` | DTR/RTS 자동리셋 펄스 + 부팅 로그 회수(매 호출 승인) |
 
-**블랙박스 루프:** `clear_log_buffer` → 가능하면 `reset_board` 승인 후 직접 리셋(거부/미지원/0줄이면 사람이 물리 리셋) → `get_recent_logs` / `query_serial_logs`. 메시/멀티홉 경로를 해석할 때는 `get_topology`로 로스터와 최근 홉을 먼저 확인한다.
+**블랙박스 루프:** `clear_log_buffer` → 가능하면 `reset_board` 승인 후 직접 리셋(거부/미지원/0줄이면 사람이 물리 리셋) → `get_recent_logs` / `query_serial_logs`. 메시/멀티홉 경로를 해석할 때는 `get_topology`로 로스터, 최근 홉, 최근 체인 로그를 먼저 확인한다.
 
 ## 설치
 

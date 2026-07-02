@@ -276,5 +276,61 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   ok(SV.hopDetail({ ok: true, path: ["A"] }).color !== SV.hopDetail({ ok: false, confidence: "timeout", path: ["A"] }).color, "hop-detail-color-differs");
 }
 
+/* ===== 체인 로그 순수로직 — DOM 비의존 ===== */
+
+/* C-1. chainRow: label fallback(name→port→?), meta 생략/결합, dim, 방향/status. */
+{
+  const row = SV.chainRow({
+    id: 41,
+    dir: "up",
+    ordered: true,
+    ok: true,
+    confidence: "observed",
+    nodes: [
+      { name: "SB5", port: "COM14", role: "src", rssi: -71, ms: null, resolved: true },
+      { name: "REP1", port: null, role: "relay", rssi: null, ms: null, resolved: true },
+      { name: null, port: "COM4", role: "dst", rssi: null, ms: 61, resolved: true },
+      { name: null, port: null, role: "relay", rssi: null, ms: null, resolved: false },
+    ],
+    heard: ["COM5"],
+  });
+  eq(row.dirLabel, "보고", "chain-row-dir-up");
+  eq(row.status, "ok", "chain-row-status-ok");
+  eq(row.chips[0].label, "SB5", "chain-row-label-name");
+  eq(row.chips[0].meta, "-71dBm", "chain-row-rssi-meta");
+  eq(row.chips[1].label, "REP1", "chain-row-label-relay");
+  eq(row.chips[1].dim, true, "chain-row-dim-no-port");
+  eq(row.chips[2].label, "COM4", "chain-row-label-port");
+  eq(row.chips[2].meta, "61ms", "chain-row-ms-meta");
+  eq(row.chips[3].label, "?", "chain-row-label-unknown");
+  eq(row.chips[3].dim, true, "chain-row-dim-unresolved");
+  eq(row.heard[0], "COM5", "chain-row-heard");
+  eq(SV.chainRow({ dir: "down", ok: false, confidence: "timeout", nodes: [] }).dirLabel, "하달", "chain-row-dir-down");
+  eq(SV.chainRow({ ok: false, confidence: "timeout", nodes: [] }).status, "fail", "chain-row-status-fail");
+  eq(SV.chainRow({ ok: null, nodes: [] }).status, "pending", "chain-row-status-pending");
+}
+
+/* C-2. chainGroups: group 포트→로스터 라벨 매핑, 미분류, 최신순, cap. */
+{
+  const groups = [
+    { ssm_port: "COM4", nodes: [{ label: "SSM-A", ports: [{ port: "COM4" }] }] },
+    { ssm_port: "COM9", nodes: [{ label: "SSM-B", ports: [{ port: "COM9" }] }] },
+  ];
+  const chains = [
+    { id: 1, group: "COM4", dir: "up", nodes: [{ name: "A" }] },
+    { id: 3, group: "COM4", dir: "up", nodes: [{ name: "C" }] },
+    { id: 2, group: null, dir: "down", nodes: [{ port: "COMX" }] },
+    { id: 4, group: "COM9", dir: "up", nodes: [{ name: "D" }] },
+  ];
+  const out = SV.chainGroups(chains, groups, 1);
+  eq(out[0].label, "SSM-A (COM4)", "chain-groups-label-ssm");
+  eq(out[0].items.length, 1, "chain-groups-cap");
+  eq(out[0].items[0].id, 3, "chain-groups-latest-first");
+  eq(out[1].label, "SSM-B (COM9)", "chain-groups-second-known");
+  eq(out[2].label, "미분류", "chain-groups-unclassified");
+  eq(out[2].items[0].id, 2, "chain-groups-unclassified-item");
+  eq(SV.chainGroups(null, null, 8).length, 0, "chain-groups-null-safe");
+}
+
 if (fails.length) { console.error("FAILURES (" + fails.length + "):\n" + fails.map(f => " - " + f).join("\n")); process.exit(1); }
 console.log("all viewer-logic assertions passed");

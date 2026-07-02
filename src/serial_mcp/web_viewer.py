@@ -608,7 +608,7 @@ kbd {
 .tcanvas { position: relative; }   /* width/height 인라인 — 절대배치 노드 컨테이너 */
 .tedges { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }   /* 링크선 — 노드 뒤·클릭 비간섭 */
 .thop { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }   /* 홉 경로 강조 — 노드 뒤(정적 링크선과 같은 층) */
-.topohops { font-family: var(--ui); display: flex; flex-direction: column; gap: 4px; padding: 2px; }   /* 홉 디테일 패널 */
+.topohops { font-family: var(--ui); display: flex; flex-direction: column; gap: 7px; padding: 2px; max-height: 36vh; overflow-y: auto; }   /* 체인 로그 패널 */
 .topohops:empty { display: none; }
 .thd-head { display: flex; align-items: center; gap: 6px; }
 .thd-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
@@ -617,8 +617,16 @@ kbd {
 .thd-ok { color: #3fb950; } .thd-fail { color: #f0786f; } .thd-pending { color: #e3b341; }
 .thd-path { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
 .thd-chip { font: 600 11px var(--ui); background: var(--bg-raised); border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 6px; }
+.thd-chip.dim { color: var(--muted); border-style: dashed; opacity: .72; }
 .thd-arrow { color: var(--muted); font-size: 10px; }
 .thd-meta { font: 500 10px var(--ui); color: var(--muted); }
+.tch-group { display: flex; flex-direction: column; gap: 4px; }
+.tch-group-title { font: 700 10px var(--ui); letter-spacing: .06em; color: var(--muted); }
+.tch-row { border-left: 2px solid var(--border-2); padding: 4px 0 5px 7px; display: flex; flex-direction: column; gap: 3px; }
+.tch-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.tch-dir { font: 700 10px var(--ui); color: var(--fg); background: var(--bg); border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 5px; }
+.thd-dir-down { color: #8ab4f8; }
+.thd-heard { font: 500 10px var(--ui); color: var(--muted); }
 
 /* 노드 = 라벨(밖·위) + 박스(색). 단일 MCU(SSM/REPEAT/APU/APU_C)는 박스에 ESP 한 칸,
    SB 는 박스를 좌우로 나눠 ESP|STM 두 칸(각 칸이 포트 클릭 타깃·자체 상태점). */
@@ -1291,6 +1299,89 @@ function hopDetail(hop) {
   };
 }
 
+function chainStatus(entry) {
+  if (entry && entry.ok === true) return "ok";
+  if (entry && entry.ok === false && entry.confidence === "timeout") return "fail";
+  return "pending";
+}
+
+function chainRow(entry) {
+  var e = entry || {}, nodes = e.nodes || [], chips = [];
+  for (var i = 0; i < nodes.length; i++) {
+    var n = nodes[i] || {};
+    var label = n.name || n.port || "?";
+    var meta = [];
+    if (n.rssi != null && n.rssi !== "") meta.push(String(n.rssi) + "dBm");
+    if (n.ms != null && n.ms !== "") meta.push(String(n.ms) + "ms");
+    chips.push({
+      label: label,
+      meta: meta.join(" · "),
+      dim: !n.port || n.resolved === false,
+      role: n.role || null,
+    });
+  }
+  var status = chainStatus(e);
+  return {
+    id: e.id,
+    group: e.group || null,
+    dirLabel: e.dir === "down" ? "하달" : "보고",
+    dir: e.dir || "up",
+    status: status,
+    color: hopColor({ ok: e.ok, confidence: e.confidence }),
+    ordered: e.ordered !== false,
+    chips: chips,
+    heard: (e.heard || []).slice(),
+  };
+}
+
+function groupDisplayLabel(g) {
+  if (!g) return null;
+  var ssm = g.ssm_port || null;
+  var base = g.label || g.name || null;
+  var nodes = g.nodes || [];
+  if (ssm) {
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i] || {}, ports = n.ports || [];
+      for (var j = 0; j < ports.length; j++) {
+        if (ports[j] && ports[j].port === ssm && n.label) base = n.label;
+      }
+    }
+    return (base || ssm) + " (" + ssm + ")";
+  }
+  return base || g.id || "미분류";
+}
+
+function chainGroups(chains, groups, cap) {
+  var cs = chains || [], gs = groups || [], limit = cap == null ? 8 : cap;
+  var labels = {}, order = [], buckets = {};
+  for (var i = 0; i < gs.length; i++) {
+    var g = gs[i] || {}, key = g.ssm_port || g.id;
+    if (!key) continue;
+    labels[key] = groupDisplayLabel(g);
+    order.push(key);
+  }
+  for (var j = 0; j < cs.length; j++) {
+    var row = chainRow(cs[j]);
+    var k = row.group || "__unclassified";
+    if (!buckets[k]) buckets[k] = [];
+    buckets[k].push(row);
+    if (k !== "__unclassified" && !labels[k]) {
+      labels[k] = k;
+      order.push(k);
+    }
+  }
+  if (buckets.__unclassified) order.push("__unclassified");
+  var out = [];
+  for (var x = 0; x < order.length; x++) {
+    var key2 = order[x], items = buckets[key2] || [];
+    if (!items.length) continue;
+    items.sort(function (a, b) { return (Number(b.id) || 0) - (Number(a.id) || 0); });
+    if (limit > 0) items = items.slice(0, limit);
+    out.push({ label: key2 === "__unclassified" ? "미분류" : labels[key2], items: items });
+  }
+  return out;
+}
+
 /* ---- export (browser global + node require 양쪽) ---- */
 var SViewer = {
   escapeHtml: escapeHtml, cleanCtrl: cleanCtrl, stripAnsi: stripAnsi,
@@ -1300,7 +1391,8 @@ var SViewer = {
   tsToMs: tsToMs, renderBodyHTML: renderBodyHTML, renderPayloadHTML: renderPayloadHTML,
   decoText: decoText,
   rssiColor: rssiColor, edgeSegments: edgeSegments,
-  hopWaypoints: hopWaypoints, hopColor: hopColor, hopDetail: hopDetail
+  hopWaypoints: hopWaypoints, hopColor: hopColor, hopDetail: hopDetail,
+  chainRow: chainRow, chainGroups: chainGroups
 };
 if (typeof module !== "undefined" && module.exports) module.exports = SViewer;
 if (typeof window !== "undefined") window.SViewer = SViewer;
@@ -1545,7 +1637,6 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
       const wps = SV.hopWaypoints(view.lay.placed, hop);   // 경로 노드 + 목적지(SSM) — 1홉이든 N홉이든 수용
       if (wps.length >= 2) animateHopPath(view.canvas, view.lay, wps, color);
     }
-    renderHopDetail(SV.hopDetail(hop));               // 디테일 패널(경로·성패·RTT) 갱신
   };
 
   function polylineLength(wps) {                    // 대시 애니메이션용 총 길이
@@ -1584,32 +1675,41 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     requestAnimationFrame(step);
   }
 
-  // 디테일 패널: 최신 홉의 경로 칩·성패·confidence·RTT 를 #topohops 에 렌더(홉 없으면 비움).
-  // 시각은 싣지 않는다 — path·ok·confidence 만(순서로 인과 추론하지 않게, #1 제약).
-  function renderHopDetail(d) {
+  window.renderChainLog = function (chains, groups) {
     const root = document.getElementById("topohops");
     if (!root) return;
-    if (!d || !d.chips.length) { root.innerHTML = ""; return; }
+    const grouped = SV.chainGroups(chains || [], groups || [], 8);
+    if (!grouped.length) { root.innerHTML = ""; return; }
     root.innerHTML = "";
-    const head = el("div", "thd-head");
-    const dot = el("span", "thd-dot"); dot.style.background = d.color;
-    head.appendChild(dot);
-    head.appendChild(txt("span", "최근 홉", "thd-title"));
-    const label = { ok: "성공", fail: "실패", pending: "미확정" }[d.status] || d.status;
-    head.appendChild(txt("span", label, "thd-status thd-" + d.status));
-    root.appendChild(head);
-    const pathRow = el("div", "thd-path");            // 경로 칩(노드 시퀀스) — 화살표로 연결
-    d.chips.forEach((name, i) => {
-      if (i) pathRow.appendChild(txt("span", "→", "thd-arrow"));
-      pathRow.appendChild(txt("span", name, "thd-chip"));
+    grouped.forEach(group => {
+      const box = el("div", "tch-group");
+      box.appendChild(txt("div", group.label, "tch-group-title"));
+      group.items.forEach(row => {
+        const item = el("div", "tch-row");
+        const head = el("div", "tch-head");
+        const dot = el("span", "thd-dot"); dot.style.background = row.color;
+        head.appendChild(dot);
+        const dir = txt("span", row.dirLabel, "tch-dir" + (row.dir === "down" ? " thd-dir-down" : ""));
+        head.appendChild(dir);
+        const statusLabel = { ok: "성공", fail: "실패", pending: "미확정" }[row.status] || row.status;
+        head.appendChild(txt("span", statusLabel, "thd-status thd-" + row.status));
+        item.appendChild(head);
+        const path = el("div", "thd-path");
+        row.chips.forEach((chip, i) => {
+          if (i) path.appendChild(txt("span", row.dir === "down" ? "⇒" : "→", "thd-arrow"));
+          const c = txt("span", chip.label, "thd-chip" + (chip.dim ? " dim" : ""));
+          if (chip.meta) c.title = chip.meta;
+          if (chip.meta) c.appendChild(txt("span", " " + chip.meta, "thd-meta"));
+          path.appendChild(c);
+        });
+        if (!row.ordered) path.appendChild(txt("span", "순서 불확실", "thd-meta"));
+        item.appendChild(path);
+        if (row.heard.length) item.appendChild(txt("div", "들림: " + row.heard.join(", "), "thd-heard"));
+        box.appendChild(item);
+      });
+      root.appendChild(box);
     });
-    root.appendChild(pathRow);
-    const meta = [];                                  // confidence·RTT·device_type 메타
-    if (d.confidence) meta.push(d.confidence);
-    if (d.rtt) meta.push("RTT " + d.rtt);
-    if (d.deviceType) meta.push(d.deviceType);
-    if (meta.length) root.appendChild(txt("div", meta.join(" · "), "thd-meta"));
-  }
+  };
 
   window.resetPortBoardSig = function () { lastSig = ""; };
 })();
@@ -1633,6 +1733,7 @@ const state = {
   session: null,
   multiSource: false,
   topology: { groups: [], unplaced: [] },   // /api/topology 로스터 캐시(그래프 렌더원)
+  chains: [],
   streamLines: 0,
   streamItems: [],         // 재렌더용 원본 보관(설정 변경 시 다시 그림)
   newCount: 0,
@@ -1990,12 +2091,18 @@ function renderTopologyNow() {
   if (window.renderTopology)
     renderTopology(state.topology, state.session, state.port, selectPort, releaseSession);
 }
+function renderChainLogNow() {
+  if (window.renderChainLog)
+    renderChainLog(state.chains, (state.topology && state.topology.groups) || []);
+}
 async function refreshTopology() {
   let d;
   try { d = await (await fetch("/api/topology")).json(); }
   catch (e) { return; }
   state.topology = d || { groups: [], unplaced: [] };
+  state.chains = (d && d.chains) || [];
   renderTopologyNow();
+  renderChainLogNow();
 }
 setInterval(refreshTopology, 5000);
 
@@ -2006,6 +2113,18 @@ function scheduleTopologyRefresh() {
   if (_topoRefreshTimer) return;
   _topoRefreshTimer = setTimeout(() => { _topoRefreshTimer = null; refreshTopology(); }, 400);
 }
+let _chainRenderTimer = null;
+function upsertChain(chain) {
+  if (!chain || chain.id == null) return;
+  const idx = state.chains.findIndex(c => c && c.id === chain.id);
+  if (idx >= 0) state.chains.splice(idx, 1, chain);
+  else state.chains.push(chain);
+  if (state.chains.length > 100) state.chains.splice(0, state.chains.length - 100);
+}
+function scheduleChainRender() {
+  if (_chainRenderTimer) return;
+  _chainRenderTimer = setTimeout(() => { _chainRenderTimer = null; renderChainLogNow(); }, 400);
+}
 
 /* 토폴로지 홉 SSE — 포트 무관 단일 스트림(로그 /api/stream 과 별개). 수신 홉을 그래프 위에
    애니메이션(window.topologyHop). EventSource 는 끊기면 자동 재연결하므로 onerror 별도 처리
@@ -2015,8 +2134,13 @@ function connectTopologyStream() {
   if (_topoES) return;                                  // 중복 연결 방지(init 1회)
   _topoES = new EventSource("/api/topology/stream");
   _topoES.onmessage = ev => {
-    let hop; try { hop = JSON.parse(ev.data); } catch (e) { return; }
-    if (window.topologyHop) window.topologyHop(hop);
+    let obj; try { obj = JSON.parse(ev.data); } catch (e) { return; }
+    if (obj && obj.chain) {
+      upsertChain(obj.chain);
+      scheduleChainRender();
+      return;
+    }
+    if (window.topologyHop) window.topologyHop(obj);
     scheduleTopologyRefresh();                          // 홉 관측 → 링크선도 즉시 갱신(멤버십 실시간)
   };
 }
