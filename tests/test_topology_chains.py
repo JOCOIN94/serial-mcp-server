@@ -63,6 +63,21 @@ def assert_public(entry):
         assert "inferred" in node
 
 
+def test_heard_only_entry_resolves_ident_src_name_and_mac():
+    # 수신만 관측된 상행 — 발신자 ident 를 토큰맵으로 이름 해소해 추론 src 로 표시.
+    log = ChainLog(window_s=10)
+    resolver = Resolver({"05": {"name": "SB1", "mac": None, "unid": 5}})
+
+    entry = log.observe(ev("wifirx", "COM2", ts=1.0, unid=5, unique=44), resolver=resolver)[0]
+    src = entry["nodes"][0]
+    assert src["name"] == "SB1" and src["resolved"] is True and src["inferred"] is True
+
+    # BayID=0 장비 — ident 가 mac 이면 mac 그대로(표시 축약은 뷰어 몫).
+    m = ChainLog(window_s=10).observe(
+        ev("wifirx", "COM2", ts=1.0, unid=None, unique=44, mac="A0:85:E3:EA:5C:C4"))[0]
+    assert m["nodes"][0]["name"] == "A0:85:E3:EA:5C:C4"
+
+
 def test_src_without_tx_gets_port_from_ident_map():
     # 리프 TX 태그가 없는 메시지 — src 가 <<<From 이름만으로 만들어질 때, 발신자
     # ident(key)가 membership(port_idents)으로 포트를 알면 src 에 부착한다(로스터 라벨 대상 —
@@ -219,7 +234,9 @@ def test_rev_true_wifirx_response_stays_up():
 
     assert entry["dir"] == "up"
     assert entry["heard"] == ["COM12"]
-    assert labels(entry) == []
+    # 수신만 관측돼도 발신자는 키 ident 로 안다 — 빈 "발신 미상" 대신 추론 src 표시.
+    assert labels(entry) == ["UnID 5"]
+    assert entry["nodes"][0]["inferred"] is True and entry["nodes"][0]["resolved"] is False
 
 
 def test_rx_observation_corrects_active_down_misclassification():
@@ -287,7 +304,8 @@ def test_up_wifirx_self_echo_promotes_to_src_when_port_ident_matches():
         port_idents={"COM12": 9},
     )[0]
     assert heard["heard"] == ["COM12"]
-    assert labels(heard) == []
+    assert labels(heard) == ["UnID 5"]           # 오버히어 — 발신자 ident 추론 src(포트 불일치라 미부착)
+    assert heard["nodes"][0]["port"] is None
 
 
 def test_downlink_without_receiver_stays_pending_and_completes_on_sweep():

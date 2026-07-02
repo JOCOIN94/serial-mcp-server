@@ -169,7 +169,7 @@ class ChainLog:
         elif kind == "wifitx":
             self._observe_wifitx(ent, ev, port_names)
         elif kind == "wifirx":
-            self._observe_wifirx(ent, ev, port_names, port_idents)
+            self._observe_wifirx(ent, ev, port_names, port_idents, resolver)
         self._attach_src_port(ent, port_idents)
 
         after = self._public(ent)
@@ -300,14 +300,18 @@ class ChainLog:
         self._ensure_src(ent, port, _name_for_port(port, port_names), None)
 
     def _observe_wifirx(self, ent: dict, ev: dict, port_names: Optional[dict],
-                        port_idents: Optional[dict] = None) -> None:
+                        port_idents: Optional[dict] = None, resolver=None) -> None:
         port = ev.get("port")
         if ent.get("dir") == "up":
             ident = self._event_ident(ev)
             if ident is not None and (port_idents or {}).get(port) == ident:
                 self._ensure_src(ent, port, _name_for_port(port, port_names), None)
-            elif port not in ent["heard"]:
-                ent["heard"].append(port)
+            else:
+                if port not in ent["heard"]:
+                    ent["heard"].append(port)
+                # 수신 포트는 청취자지 발신자가 아니다 — 발신자는 페이로드/키 ident 가 안다.
+                # "발신 미상" 대신 ident 를 해소해 추론 src 로 표시한다(포트는 _attach_src_port 몫).
+                self._ensure_ident_src(ent, resolver)
             return
         if self._find_by_port(ent, port) is None:
             ent["nodes"].append(_node(name=_name_for_port(port, port_names), port=port,
@@ -321,6 +325,28 @@ class ChainLog:
         if ids.get("unid") is not None:
             return ids.get("unid")
         return ids.get("mac")
+
+    def _ensure_ident_src(self, ent: dict, resolver) -> None:
+        """src 미관측 상행 항목에 키 ident 기반 추론 src 를 만든다(빈 '발신 미상' 방지).
+
+        ident 가 mac(BayID=0 장비)이면 mac 그대로(표시 축약은 뷰어), unid 면 토큰맵으로
+        이름 해소 — 실패 시 "UnID n" 폴백(resolved=False). 추론이므로 inferred=True.
+        """
+        if ent.get("key", (None,))[0] != "u" or self._src(ent) is not None:
+            return
+        ident = ent["key"][1]
+        if isinstance(ident, str):                       # mac ident
+            name, resolved = ident, True
+        else:
+            try:                                          # 토큰 = '%02X'(UnID) — 펌웨어 규칙(십진→hex)
+                hit = _resolve_token(resolver, f"{int(ident) & 0xFF:02X}")
+            except (TypeError, ValueError):
+                hit = None
+            if hit and hit.get("name"):
+                name, resolved = hit["name"], True
+            else:
+                name, resolved = f"UnID {ident}", False
+        ent["nodes"].insert(0, _node(name=name, role="src", resolved=resolved, inferred=True))
 
     def _attach_src_port(self, ent: dict, port_idents: Optional[dict]) -> None:
         """상행 키 ident 가 어느 로컬 포트 장비인지 알면(membership) 포트 없는 src 에 부착.
