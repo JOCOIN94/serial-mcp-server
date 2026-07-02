@@ -421,6 +421,11 @@ main { padding: 8px 14px 0; flex: 1 1 auto; min-height: 0;
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
+.ln-jump { animation: lnJump 1.6s ease-out; }   /* 체인 칩 점프로 도착한 라인 강조 */
+@keyframes lnJump {
+  from { background: var(--accent-bg); }
+  to { background: transparent; }
+}
 .ln:not(.err):not(.warn):not(.boot):not(.noise):hover { background: var(--bg-hover); }
 .ln .ts { color: var(--faint); user-select: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ln .txt { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; min-width: 0; }
@@ -632,7 +637,8 @@ kbd {
 .thd-ok { color: #3fb950; } .thd-fail { color: #f0786f; } .thd-pending { color: #e3b341; }
 .thd-path { display: flex; flex-wrap: nowrap; align-items: center; gap: 3px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
 .thd-chip { font: 600 11px var(--ui); background: var(--bg-raised); border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 6px; min-width: 64px; max-width: 120px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.thd-chip.dim { color: var(--muted); opacity: .72; }
+.thd-jump { flex: none; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; line-height: 1; cursor: pointer; }
+.thd-jump.miss { color: var(--muted); cursor: default; }
 .thd-arrow { color: var(--muted); font-size: 10px; }
 .thd-meta { font: 500 10px var(--ui); color: var(--muted); }
 .tch-row { border-left: 2px solid var(--border-2); margin-top: 5px; padding: 3px 0 4px 7px; display: flex; min-width: 0; }
@@ -1338,6 +1344,16 @@ function portLabelMap(groups) {
 
 var _RE_MAC_LABEL = /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/;
 
+/* 긴 시리얼 포트명 축약 — macOS 장치 경로(/dev/tty.usbserial-XXXX 등)가 UI 를 깨지 않게
+   알려진 접두사를 벗기고 그래도 길면 식별력 있는 꼬리 5자만 남긴다. COMx 는 그대로. */
+function shortPortLabel(port) {
+  var s = String(port == null ? "" : port);
+  if (s.length <= 8) return s;
+  var t = s.replace(/^\/dev\/(tty|cu)\./, "").replace(/^usb(serial|modem)-?/i, "");
+  if (t.length > 8) t = "…" + t.slice(-5);
+  return t || s;
+}
+
 function chainRow(entry, labels) {
   var e = entry || {}, nodes = e.nodes || [], chips = [];
   for (var i = 0; i < nodes.length; i++) {
@@ -1349,6 +1365,9 @@ function chainRow(entry, labels) {
     if (_RE_MAC_LABEL.test(label)) {          // mac ident(BayID=0) — 칩엔 뒤 2옥텟만, 전체는 툴팁
       title.unshift(label);
       label = "…" + label.slice(-5);
+    } else if (port && label === port && shortPortLabel(port) !== port) {
+      title.unshift(port);                    // 라벨이 긴 포트 경로 그대로면 축약, 전체는 툴팁
+      label = shortPortLabel(port);
     }
     if (n.rssi != null && n.rssi !== "") title.push(String(n.rssi) + "dBm");
     if (n.ms != null && n.ms !== "") title.push(String(n.ms) + "ms");
@@ -1357,9 +1376,10 @@ function chainRow(entry, labels) {
       title: title.join(" · "),
       dim: !port || n.resolved === false || n.inferred === true,
       role: n.role || null,
+      port: port,
     });
   }
-  if (!chips.length) chips.push({ label: "발신 미상", title: "", dim: true, role: null });
+  if (!chips.length) chips.push({ label: "발신 미상", title: "", dim: true, role: null, port: null });
   var status = chainStatus(e);
   return {
     id: e.id,
@@ -1370,6 +1390,7 @@ function chainRow(entry, labels) {
     ordered: e.ordered !== false,
     chips: chips,
     heard: (e.heard || []).slice(),
+    key: e.key || null,
   };
 }
 
@@ -1402,7 +1423,8 @@ var SViewer = {
   decoText: decoText,
   rssiColor: rssiColor, edgeSegments: edgeSegments,
   hopWaypoints: hopWaypoints, hopColor: hopColor, hopDetail: hopDetail,
-  portLabelMap: portLabelMap, chainRow: chainRow, chainRows: chainRows
+  portLabelMap: portLabelMap, chainRow: chainRow, chainRows: chainRows,
+  shortPortLabel: shortPortLabel
 };
 if (typeof module !== "undefined" && module.exports) module.exports = SViewer;
 if (typeof window !== "undefined") window.SViewer = SViewer;
@@ -1413,8 +1435,9 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
 
 /* SVScroll — 공용 스크롤 헬퍼(체인 로그·포트 로그 공유, DOM 의존이라 VIEWER-PURE 밖).
    pinBottom: 점프 대신 짧은 rAF 보간으로 바닥까지 스크롤 — 기존 줄이 위로 밀려 올라가는 연출.
-   bindFollow: 팔로우 해제는 사용자 의도 이벤트(휠 위로·드래그 중 바닥 이탈)에서만 일어나고
-   scroll 이벤트는 바닥 복귀 재활성 전용 — 시간 가드 없이 프로그램 스크롤 오인을 원천 차단. */
+   bindFollow 규칙: 바닥에 붙어 있음 = ON, 바닥에서 떨어짐 = OFF. 단 자기 핀 보간(isPinning)이
+   만드는 중간 위치 스크롤 이벤트는 이탈로 치지 않는다(시간 가드 없이 오인 원천 차단).
+   재진입은 바닥 복귀(수동 스크롤) 또는 "새 로그 N건" 클릭. */
 "use strict";
 window.SVScroll = (function () {
   function near(box, px) {
@@ -1444,25 +1467,31 @@ window.SVScroll = (function () {
     }
     requestAnimationFrame(step);
   }
+  function isPinning(box) { return _runs.has(box); }
+  function cancelPin(box) {
+    const r = _runs.get(box);
+    if (r) r.stop = true;
+  }
   function bindFollow(box, opts) {
-    let held = false;                              // 스크롤바/터치 드래그 중 — 이때의 바닥 이탈만 사용자 의도
+    let held = false;                              // 스크롤바/터치 드래그 중 — 핀 보간과 겹쳐도 사용자 의도
     box.addEventListener("wheel", e => {
-      if (e.deltaY < 0 && opts.isOn() && box.scrollHeight - box.clientHeight > 1) opts.setOn(false);
+      if (e.deltaY < 0) { cancelPin(box); if (opts.isOn()) opts.setOn(false); }
     }, { passive: true });
-    box.addEventListener("mousedown", () => { held = true; });
+    box.addEventListener("mousedown", () => { held = true; cancelPin(box); });
     window.addEventListener("mouseup", () => { held = false; });
-    box.addEventListener("touchstart", () => { held = true; }, { passive: true });
+    box.addEventListener("touchstart", () => { held = true; cancelPin(box); }, { passive: true });
     box.addEventListener("touchend", () => { held = false; });
     box.addEventListener("scroll", () => {
       if (near(box, opts.threshold)) {
-        if (!opts.isOn()) opts.setOn(true);        // 바닥 복귀 — 재활성(isOn 가드로 재귀 방지)
+        if (!opts.isOn()) opts.setOn(true);        // 바닥 복귀 = ON(isOn 가드로 재귀 방지)
         if (opts.onBottom) opts.onBottom();
-      } else if (held && opts.isOn()) {
-        opts.setOn(false);
+      } else if ((held || !isPinning(box)) && opts.isOn()) {
+        opts.setOn(false);                         // 바닥에서 떨어짐 = OFF(자기 핀 보간 중 제외)
       }
     });
   }
-  return { near: near, pinBottom: pinBottom, bindFollow: bindFollow };
+  return { near: near, pinBottom: pinBottom, bindFollow: bindFollow,
+           isPinning: isPinning, cancelPin: cancelPin };
 })();
 
 /* board.js — 왼쪽 네비게이션의 포트 상태.
@@ -1524,7 +1553,10 @@ window.SVScroll = (function () {
     const wrap = el("div", "tnode");
     wrap.style.left = p.x + "px"; wrap.style.top = p.y + "px";
     wrap.style.width = p.w + "px"; wrap.style.height = p.h + "px";
-    wrap.appendChild(txt("div", n.label, "tn-name"));        // 타입/식별 라벨은 노드 밖(위)
+    // 타입/식별 라벨은 노드 밖(위). 라벨이 장치 경로면(macOS 등) 축약 — 전체는 툴팁.
+    const nameEl = txt("div", /^\/dev\//.test(n.label || "") ? SV.shortPortLabel(n.label) : n.label, "tn-name");
+    if (nameEl.textContent !== n.label) nameEl.title = n.label;
+    wrap.appendChild(nameEl);
     const box = el("div", "tn-box");
     box.style.borderColor = tint(tc, .55);
     box.style.background = "linear-gradient(0deg," + tint(tc, .1) + "," + tint(tc, .1) + "),rgba(17,21,28,.8)";   // 바닥층 반투명 — 뒤의 엣지선이 은은히 비친다
@@ -1618,7 +1650,7 @@ window.SVScroll = (function () {
   function renderUnclassified(unplaced, active, onSelect) {
     const box = el("div", "tunclassified");
     for (const port of unplaced) {
-      const b = txt("span", port, "uport" + (port === active ? " active" : ""));
+      const b = txt("span", SV.shortPortLabel(port), "uport" + (port === active ? " active" : ""));
       b.title = "클릭 — " + port + " 로그 보기";
       b.onclick = () => onSelect(port);
       box.appendChild(b);
@@ -1741,6 +1773,15 @@ window.SVScroll = (function () {
     _chainHeader = bar;
     _chainFollowBtn = btn;
   }
+  const _jumpMiss = new Set();                     // "rowId|port" — 버퍼에서 밀려나 점프 실패한 칩
+  async function jumpFromChip(btn, row, chip) {
+    const found = window.jumpToPortLog ? await window.jumpToPortLog(chip.port, row.key) : false;
+    if (!found) {
+      _jumpMiss.add(row.id + "|" + chip.port);
+      btn.classList.add("miss");
+      btn.title = chip.port + " 버퍼에서 이미 밀려난 로그";
+    }
+  }
   function buildChainRow(row) {
     const item = el("div", "tch-row tch-enter");
     item.dataset.cid = row.id;
@@ -1754,6 +1795,12 @@ window.SVScroll = (function () {
       const c = txt("span", chip.label, "thd-chip" + (chip.dim ? " dim" : ""));
       if (chip.title) c.title = chip.title;
       path.appendChild(c);
+      if (chip.port && row.key) {                  // 포트 있는 칩 — 그 포트 로그의 해당 라인으로 점프
+        const jb = txt("button", "▸", "thd-jump" + (_jumpMiss.has(row.id + "|" + chip.port) ? " miss" : ""));
+        jb.title = "클릭 — " + chip.port + " 로그에서 이 메시지 보기";
+        jb.onclick = ev2 => { ev2.stopPropagation(); jumpFromChip(jb, row, chip); };
+        path.appendChild(jb);
+      }
     });
     if (!row.ordered) path.appendChild(txt("span", "순서 불확실", "thd-meta"));
     head.appendChild(path);
@@ -2177,7 +2224,8 @@ async function refreshBuffer() {
   box.innerHTML = "";
   const ctx = {};
   for (const e of entries) {
-    appendEntry(box, { ts: e.first_ts, text: e.text, count: e.count, firstTs: e.first_ts, lastTs: e.last_ts }, ctx, { noFold: true, noEnter: true });   // 폴링 전체 재렌더 — enter 애니메이션 금지
+    const node = appendEntry(box, { ts: e.first_ts, text: e.text, count: e.count, firstTs: e.first_ts, lastTs: e.last_ts }, ctx, { noFold: true, noEnter: true });   // 폴링 전체 재렌더 — enter 애니메이션 금지
+    if (node) node.dataset.raw = e.text;           // 체인 칩 점프의 원문 매칭용
   }
   scheduleRecount();
   if (state.follow && state.tab === "buffer") scrollLogBottom("buffer");
@@ -2289,6 +2337,39 @@ function selectPort(port) {
   refreshStatus();
   refreshBuffer();
 }
+
+/* 체인 칩 점프 — 해당 포트 버퍼에서 체인 키(ident/Unique 또는 Cidx)가 실린 라인을 찾아
+   가운데로 스크롤·강조한다. 버퍼(링)에서 이미 밀려났으면 false(호출부가 ▸ 를 회색 처리). */
+window.jumpToPortLog = async function (port, key) {
+  if (!port || !key || !key.length) return false;
+  const needles = [];
+  if (key[0] === "u") {
+    if (key[2] != null) needles.push('"Unique":' + key[2]);
+    if (typeof key[1] === "string") needles.push(key[1]);          // mac ident 는 원문 그대로
+    else if (key[1] != null) needles.push('"UnID":' + key[1]);
+  } else if (key[0] === "c") {
+    needles.push('"Cidx":' + key[1]);
+  }
+  if (!needles.length) return false;
+  setFollow(false, { noScroll: true });            // 점프 = 과거 조회 — 팔로우 해제 후 이동
+  if (state.port !== port) selectPort(port);
+  setTab("buffer");
+  await refreshBuffer();
+  const box = $("buffer");
+  const rows = box.querySelectorAll("[data-raw]");
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const raw = rows[i].dataset.raw || "";
+    if (!needles.every(n => raw.indexOf(n) !== -1)) continue;
+    SVScroll.cancelPin(box);
+    const bb = box.getBoundingClientRect(), rb = rows[i].getBoundingClientRect();
+    box.scrollTop += rb.top - bb.top - box.clientHeight / 2 + rb.height / 2;
+    rows[i].classList.remove("ln-jump");
+    void rows[i].offsetWidth;                      // 강조 애니메이션 재트리거
+    rows[i].classList.add("ln-jump");
+    return true;
+  }
+  return false;
+};
 async function releaseSession(ports, session) {
   const label = ports.length ? ports.join(", ") : "전체 세션";
   if (!confirm((session || "이 세션") + "\n이 AI 세션의 소유권을 해제할까요?\n(" + label + ")")) return;

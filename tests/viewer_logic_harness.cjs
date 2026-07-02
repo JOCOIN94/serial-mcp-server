@@ -339,5 +339,19 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   eq(SV.chainRows(null, null).length, 0, "chain-rows-null-safe");
 }
 
+/* C-3. shortPortLabel: macOS 장치 경로 축약(접두사 제거→꼬리 5자), COMx 불변 + chainRow 점프 필드. */
+{
+  eq(SV.shortPortLabel("COM4"), "COM4", "short-port-com-unchanged");
+  eq(SV.shortPortLabel("/dev/cu.usbmodem14201"), "14201", "short-port-usbmodem-strip");
+  eq(SV.shortPortLabel("/dev/tty.usbserial-A5069RR4"), "A5069RR4", "short-port-usbserial-strip");
+  eq(SV.shortPortLabel("/dev/tty.SLAB_USBtoUART"), "…oUART", "short-port-tail-ellipsis");
+  const jr = SV.chainRow({ id: 9, key: ["c", 3028], nodes: [{ name: null, port: "COM4", role: "dst", resolved: true }] }, {});
+  eq(jr.key.join(","), "c,3028", "chain-row-key-passthrough");
+  eq(jr.chips[0].port, "COM4", "chain-row-chip-port");
+  const longPort = SV.chainRow({ nodes: [{ name: null, port: "/dev/tty.SLAB_USBtoUART", resolved: true }] }, {});
+  eq(longPort.chips[0].label, "…oUART", "chain-row-long-port-shortened");
+  ok(longPort.chips[0].title.indexOf("/dev/tty.SLAB_USBtoUART") === 0, "chain-row-long-port-full-in-title");
+}
+
 if (fails.length) { console.error("FAILURES (" + fails.length + "):\n" + fails.map(f => " - " + f).join("\n")); process.exit(1); }
 console.log("all viewer-logic assertions passed");
