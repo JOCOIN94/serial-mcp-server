@@ -229,6 +229,21 @@ def test_drain_chain_updates_is_one_shot():
     assert eng.drain_chain_updates() == []
 
 
+def test_chainlog_self_echo_uses_membership_port_ident():
+    eng = TopologyEngine()
+    eng.observe("COM12", 1.0, '[Tx - my INFO] {"UnID":5,"Unique":30,"INFO":["4","SB5"]}')
+    eng.observe("COM4", 1.2, '[Proc-WiFiRx] {"UnID":5,"Unique":30,"INFO":["4","SB5"]}')
+    eng.flush()
+    eng.drain_chain_updates()
+
+    eng.observe("COM12", 2.0, '[WiFi_Rx] {"UnID":5,"Unique":31,"Rev":true}')
+    chain = eng.drain_chain_updates()[0]
+
+    assert chain["heard"] == []
+    assert chain["nodes"][0]["port"] == "COM12"
+    assert chain["nodes"][0]["role"] == "src"
+
+
 def test_sweep_timeout_hop_is_applied_to_chain_update():
     eng = TopologyEngine(window_s=1.0)
     eng.observe("COM4", 0.0, '[Proc-WiFiRx] {"UnID":5,"Unique":1,"INFO":["4"]}')

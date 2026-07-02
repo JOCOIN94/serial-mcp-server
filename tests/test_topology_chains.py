@@ -6,16 +6,17 @@ from serial_mcp.topology_chains import ChainLog
 
 
 def ev(kind, port="COM1", ts=1.0, unid=5, unique=9, cidx=None,
-       passed=None, rt_tokens=None, src_name=None, rssi=None, ms=None):
+       passed=None, rt_tokens=None, src_name=None, rssi=None, ms=None,
+       json_obj=None, mac=None):
     return {
         "port": port,
         "ts": ts,
         "kind": kind,
         "raw_lines": [],
-        "json": None,
+        "json": json_obj,
         "route": None,
         "ids": {
-            "mac": None,
+            "mac": mac,
             "unid": unid,
             "unique": unique,
             "asn": None,
@@ -59,6 +60,7 @@ def assert_public(entry):
     for node in entry["nodes"]:
         assert "ts" not in node
         assert all(not k.startswith("_") for k in node)
+        assert "inferred" in node
 
 
 def test_up_direct_tx_rx_single_entry_with_src_rssi_and_dst_ms():
@@ -159,6 +161,109 @@ def test_downlink_wifitx_to_wifirx_accumulates_receivers():
     assert second["confidence"] == "observed"
 
 
+def test_wifirx_reqrsssi_request_is_downlink_receiver_not_heard():
+    log = ChainLog(window_s=10)
+
+    entry = log.observe(
+        ev("wifirx", "COM12", ts=1.0, unique=23, cidx=226,
+           json_obj={"UnID": 5, "REQRSSI": "REQ", "Unique": 23, "Cidx": 226}),
+        scope={"COM12": "COM4"},
+        port_names={"COM12": "SB5"},
+    )[0]
+
+    assert entry["dir"] == "down"
+    assert entry["group"] == "COM4"
+    assert entry["heard"] == []
+    assert labels(entry) == ["COM4", "SB5"]
+    assert entry["nodes"][0]["role"] == "src"
+    assert entry["nodes"][0]["inferred"] is True
+    assert entry["nodes"][1]["role"] == "rx"
+    assert entry["ok"] is True
+
+
+def test_rev_true_wifirx_response_stays_up():
+    log = ChainLog(window_s=10)
+
+    entry = log.observe(
+        ev("wifirx", "COM12", ts=1.0,
+           json_obj={"UnID": 5, "Unique": 80, "Rev": True, "Cidx": 925}),
+        scope={"COM12": "COM4"},
+        port_names={"COM12": "SB5"},
+    )[0]
+
+    assert entry["dir"] == "up"
+    assert entry["heard"] == ["COM12"]
+    assert labels(entry) == []
+
+
+def test_rx_observation_corrects_active_down_misclassification():
+    log = ChainLog(window_s=10)
+    log.observe(
+        ev("wifirx", "COM12", ts=1.0, unique=23, cidx=226,
+           json_obj={"UnID": 5, "REQRSSI": "REQ", "Unique": 23, "Cidx": 226}),
+        scope={"COM12": "COM4"},
+        port_names={"COM12": "SB5"},
+    )
+
+    corrected = log.observe(
+        ev("rx", "COM4", ts=1.1, unique=23, cidx=226, src_name="SB1", ms=52,
+           json_obj={"UnID": 5, "Unique": 23, "Rev": True, "Cidx": 226}),
+        scope={"COM4": "COM4"},
+        port_names={"COM4": "SSM"},
+    )[0]
+
+    assert corrected["dir"] == "up"
+    assert labels(corrected) == ["SB1", "SSM"]
+    assert [n["role"] for n in corrected["nodes"]] == ["src", "dst"]
+
+
+def test_downlink_inferred_src_is_public_only_and_handles_unknown_group():
+    log = ChainLog(window_s=10)
+    entry = log.observe(
+        ev("wifirx", "COM12", ts=1.0, unique=23,
+           json_obj={"UnID": 5, "INFO": "REQ", "Unique": 23}),
+        scope={"COM12": "COM4"},
+        port_names={"COM12": "SB5"},
+    )[0]
+
+    assert labels(entry) == ["COM4", "SB5"]
+    assert log._entries[-1]["nodes"][0]["port"] == "COM12"  # inferred src is not stored internally
+    assert labels(log.recent(1)[0]) == ["COM4", "SB5"]
+
+    unknown = ChainLog(window_s=10).observe(
+        ev("wifirx", "COM12", ts=1.0, unique=24,
+           json_obj={"UnID": 5, "CHPLAN": [1, 2], "Unique": 24}),
+        port_names={"COM12": "SB5"},
+    )[0]
+    assert labels(unknown) == ["?", "SB5"]
+    assert unknown["nodes"][0]["resolved"] is False
+    assert unknown["nodes"][0]["inferred"] is True
+
+
+def test_up_wifirx_self_echo_promotes_to_src_when_port_ident_matches():
+    log = ChainLog(window_s=10)
+
+    entry = log.observe(
+        ev("wifirx", "COM12", ts=1.0, unid=5, unique=91,
+           json_obj={"UnID": 5, "Unique": 91, "Rev": True}),
+        port_names={"COM12": "SB5"},
+        port_idents={"COM12": 5},
+    )[0]
+
+    assert entry["heard"] == []
+    assert labels(entry) == ["SB5"]
+    assert entry["nodes"][0]["role"] == "src"
+
+    heard = ChainLog(window_s=10).observe(
+        ev("wifirx", "COM12", ts=1.0, unid=5, unique=92,
+           json_obj={"UnID": 5, "Unique": 92, "Rev": True}),
+        port_names={"COM12": "SB5"},
+        port_idents={"COM12": 9},
+    )[0]
+    assert heard["heard"] == ["COM12"]
+    assert labels(heard) == []
+
+
 def test_downlink_without_receiver_stays_pending_and_completes_on_sweep():
     log = ChainLog(window_s=1)
     entry = log.observe(ev("wifitx", "COM4", ts=1.0, unid=None, unique=None, cidx=88),
@@ -205,11 +310,13 @@ def test_port_kind_dedup_returns_no_update():
     assert log.recent(1)[0]["id"] == first["id"]
 
 
-def test_non_mutating_observation_emits_no_update():
-    # up 키가 실린 wifitx 는 가드로 노드 변형이 없다 — 변경 없는 관측은 SSE 변경분을 내지 않는다.
+def test_wifitx_kind_forces_down_direction_even_with_unique_key():
     log = ChainLog(window_s=10)
 
-    assert log.observe(ev("wifitx", "COM4", ts=1.0)) == []
+    entry = log.observe(ev("wifitx", "COM4", ts=1.0), port_names={"COM4": "SSM"})[0]
+
+    assert entry["dir"] == "down"
+    assert labels(entry) == ["SSM"]
 
 
 def test_up_wifirx_is_heard_only_not_main_path():

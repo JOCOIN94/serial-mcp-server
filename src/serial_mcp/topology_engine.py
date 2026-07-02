@@ -73,6 +73,8 @@ class TopologyEngine:
         self._peerlinks = PeerLinks(window_s=window_s)
         self._peer_scope_cache: dict = {}
         self._peer_scope_dirty = True
+        self._port_idents_cache: dict = {}
+        self._port_idents_dirty = True
         self._names_cache: dict = {}
         self._names_dirty = True              # membership 유래 무효화(라우팅 유래는 version 비교)
         self._names_routing_ver = -1
@@ -109,6 +111,7 @@ class TopologyEngine:
                     if ent.get("local_port") == port:
                         ent["local_port"] = None
             self._peer_scope_dirty = True
+            self._port_idents_dirty = True
             self._names_dirty = True
 
     def sweep(self, now: float, flush_idle_s: float = 2.0) -> list:
@@ -207,8 +210,10 @@ class TopologyEngine:
             self._routing.observe(ev)
             scope = self._peer_scope()
             names = self._names()
+            port_idents = self._port_idents()
             self._record_chain_updates(self._chains.observe(ev, scope, resolver=self._routing,
-                                                            port_names=names))
+                                                            port_names=names,
+                                                            port_idents=port_idents))
             self._peerlinks.observe(ev, scope)
             out += self._correlator.observe(ev)
         for hop in out:
@@ -237,6 +242,7 @@ class TopologyEngine:
             "rssi": hop.get("rssi") if hop.get("rssi") is not None else prev.get("rssi"),
         }
         self._peer_scope_dirty = True
+        self._port_idents_dirty = True
         self._names_dirty = True
 
     def _record_chain_updates(self, updates: list) -> None:
@@ -302,3 +308,21 @@ class TopologyEngine:
         self._peer_scope_cache = scope
         self._peer_scope_dirty = False
         return scope
+
+    def _port_idents(self) -> dict:
+        """ChainLog 자기 에코 판정용 {local_port: unid|mac} 캐시."""
+        if not self._port_idents_dirty:
+            return self._port_idents_cache
+        best: dict = {}
+        for members in self._membership.values():
+            for ident, ent in members.items():
+                lp = ent.get("local_port")
+                if not lp:
+                    continue
+                ts = ent.get("last_ts")
+                cur = best.get(lp)
+                if cur is None or (ts is not None and (cur[1] is None or ts >= cur[1])):
+                    best[lp] = (ident, ts)
+        self._port_idents_cache = {lp: ident for lp, (ident, _ts) in best.items()}
+        self._port_idents_dirty = False
+        return self._port_idents_cache

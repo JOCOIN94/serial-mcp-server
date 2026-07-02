@@ -41,13 +41,30 @@ def _event_key(ev: dict) -> tuple[Optional[tuple], Optional[str]]:
     return None, None
 
 
+def _dir_hint(ev: dict) -> Optional[str]:
+    """관측 kind/json 마커 기반 방향 힌트. 키 종류 fallback 보다 우선한다."""
+    kind = (ev or {}).get("kind")
+    if kind == "rx":
+        return "up"
+    if kind == "wifitx":
+        return "down"
+    obj = ev.get("json")
+    if isinstance(obj, dict):
+        if obj.get("Rev") is True:
+            return "up"
+        if obj.get("INFO") == "REQ" or obj.get("REQRSSI") == "REQ" or "CHPLAN" in obj:
+            return "down"
+    return None
+
+
 def _name_for_port(port: Optional[str], port_names: Optional[dict]) -> Optional[str]:
     if not port:
         return None
     return (port_names or {}).get(port) or port
 
 
-def _node(name=None, port=None, role="relay", resolved=True, rssi=None, ms=None) -> dict:
+def _node(name=None, port=None, role="relay", resolved=True, rssi=None, ms=None,
+          inferred=False) -> dict:
     return {
         "name": name,
         "port": port,
@@ -55,6 +72,7 @@ def _node(name=None, port=None, role="relay", resolved=True, rssi=None, ms=None)
         "rssi": rssi,
         "ms": ms,
         "resolved": bool(resolved),
+        "inferred": bool(inferred),
     }
 
 
@@ -108,12 +126,14 @@ class ChainLog:
         self._entries: deque = deque()
 
     def observe(self, ev: dict, scope: Optional[dict] = None,
-                resolver=None, port_names: Optional[dict] = None) -> list:
+                resolver=None, port_names: Optional[dict] = None,
+                port_idents: Optional[dict] = None) -> list:
         """Event 1개를 반영하고 변경된 공개 항목 사본을 반환한다."""
         kind = (ev or {}).get("kind")
         if kind not in _KINDS:
             return []
-        key, direction = _event_key(ev)
+        key, fallback_dir = _event_key(ev)
+        direction = _dir_hint(ev) or fallback_dir
         port = ev.get("port")
         if key is None or not port:
             return []
@@ -130,6 +150,8 @@ class ChainLog:
                 return changed
             if ent.get("group") is None and group is not None:
                 ent["group"] = group
+            if direction and direction != ent.get("dir"):
+                self._correct_direction(ent, direction)
 
         seen_key = (port, kind)
         if seen_key in ent["_seen"]:
@@ -147,7 +169,7 @@ class ChainLog:
         elif kind == "wifitx":
             self._observe_wifitx(ent, ev, port_names)
         elif kind == "wifirx":
-            self._observe_wifirx(ent, ev, port_names)
+            self._observe_wifirx(ent, ev, port_names, port_idents)
 
         after = self._public(ent)
         if after != before:
@@ -275,10 +297,14 @@ class ChainLog:
         port = ev.get("port")
         self._ensure_src(ent, port, _name_for_port(port, port_names), None)
 
-    def _observe_wifirx(self, ent: dict, ev: dict, port_names: Optional[dict]) -> None:
+    def _observe_wifirx(self, ent: dict, ev: dict, port_names: Optional[dict],
+                        port_idents: Optional[dict] = None) -> None:
         port = ev.get("port")
         if ent.get("dir") == "up":
-            if port not in ent["heard"]:
+            ident = self._event_ident(ev)
+            if ident is not None and (port_idents or {}).get(port) == ident:
+                self._ensure_src(ent, port, _name_for_port(port, port_names), None)
+            elif port not in ent["heard"]:
                 ent["heard"].append(port)
             return
         if self._find_by_port(ent, port) is None:
@@ -286,6 +312,23 @@ class ChainLog:
                                       role="rx", resolved=True))
         ent["ok"] = True
         ent["confidence"] = "observed"
+
+    @staticmethod
+    def _event_ident(ev: dict):
+        ids = (ev or {}).get("ids") or {}
+        if ids.get("unid") is not None:
+            return ids.get("unid")
+        return ids.get("mac")
+
+    @staticmethod
+    def _correct_direction(ent: dict, direction: str) -> None:
+        ent["dir"] = direction
+        ent["ordered"] = True
+        ent["nodes"] = []
+        ent["heard"] = []
+        ent["ok"] = None
+        ent["confidence"] = None
+        ent["rtt_ms"] = None
 
     def _rebuild_with_skeleton(self, ent: dict, skeleton: list[dict], dst_port: str,
                                port_names: Optional[dict], metrics: dict) -> None:
@@ -469,13 +512,20 @@ class ChainLog:
 
     @staticmethod
     def _public(ent: dict) -> dict:
+        nodes = [dict(n) for n in ent.get("nodes", [])]
+        for node in nodes:
+            node["inferred"] = bool(node.get("inferred"))
+        if ent.get("dir") == "down" and not any(n.get("role") == "src" for n in nodes):
+            group = ent.get("group")
+            nodes.insert(0, _node(name=None, port=group, role="src",
+                                  resolved=group is not None, inferred=True))
         return {
             "id": ent["id"],
             "key": list(ent["key"]),
             "dir": ent["dir"],
             "group": ent.get("group"),
             "ordered": bool(ent.get("ordered")),
-            "nodes": [dict(n) for n in ent.get("nodes", [])],
+            "nodes": nodes,
             "heard": list(ent.get("heard", [])),
             "ok": ent.get("ok"),
             "confidence": ent.get("confidence"),
