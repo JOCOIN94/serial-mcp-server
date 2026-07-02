@@ -97,7 +97,58 @@ def test_membership_carries_rssi_from_hop():
     assert eng.membership_snapshot()["COM4"][5]["rssi"] == -42
 
 
+def test_membership_via_mac_key_for_bayid_zero_device():
+    # BayID=0 장비(payload 에 UnID 대신 Mac — 펌웨어 전 리프 공통)도 Mac 폴백 키로 멤버십에 든다.
+    eng = TopologyEngine()
+    eng.observe("COM12", 1.0, '[Tx - my INFO] {"Mac":"30,AE,A4,4B,1A,0C","Unique":8,"INFO":["5","R1",-30]}')
+    eng.observe("COM4", 1.2, '[Proc-WiFiRx] {"Mac":"30,AE,A4,4B,1A,0C","Unique":8,"INFO":["5","R1",-30]}')
+    eng.flush()
+    m = eng.membership_snapshot()
+    assert m["COM4"]["30:AE:A4:4B:1A:0C"]["local_port"] == "COM12"
+
+
+def test_forget_port_purges_membership_local_port():
+    # 유령 링크 방지: leaf 포트 재오픈(forget_port) 시 그 포트를 가리키던 멤버십 local_port 무효화.
+    # SSM 이 무선으로 계속 들어도(rx-only 홉) 옛 포트로 fresh 링크선이 그려지면 안 된다.
+    eng = TopologyEngine()
+    eng.observe("COM14", 1.0, '[Tx - my INFO] {"UnID":5,"Unique":30,"INFO":["4"]}')
+    eng.observe("COM4", 1.2, '[Proc-WiFiRx] {"UnID":5,"Unique":30,"INFO":["4"]}')
+    eng.flush()
+    assert eng.membership_snapshot()["COM4"][5]["local_port"] == "COM14"
+    eng.forget_port("COM14")
+    assert eng.membership_snapshot()["COM4"][5]["local_port"] is None   # 매핑만 무효화(관측 이력 유지)
+
+
+def test_forget_port_drops_ssm_membership_group():
+    # SSM 포트 재오픈 시 그 포트의 멤버십 그룹 자체를 제거(보드 교체 대비) — 재관측이 다시 채운다.
+    eng = TopologyEngine()
+    eng.observe("COM14", 1.0, '[Tx - my INFO] {"UnID":5,"Unique":30,"INFO":["4"]}')
+    eng.observe("COM4", 1.2, '[Proc-WiFiRx] {"UnID":5,"Unique":30,"INFO":["4"]}')
+    eng.flush()
+    eng.forget_port("COM4")
+    assert "COM4" not in eng.membership_snapshot()
+
+
 # ---- 라우팅/로스터 통합 ----
+
+def test_roster_edge_per_link_rssi_end_to_end():
+    # 관통: INFO 테이블(mac 다리) + [Route] Link(링크별 rssi) + TX↔RX 상관(멤버십) →
+    # 링크선 edge 가 장비 평균(INFO[2]=-22)이 아니라 링크별 route_link(-48)를 물고 나온다.
+    eng = TopologyEngine()
+    eng.observe("COM4", 1.0, "  1  |                |         -          |    -    |           -           "
+                             "|   SSM26-001 |  -3 | A0,85,E3,EA,5C,C4( -) |    SSM |   -    |  -   |     -    |    -    ")
+    eng.observe("COM4", 1.1, " 2  |            SB1 |  94.1(00016/00017) |  61[ms] | S12:15:16 | R12:12:55 "
+                             "| SB260526-002 |  -22 | 30,AE,A4,4B,1A,0C( 5) |     SB |   O    |  X   |    0     | Outdoor ")
+    eng.observe("COM4", 1.5, "[Route] Link 30,AE,A4,4B,1A,0C -> A0,85,E3,EA,5C,C4 rssi=-48")
+    eng.observe("COM14", 2.0, '[Tx - my INFO] {"UnID":5,"Unique":30,"INFO":["4","M",-22]}')
+    eng.observe("COM4", 2.2, '[Proc-WiFiRx] {"UnID":5,"Unique":30,"INFO":["4","M",-22]}')
+    eng.flush()
+    entries = [{"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+               {"port": "COM14", "alias": "SB1-ESP", "lines": [], "connected": True}]
+    edge = next(e for e in eng.roster(entries, now=3.0)["groups"][0]["edges"]
+                if e["from"] == "COM14")
+    assert edge["rssi"] == -48 and edge["rssi_source"] == "route_link"
+
 
 def test_roster_includes_link_edges_from_observed_membership():
     # 정적 링크선 = correlator 가 관측한 leaf↔SSM 포트쌍(멤버십). 소스 TX(COM14)+SSM RX(COM4) 완성 →

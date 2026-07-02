@@ -252,3 +252,54 @@ def test_rssi_ladder_skips_none_and_keeps_zero():
     assert pick_link_metric({"reprssi": 0}) == {"value": 0, "source": "reprssi"}   # 0 은 유효값
     assert pick_link_metric({}) == {"value": None, "source": None}
     assert pick_link_metric({"unknown_src": -1}) == {"value": None, "source": None}
+
+
+# ---- SSM INFO 테이블 파싱(mac↔UnID↔이름 다리 + 장비 RF) ----
+
+INFO_TABLE_SELF_ROW = ("  1  |                |         -          |    -    |           -           "
+                       "|   SSM26-001 |  -3 | A0,85,E3,EA,5C,C4( -) |    SSM |   -    |  -   |     -    |    -    ")
+INFO_TABLE_DEV_ROW = (" 2  |            SB1 |  94.1(00016/00017) |  61[ms] | S12:15:16 | R12:12:55 "
+                      "| SB260526-002 |  -22 | 30,AE,A4,4B,1A,0C( 5) |     SB |   O    |  X   |    0     | Outdoor ")
+
+
+def test_info_table_device_row_parsed_to_mac_bridge():
+    # 'Mac(ID)' 셀 앵커 상대 참조 — LastComTime 셀 안의 '|'(S..|R..) 때문에 고정 인덱스 불가.
+    rt = RoutingTable()
+    rt.observe_table_line("COM4", 1.0, INFO_TABLE_DEV_ROW)
+    ent = rt.info_table()["by_mac"]["30:AE:A4:4B:1A:0C"]
+    assert ent["unid"] == 5 and ent["name"] == "SB1" and ent["rf"] == -22
+
+
+def test_info_table_self_row_sets_ssm_mac():
+    rt = RoutingTable()
+    rt.observe_table_line("COM4", 1.0, INFO_TABLE_SELF_ROW)
+    t = rt.info_table()
+    assert t["ssm_mac"]["COM4"] == "A0:85:E3:EA:5C:C4"
+    assert t["by_mac"]["A0:85:E3:EA:5C:C4"]["rf"] == -3      # 자기 행 RF(자기 이웃 평균)도 보존
+
+
+def test_info_table_row_enriches_token_map():
+    # (ID)>0 행은 토큰맵에 mac/unid/이름 등록 — [Passed Device] 해소와 같은 InfoListArr 원천.
+    rt = RoutingTable()
+    rt.observe_table_line("COM4", 1.0, INFO_TABLE_DEV_ROW)
+    assert rt.resolve_token("05") == {"name": "SB1", "mac": "30:AE:A4:4B:1A:0C", "unid": 5}
+
+
+def test_info_table_ignores_non_table_lines():
+    # [Route] Link(파이프 없음)·json REPRSSI·연속줄은 테이블 행이 아니다 — 무상태 매칭 오탐 금지.
+    rt = RoutingTable()
+    rt.observe_table_line("COM4", 1.0, "[Route] Link A0,85,E3,EA,5C,C4 -> 10,06,1C,16,97,AC rssi=-41")
+    rt.observe_table_line("COM4", 1.0, " -- takentime : 61")
+    rt.observe_table_line("COM4", 1.0, '[Proc-WebRTx] ["message",{"data":{"REPRSSI":[["A0,85,E3,EA,5C,C4",-22]]}}]')
+    assert rt.info_table() == {"by_mac": {}, "ssm_mac": {}}
+
+
+def test_info_table_unitid_zero_not_bridged():
+    # UnitID 0 = 미할당(BayID=0 장비) — unid 다리 키가 아니며 토큰맵('00' 예약)도 오염하지 않는다.
+    row = (" 3  |                |  90.0(00009/00010) |  70[ms] | S12:15:16 | R12:12:55 "
+           "| R26-001 |  -35 | 10,06,1C,16,97,AC( 0) |      5 |   -    |  -   |    0     |    -    ")
+    rt = RoutingTable()
+    rt.observe_table_line("COM4", 1.0, row)
+    ent = rt.info_table()["by_mac"]["10:06:1C:16:97:AC"]
+    assert ent["unid"] is None and ent["rf"] == -35
+    assert rt.resolve_token("00") is None

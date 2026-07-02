@@ -311,6 +311,21 @@ def test_identify_port_carries_confidence_and_source():
     assert d["type_confidence"] >= 0.9
 
 
+def test_number_from_self_report_line_only_not_relayed_unid():
+    # SB 포트 로그엔 [WiFi_Rx](수신 요청)·[Data_Pass](중계) 등 **남의 UnID** 가 섞인다(펌웨어
+    # 확인 2026-07-02). 번호는 자기 보고 [Tx - my INFO] 줄의 UnID 만 — 블롭 첫 매칭 오귀속 방지.
+    lines = [
+        '[Data_Pass] {"UnID":9,"Unique":3,"INFO":["4"]}',            # 남의 패킷 중계(UnID9)
+        '[WiFi_Rx] {"INFO":"REQ","UnID":9,"Cidx":475}',              # 남에게 간 요청 오버히어
+        '[Tx - my INFO] {"UnID":5,"INFO":["4","X"],"Unique":15}',    # 자기 보고(UnID5)
+    ]
+    d = identify_port("COM14", None, lines, True)
+    assert d["number"] == 5                       # 블롭 첫 매칭(9)이 아니라 자기 보고(5)
+
+    no_self = identify_port("COM14", "SB1-ESP", ['[WiFi_Rx] {"UnID":9}'], True)
+    assert no_self["number"] == 1                 # 별칭 번호 유지 — 남의 UnID 로 보강하지 않음
+
+
 def test_classify_device_unknown_enum_not_mislabeled_sb():
     # 자기 보고했으나 미지/미래 enum(현 펌웨어 1~5 밖) → over-broad 시그니처로 SB 단정 금지, 미상.
     d = classify_device(['[Tx - my INFO] {"INFO":["6","X"],"Unique":1}'])
@@ -339,6 +354,59 @@ def _ev(kind="rx", ts=1.0, unid=None, unique=1, mac=None, passed=None, route=Non
             "ids": {"unid": unid, "unique": unique, "mac": mac},
             "hints": {"passed": passed},
             "metrics": {"reprssi": reprssi or []}}
+
+
+# SSM INFO 테이블 행 픽스처(펌웨어 printf 포맷 — LastComTime 셀 안에 '|' 있음에 주의).
+INFO_TABLE_SELF_ROW = ("  1  |                |         -          |    -    |           -           "
+                       "|   SSM26-001 |  -3 | A0,85,E3,EA,5C,C4( -) |    SSM |   -    |  -   |     -    |    -    ")
+INFO_TABLE_DEV_ROW = (" 2  |            SB1 |  94.1(00016/00017) |  61[ms] | S12:15:16 | R12:12:55 "
+                      "| SB260526-002 |  -22 | 30,AE,A4,4B,1A,0C( 5) |     SB |   O    |  X   |    0     | Outdoor ")
+
+
+def test_roster_edge_rssi_prefers_per_link_metric_over_device_avg():
+    # 링크선 RSSI ladder: **링크별**(route_link, mac쌍) > **장비 평균**(info_rssi=INFO[2]).
+    # INFO[2]는 장비가 보고한 이웃 평균(avrRssi)이라 링크 품질이 아니다(2026-07-02 펌웨어 확인) —
+    # INFO 테이블(mac 다리: unid5→30,AE / SSM 자기 행)로 [Route] Link 를 leaf↔SSM 링크에 귀속.
+    rt = RoutingTable()
+    rt.observe_table_line("COM4", 1.0, INFO_TABLE_SELF_ROW)
+    rt.observe_table_line("COM4", 1.0, INFO_TABLE_DEV_ROW)
+    rt.observe(_ev(kind="route", ts=1.5,
+                   route={"from_mac": "30:AE:A4:4B:1A:0C", "to_mac": "A0:85:E3:EA:5C:C4", "rssi": -48}))
+    membership = {"COM4": {5: {"device_type": "4", "local_port": "COM14", "last_ts": 1.0, "rssi": -22}}}
+    entries = [{"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+               {"port": "COM14", "alias": "SB1-ESP", "lines": [], "connected": True}]
+    edge = build_roster(entries, routing=rt, membership=membership, now=2.0)["groups"][0]["edges"][0]
+    assert edge["rssi"] == -48 and edge["rssi_source"] == "route_link"   # 링크별 우선
+
+
+def test_roster_edge_rssi_falls_back_to_device_avg_without_link_metric():
+    # 링크별 관측(route_link/reprssi)이 없으면 장비 평균(INFO[2])으로 폴백 — source 로 출처 구분.
+    membership = {"COM4": {5: {"device_type": "4", "local_port": "COM14", "last_ts": 1.0, "rssi": -22}}}
+    entries = [{"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+               {"port": "COM14", "alias": "SB1-ESP", "lines": [], "connected": True}]
+    edge = build_roster(entries, membership=membership, now=2.0)["groups"][0]["edges"][0]
+    assert edge["rssi"] == -22 and edge["rssi_source"] == "info_rssi"
+
+
+def test_roster_edge_rssi_info_table_rf_when_no_live_info():
+    # 홉에 INFO[2]가 없던 멤버라도 INFO 테이블 RF열(같은 값의 테이블 경로)이 있으면 그걸로 폴백.
+    rt = RoutingTable()
+    rt.observe_table_line("COM4", 1.0, INFO_TABLE_DEV_ROW)
+    membership = {"COM4": {5: {"device_type": "4", "local_port": "COM14", "last_ts": 1.0, "rssi": None}}}
+    entries = [{"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+               {"port": "COM14", "alias": "SB1-ESP", "lines": [], "connected": True}]
+    edge = build_roster(entries, routing=rt, membership=membership, now=2.0)["groups"][0]["edges"][0]
+    assert edge["rssi"] == -22 and edge["rssi_source"] == "info_table_rf"
+
+
+def test_roster_ssm_node_mac_from_info_table_self_row():
+    # SSM 자신의 mac 은 INFO 테이블 자기 행에서 채운다(노드 mac=null 해소 — 2026-07-01 원 버그의 뿌리).
+    rt = RoutingTable()
+    rt.observe_table_line("COM4", 1.0, INFO_TABLE_SELF_ROW)
+    entries = [{"port": "COM4", "alias": "SSM", "lines": [], "connected": True}]
+    nodes = build_roster(entries, routing=rt)["groups"][0]["nodes"]
+    ssm = next(n for n in nodes if n["type"] == "SSM")
+    assert ssm["mac"] == "A0:85:E3:EA:5C:C4"
 
 
 def test_roster_group_kind_ssm():

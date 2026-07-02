@@ -22,6 +22,8 @@ import json
 import re
 from typing import Optional
 
+from .topology_routing import pick_link_metric
+
 # 펌웨어 장비타입 enum(SSM_esp32.h:468-472·repeater 헤더): dTSSM=1·dTAPU=2·dTAPU_C_SLIM=3·
 # dTSBB=4·dTRPT=5. 각 장비의 자기 보고 [Tx - my INFO] 의 INFO[0] 이 이 타입숫자다. 문자열
 # 토큰(별칭·SSM INFO 테이블)도 함께 정규화한다. 주의: SSM simplevInfoBuffer 는 5(Repeater)를
@@ -58,6 +60,8 @@ _SIGNATURES = [
 ]
 
 # ESP 자기 번호(UnID=자기 BayID) 추출 — ESP↔STM 병합 번호원. STM 번호는 카드상관(CardPairing) 전담.
+# 자기 보고 [Tx - my INFO] 줄에서만 찾는다 — SB 포트 로그엔 [WiFi_Rx](수신 요청)·[Data_Pass](중계)
+# 등 **남의 UnID** 가 섞이므로(펌웨어 확인 2026-07-02), 블롭 첫 매칭은 중계 구성에서 오귀속한다.
 _RE_UNID = re.compile(r'"UnID"\s*:\s*(\d+)')            # SB-ESP(자기 패킷의 UnID=자기 BayID)
 
 # 별칭(SERIAL_NAMES/AUTONAME) 파싱: 'SB1-ESP'→type SB·num 1·mcu ESP, 'SSM'→type SSM.
@@ -206,8 +210,13 @@ def _number_from_lines(typ: Optional[str], mcu: Optional[str], lines) -> Optiona
     """
     if typ != "SB" or mcu == "STM":
         return None
-    m = _RE_UNID.search(_blob(lines))                 # ESP·미상 SB: 자기 UnID
-    return int(m.group(1)) if m else None
+    for line in _blob(lines).split("\n"):             # ESP·미상 SB: 자기 보고 줄의 UnID 만
+        if "[Tx - my INFO]" not in line:              # [WiFi_Rx]/[Data_Pass] 등 남의 UnID 오귀속 방지
+            continue
+        m = _RE_UNID.search(line)
+        if m:
+            return int(m.group(1))
+    return None
 
 
 def identify_port(port: str, alias: Optional[str], lines, connected: bool = True) -> dict:
@@ -302,15 +311,24 @@ def build_roster(entries, routing=None, membership=None, pairing=None, now=None)
 
     token_map = routing.tokens() if routing is not None else {}
     unid_idx = _unid_index(token_map)                       # unid → (token, entry): mac/토큰 enrich
+    # 링크 그래프(mac쌍)·INFO 테이블(mac 다리) — 멤버십 링크의 RSSI ladder 후보원(없으면 폴백 경로만).
+    routing_edges = routing.edges(now) if routing is not None else []
+    info = routing.info_table() if routing is not None and hasattr(routing, "info_table") else {}
+    ssm_macs = info.get("ssm_mac") or {}
 
     for i, g in enumerate(groups):
         descriptors = _merge_sb(g["_members"])              # 직접연결(SB ESP/STM 병합)
         if i == 0 and token_map:                            # 원격 mesh 노드는 1차(주) 그룹에 귀속
             descriptors += _remote_descriptors(descriptors, token_map)
         g["nodes"] = _layout_group(descriptors, unid_idx)
+        for n in g["nodes"]:                                # SSM 자신의 mac 은 INFO 테이블 자기 행에서
+            if n["type"] == "SSM" and not n.get("mac"):
+                n["mac"] = ssm_macs.get(g["ssm_port"])
         # 정적 링크선 = 그 SSM 그룹의 멤버십 포트쌍(correlator 가 관측한 leaf↔SSM). SSM별 멤버십이라
         # 멀티-SSM 도 각 그룹에 자기 링크만(REPRSSI 무선이웃 강제 링크는 폐기, plan §3).
-        g["edges"] = _membership_edges(membership, g["ssm_port"], now) if g["kind"] == "ssm" else []
+        g["edges"] = (_membership_edges(membership, g["ssm_port"], now,
+                                        routing_edges=routing_edges, info=info)
+                      if g["kind"] == "ssm" else [])
         del g["_members"]
     return {"groups": groups, "unplaced": unplaced}
 
@@ -324,24 +342,52 @@ def _unid_index(token_map: dict) -> dict:
     return idx
 
 
-def _membership_edges(membership, ssm_port, now, fresh_s=_MEMBERSHIP_FRESH_S) -> list:
-    """멤버십(ssm_port→leaf) → 정적 링크선 edges [{from:local_port, to:ssm_port, fresh}].
+def _membership_edges(membership, ssm_port, now, fresh_s=_MEMBERSHIP_FRESH_S,
+                      routing_edges=None, info=None) -> list:
+    """멤버십(ssm_port→leaf) → 정적 링크선 edges [{from:local_port, to:ssm_port, fresh, rssi, rssi_source}].
 
-    correlator 가 (UnID,Unique) TX↔RX 로 관측한 leaf↔SSM 포트쌍만 그린다 — REPRSSI 같은 무선
+    correlator 가 (식별자,Unique) TX↔RX 로 관측한 leaf↔SSM 포트쌍만 그린다 — REPRSSI 같은 무선
     이웃 전부를 강제 링크로 긋지 않는다(plan §3, 사용자 강조: 링크 고정 강제 금지). last_ts 가
     fresh_s 넘게 오래되면 fresh=False(프론트가 옅게) — 관측 이력은 유지하되 최신성만 감쇠시켜
-    '고정'이 아닌 '동적 관측'을 표현한다(관측 바뀌면 멤버십도 갱신). RSSI 품질 메타는 후속(선택).
+    '고정'이 아닌 '동적 관측'을 표현한다(관측 바뀌면 멤버십도 갱신).
+
+    RSSI 품질은 ladder(pick_link_metric)로 고른다: **링크별**(route_link/reprssi — mac쌍, 링크
+    그래프에서 leaf↔SSM 양방향 조회) 우선, 없으면 **장비 단위**(info_rssi=INFO[2], info_table_rf=
+    INFO 테이블 RF열 — 둘 다 장비가 보고한 이웃 평균 avrRssi) 폴백. rssi_source 로 출처를 노출해
+    "링크 품질"과 "장비 RF 건강도"의 혼동을 막는다(2026-07-02 재검토 — INFO[2] 직결 축 오류 수정).
+    mac 끝점 해소: leaf = 멤버십 키(Mac 폴백 키면 그대로, UnID 키면 INFO 테이블 unid→mac 다리),
+    SSM = INFO 테이블 자기 행. 다리가 없으면 장비 단위 폴백으로 자연 강등(우아한 열화).
     """
     if not membership or ssm_port is None:
         return []
+    info = info or {}
+    by_mac = info.get("by_mac") or {}
+    ssm_mac = (info.get("ssm_mac") or {}).get(ssm_port)
+    unid_to_mac = {e["unid"]: mac for mac, e in by_mac.items() if e.get("unid") is not None}
+    links = {}
+    for e in routing_edges or []:                     # 링크 그래프(mac쌍) — fresh 만(스테일 품질 방지)
+        if e.get("fresh") is not False and e.get("rssi") is not None:
+            links[(e.get("from"), e.get("to"))] = e
     out = []
-    for ent in membership.get(ssm_port, {}).values():
+    for ident, ent in membership.get(ssm_port, {}).items():
         lp = ent.get("local_port")
         if not lp:
             continue
         last_ts = ent.get("last_ts")
         fresh = now is None or last_ts is None or (now - last_ts) < fresh_s
-        out.append({"from": lp, "to": ssm_port, "fresh": bool(fresh), "rssi": ent.get("rssi")})
+        leaf_mac = ident if isinstance(ident, str) else unid_to_mac.get(ident)
+        cand = {"info_rssi": ent.get("rssi")}
+        if leaf_mac:
+            tbl = by_mac.get(leaf_mac)
+            if tbl and tbl.get("rf") is not None:
+                cand["info_table_rf"] = tbl["rf"]
+            if ssm_mac:
+                link = links.get((leaf_mac, ssm_mac)) or links.get((ssm_mac, leaf_mac))
+                if link:
+                    cand[link.get("source") or "route_link"] = link["rssi"]
+        picked = pick_link_metric(cand)
+        out.append({"from": lp, "to": ssm_port, "fresh": bool(fresh),
+                    "rssi": picked["value"], "rssi_source": picked["source"]})
     return out
 
 

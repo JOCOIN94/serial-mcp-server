@@ -32,6 +32,9 @@ from collections import OrderedDict
 from typing import Optional
 
 # RSSI 폴백 ladder(강→약). plan §7-4: [Route] Link → REPRSSI → INFO[2] → INFO표 RF열 → takentime → RS.
+# route_link/reprssi 만 **링크별**(mac쌍) 품질이다. info_rssi(INFO[2])와 info_table_rf(SSM INFO
+# 테이블 RF열)는 같은 값의 두 경로 — 장비가 보고한 **주변 이웃 평균**(펌웨어 avrRssi, 2026-07-02
+# 확인: 테이블 rf = jsonWiFiRxBuf["INFO"][2] 저장분)이라 링크가 아닌 장비 단위 RF 건강도다.
 # takentime/rs 는 RSSI 가 아니라 품질 프록시 — source 라벨로 출처를 노출해 혼동을 막는다.
 RSSI_LADDER = ("route_link", "reprssi", "info_rssi", "info_table_rf", "takentime", "rs")
 
@@ -43,6 +46,16 @@ _RESERVED_TOKENS = frozenset({"00", "FF"})
 
 # [Passed Device] '(05-SB5)->(01-REP1)' → (토큰, 이름) 쌍. 토큰=2-hex, 이름=unitName.
 _RE_PASSED_PAIR = re.compile(r"\(\s*([0-9A-Fa-f]+)\s*-\s*([^)]+?)\s*\)")
+
+# SSM INFO 테이블('<< Information on the entire equipment >>') 행의 'Mac(ID)' 셀 —
+# 'A0,85,E3,EA,5C,C4( 5)' / 자기 행은 '( -)'. 이 셀 구조(콤마 mac + 괄호 ID)와 파이프 6개
+# 이상 조합은 테이블 행에만 나타난다([Route] Link·REPRSSI json 과 안 겹침) → 무상태 라인 매칭.
+_RE_TABLE_MAC_CELL = re.compile(r"([0-9A-Fa-f]{2}(?:,[0-9A-Fa-f]{2}){5})\(\s*(-|\d+)\s*\)")
+
+
+def _norm_mac(s: str) -> str:
+    """테이블 mac('A0,85,..')을 이벤트 mac 정규형(대문자 콜론)으로 — topology_events 와 동일 규약."""
+    return s.strip().replace(",", ":").upper()
 
 
 def _norm_token(tok) -> Optional[str]:
@@ -102,11 +115,17 @@ def pick_link_metric(candidates: dict) -> dict:
 class RoutingTable:
     """링크 그래프(REPRSSI/[Route] Link) + 토큰맵을 유지하는 순수 stateful 엔진."""
 
-    def __init__(self, fresh_window_s: float = 30.0, max_links: int = 4000) -> None:
+    def __init__(self, fresh_window_s: float = 30.0, max_links: int = 4000,
+                 max_table: int = 512) -> None:
         self._fresh = fresh_window_s
         self._max_links = max_links
+        self._max_table = max_table
         self._links: "OrderedDict[tuple, dict]" = OrderedDict()   # (from_mac,to_mac)→{rssi,ts,source}
         self._tokens: dict = {}                                   # token(2-hex)→{name,mac,unid}
+        # SSM INFO 테이블 관측(mac↔UnID↔이름 다리 + 장비 RF). BayID 장비는 mesh payload 에 Mac 을
+        # 숨기므로(펌웨어 if(BayID) UnID else Mac) 이 테이블이 mac 공간↔논리 노드 공간의 유일한 다리다.
+        self._table: "OrderedDict[str, dict]" = OrderedDict()     # mac→{name,unid,rf,ts}
+        self._ssm_mac: dict = {}                                  # port→그 포트 SSM 자신의 mac(자기 행)
 
     def observe(self, ev) -> None:
         """이벤트 1개로 링크 그래프·토큰맵을 갱신(방출 없음 — 스냅샷은 edges()/resolve_token())."""
@@ -125,6 +144,58 @@ class RoutingTable:
                     if row.get("mac"):
                         self._add_link(src, row["mac"], row.get("rssi"), "reprssi", ts)
         self._register_tokens(ev)
+
+    def observe_table_line(self, port: str, ts: float, text: str) -> None:
+        """SSM INFO 테이블 행 1줄 관측(무상태 라인 매칭). 엔진이 매 줄 흘려준다(카드페어링과 동형).
+
+        행 파싱은 'Mac(ID)' 셀을 앵커로 한다 — LastComTime 셀 안에 '|' 가 들어가는 행이 있어
+        (S..:.. | R..:..) 고정 인덱스 split 이 불가하므로, mac 셀 위치 기준 상대 참조:
+        unitName=셀[1], RF=mac 직전 셀, 장비타입=mac 직후 셀. 타입 'SSM'(자기 행, ID='-')은
+        그 포트 SSM 자신의 mac 으로 저장한다(멤버십 링크 끝점 해소용). (ID)>0 이면 토큰맵에도
+        mac/unid 를 등록해 직접 노드 mac enrich([Passed Device] 이름 해소와 같은 InfoListArr 원천).
+        """
+        if text.count("|") < 6:
+            return
+        m = _RE_TABLE_MAC_CELL.search(text)
+        if not m:
+            return
+        cells = [c.strip() for c in text.split("|")]
+        idx = next((i for i, c in enumerate(cells) if _RE_TABLE_MAC_CELL.search(c)), None)
+        if idx is None or idx < 2:
+            return
+        mac = _norm_mac(m.group(1))
+        unid = None if m.group(2) == "-" else int(m.group(2))
+        if unid == 0:
+            unid = None                       # UnitID 0 = 미할당(BayID=0 장비) — 다리 키 아님
+        name = cells[1] or None
+        try:
+            rf = int(cells[idx - 1])
+        except ValueError:
+            rf = None                         # 자기 행 '-' 등
+        typ = cells[idx + 1].upper() if idx + 1 < len(cells) else ""
+        if typ == "SSM":
+            self._ssm_mac[port] = mac
+        ent = self._table.setdefault(mac, {"name": None, "unid": None, "rf": None, "ts": None})
+        ent.update({"name": name or ent["name"], "unid": unid if unid is not None else ent["unid"],
+                    "rf": rf if rf is not None else ent["rf"], "ts": ts})
+        self._table.move_to_end(mac)
+        while len(self._table) > self._max_table:
+            self._table.popitem(last=False)   # drop-oldest
+        tok = _token_of_unid(unid)
+        if tok is not None:
+            t = self._tokens.setdefault(tok, {"name": None, "mac": None, "unid": None})
+            t["unid"], t["mac"] = unid, mac
+            if name:
+                t["name"] = name              # unitName — [Passed Device] 해소와 같은 원천이라 덮어써도 동치
+
+    def info_table(self) -> dict:
+        """INFO 테이블 스냅샷(사본) {by_mac: {mac:{name,unid,rf,ts}}, ssm_mac: {port: mac}}.
+
+        build_roster(모듈5)가 멤버십 링크의 mac 끝점 해소(unid→mac, ssm_port→mac)와
+        info_table_rf 폴백(장비 단위 RF)에 쓴다.
+        """
+        return {"by_mac": {mac: dict(e) for mac, e in self._table.items()},
+                "ssm_mac": dict(self._ssm_mac)}
 
     def edges(self, now: Optional[float] = None) -> list:
         """링크 그래프 스냅샷 → [{from,to,rssi,source,fresh}]. now 없으면 fresh=None(미상)."""

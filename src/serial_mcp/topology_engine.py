@@ -27,24 +27,28 @@ from .topology_routing import RoutingTable
 
 
 class _RoutingSnapshot:
-    """build_roster 가 보는 routing 인터페이스(tokens()/edges())의 불변 스냅샷.
+    """build_roster 가 보는 routing 인터페이스(tokens()/edges()/info_table())의 불변 스냅샷.
 
-    roster() 가 엔진 Lock 안에서 한 번만 떠서(RoutingTable.tokens()/edges() 는 이미 사본 반환),
+    roster() 가 엔진 Lock 안에서 한 번만 떠서(RoutingTable 접근자들은 이미 사본 반환),
     CPU 무거운 build_roster(포트별 정규식 분류)는 Lock 밖에서 돌게 한다 — 뷰어 폴링이 리더
     스레드 observe 를 Lock 으로 막지 않도록(관측 비차단 불변식). edges 는 now 로 미리 계산됐다.
     """
 
-    __slots__ = ("_tokens", "_edges")
+    __slots__ = ("_tokens", "_edges", "_info")
 
-    def __init__(self, tokens: dict, edges: list) -> None:
+    def __init__(self, tokens: dict, edges: list, info: Optional[dict] = None) -> None:
         self._tokens = tokens
         self._edges = edges
+        self._info = info or {"by_mac": {}, "ssm_mac": {}}
 
     def tokens(self) -> dict:
         return self._tokens
 
     def edges(self, now=None) -> list:    # now 무시 — 스냅샷 시점 fresh 로 이미 계산됨
         return self._edges
+
+    def info_table(self) -> dict:         # SSM INFO 테이블(mac↔UnID↔이름 다리 + 장비 RF)
+        return self._info
 
 
 class TopologyEngine:
@@ -72,12 +76,24 @@ class TopologyEngine:
                 self._assemblers[port] = asm
             self._last_ts[port] = ts
             self._pairing.observe(port, ts, text)     # 카드 sCuID 상관(포트→베이) 라이브 급전
+            self._routing.observe_table_line(port, ts, text)   # SSM INFO 테이블 행(mac 다리) 급전
             return self._drain(asm.feed(ts, text), ts)
 
     def forget_port(self, port: str) -> None:
-        """포트 disconnect/재오픈 시 그 포트의 카드페어링 흔적 제거(스테일 매핑 방지). server.py 가 호출."""
+        """포트 disconnect/재오픈 시 그 포트의 카드페어링·멤버십 흔적 제거(스테일 매핑 방지). server.py 가 호출.
+
+        멤버십도 함께 무효화한다 — 안 지우면 leaf 를 뽑거나 보드를 바꿔 꽂아도 SSM 이 무선으로
+        계속 듣는 한 rx-only 홉이 last_ts 를 갱신하고 local_port 보존 규칙이 옛 포트를 유지해,
+        존재하지 않는 포트로 fresh 링크선이 계속 그려진다(유령 링크). 재오픈 후 실제 매핑은
+        다음 INFO 사이클의 TX↔RX 상관이 다시 채운다(관측 기반·자기 교정).
+        """
         with self._lock:
             self._pairing.forget_port(port)
+            self._membership.pop(port, None)          # 이 포트가 SSM(rx_port)이던 그룹 멤버십 제거
+            for members in self._membership.values():  # 이 포트를 leaf 로컬포트로 갖던 매핑 무효화
+                for ent in members.values():
+                    if ent.get("local_port") == port:
+                        ent["local_port"] = None
 
     def sweep(self, now: float, flush_idle_s: float = 2.0) -> list:
         """유휴 pending 블록 flush + correlator 만료 처리. 새 홉 리스트 반환.
@@ -111,7 +127,8 @@ class TopologyEngine:
         CPU 무거운 build_roster(포트별 정규식 분류)는 Lock 밖에서 수행해 관측 비차단을 유지한다.
         """
         with self._lock:
-            snap = _RoutingSnapshot(self._routing.tokens(), self._routing.edges(now))
+            snap = _RoutingSnapshot(self._routing.tokens(), self._routing.edges(now),
+                                    self._routing.info_table())
             membership = self._membership_copy()
             pairing = self._pairing.snapshot()
             hops = [] if n <= 0 else list(self._hops)[-n:]
