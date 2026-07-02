@@ -51,7 +51,7 @@ from .ports import (
     parse_port_list,
 )
 from .ring_buffer import LineBuffer
-from .topology import build_roster, classify_device
+from .topology import build_roster, classify_device, port_labels
 from .topology_engine import TopologyEngine
 from .viewer_feed import RawFeed
 from .web_viewer import ViewerServer
@@ -344,6 +344,23 @@ _TOPOLOGY_HOPS_CAVEAT = (
     "로그 표시용이며 시각이 아니다. 체인 내 노드 순서는 ordered=true 일 때만 [Passed Device]/Rt "
     "근거의 경로 순서다."
 )
+
+
+def _enrich_chain_labels(chains: list, roster: dict) -> list:
+    """MCP get_topology 용 recent_chains node.label 부여. viewer SSE 원문은 건드리지 않는다."""
+    labels = port_labels(roster)
+    out = []
+    for chain in chains or []:
+        item = dict(chain)
+        nodes = []
+        for node in item.get("nodes") or []:
+            n = dict(node)
+            port = n.get("port")
+            n["label"] = (labels.get(port) if port else None) or n.get("name") or port
+            nodes.append(n)
+        item["nodes"] = nodes
+        out.append(item)
+    return out
 
 
 class _WriteApproval(BaseModel):
@@ -1100,7 +1117,8 @@ def get_topology(ctx: Optional[Context] = None) -> dict:
 
     [무엇을 반환] roster 는 현재 포트 로그와 routing 관측으로 만든 그룹/노드/엣지
     구조이고, recent_hops 는 최근 20개 실제 경로 후보/성공/실패/미확정 요약이다.
-    recent_chains 는 같은 메시지 키의 관측을 병합한 최근 체인 로그다.
+    recent_chains 는 같은 메시지 키의 관측을 병합한 최근 체인 로그다. 각 node.label 은
+    port 가 있으면 roster 라벨을 우선해 붙인다.
     이 도구는 전 포트 토폴로지를 반환하므로 port 인자를 받지 않는다. 포트별 원문은
     get_recent_logs/query_serial_logs 로 이어서 확인하라.
 
@@ -1128,6 +1146,7 @@ def get_topology(ctx: Optional[Context] = None) -> dict:
         _log(f"topology 스냅샷 생성 실패: {e!r}")
         roster, recent_hops, recent_chains = {"groups": [], "unplaced": []}, [], []
 
+    recent_chains = _enrich_chain_labels(recent_chains, roster)
     groups = roster.get("groups", []) if isinstance(roster, dict) else []
     return {
         "status": "ok",
@@ -1504,7 +1523,7 @@ def _viewer_topology_info() -> dict:
         eng = _topology_engine
         if eng is not None:
             roster, _hops, chains = eng.roster_and_recent_hops(
-                entries, now=time.monotonic(), n=0, chains_n=30)
+                entries, now=time.monotonic(), n=0, chains_n=200)
             return {**roster, "chains": chains}   # routing enrich(edges·원격노드) + 체인 seed
         return {**build_roster(entries), "chains": []}
     except Exception as e:   # noqa: BLE001 - 뷰어 보조기능: 어떤 실패도 코어로 전파 금지

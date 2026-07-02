@@ -336,6 +336,21 @@ def build_roster(entries, routing=None, membership=None, pairing=None, now=None,
     return {"groups": groups, "unplaced": unplaced}
 
 
+def port_labels(roster: dict) -> dict:
+    """roster.groups[].nodes[].ports[].port → 그 노드 label 매핑."""
+    out = {}
+    for group in (roster or {}).get("groups") or []:
+        for node in group.get("nodes") or []:
+            label = node.get("label")
+            if not label:
+                continue
+            for port in node.get("ports") or []:
+                p = port.get("port")
+                if p:
+                    out[p] = label
+    return out
+
+
 def _unid_index(token_map: dict) -> dict:
     """토큰맵 {token:{name,mac,unid}} → unid 역인덱스 {unid:(token, entry)}. 직접노드 enrich 용."""
     idx = {}

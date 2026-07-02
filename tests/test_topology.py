@@ -10,6 +10,7 @@ from serial_mcp.topology import (
     classify_lines,
     identify_port,
     parse_alias,
+    port_labels,
 )
 from serial_mcp.topology_routing import RoutingTable
 
@@ -165,6 +166,17 @@ def test_roster_sb_esp_stm_merged_via_card_pairing():
     assert [p["mcu"] for p in sb[0]["ports"]] == ["ESP", "STM"]   # 발견순 무관, ESP→STM 고정
     assert sb[0]["label"] == "SB5"            # UnID/페어링 번호 5
     assert sb[0]["number_collision"] is False  # ESP+STM 같은 베이 → 충돌 아님
+
+
+def test_port_labels_maps_group_node_labels_for_all_ports_and_ignores_unplaced():
+    roster = build_roster(_live_entries(), pairing={"COM12": 5})
+
+    labels = port_labels(roster)
+
+    assert labels["COM4"] == "SSM"
+    assert labels["COM12"] == "SB5"
+    assert labels["COM14"] == "SB5"
+    assert "COM99" not in port_labels({"groups": [], "unplaced": ["COM99"]})
 
 
 def test_roster_two_sb_esp_same_unid_not_merged():
