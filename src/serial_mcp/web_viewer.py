@@ -248,7 +248,7 @@ body {
 
 /* ===== 좌측 네비게이션 (세션 + 포트 상태) ===== */
 #nav {
-  flex: 0 0 600px; box-sizing: border-box;
+  flex: 0 0 420px; box-sizing: border-box;
   position: sticky; top: 0; align-self: flex-start; height: 100vh; overflow-y: auto;
   background: var(--bg-raised); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 11px; padding: 10px;
@@ -621,8 +621,14 @@ kbd {
 .tedges line { transition: stroke .15s, stroke-width .15s, stroke-opacity .15s; }
 .tedges line.eactive { stroke: #3fb950; stroke-width: 2.5; stroke-opacity: 1; }
 .thop { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }   /* 홉 경로 강조 — 노드 뒤(정적 링크선과 같은 층) */
-.topohops { font-family: var(--ui); display: flex; flex-direction: column; gap: 7px; padding: 2px; max-height: 36vh; overflow-y: auto; overflow-anchor: auto; }   /* 체인 로그 패널 */
+/* 체인 로그 패널 — 사이드바 하단 정렬(margin-top:auto), 뷰포트 절반까지. */
+.topohops { font-family: var(--ui); display: flex; flex-direction: column; gap: 5px; padding: 2px; margin-top: auto; max-height: 50vh; overflow-y: auto; overflow-anchor: auto; }
 .topohops:empty { display: none; }
+.tch-bar { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; background: var(--bg-raised); padding: 2px 0 4px; }
+.tch-bar-title { font: 700 10px var(--ui); letter-spacing: .06em; color: var(--muted); }
+.tch-follow { margin-left: auto; font: 700 11px var(--ui); color: var(--muted); background: var(--bg); border: 1px solid var(--border-2); border-radius: 5px; padding: 0 7px; cursor: pointer; }
+.tch-follow.on { color: #3fb950; border-color: #3fb950; }
+.tch-gno { font: 700 9px var(--ui); color: var(--muted); border: 1px solid var(--border-2); border-radius: 4px; padding: 0 4px; flex: none; white-space: nowrap; }
 .thd-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .thd-status { margin-left: auto; font: 700 10px var(--ui); white-space: nowrap; }
 .thd-ok { color: #3fb950; } .thd-fail { color: #f0786f; } .thd-pending { color: #e3b341; }
@@ -631,8 +637,6 @@ kbd {
 .thd-chip.dim { color: var(--muted); border-style: dashed; opacity: .72; }
 .thd-arrow { color: var(--muted); font-size: 10px; }
 .thd-meta { font: 500 10px var(--ui); color: var(--muted); }
-.tch-group { display: flex; flex-direction: column; gap: 4px; }
-.tch-group-title { font: 700 10px var(--ui); letter-spacing: .06em; color: var(--muted); }
 .tch-row { border-left: 2px solid var(--border-2); padding: 3px 0 4px 7px; display: flex; min-width: 0; }
 .tch-head { display: flex; align-items: center; gap: 6px; min-width: 0; width: 100%; }
 .tch-enter { animation: tchEnter .15s ease-out; }
@@ -1334,6 +1338,8 @@ function portLabelMap(groups) {
   return out;
 }
 
+var _RE_MAC_LABEL = /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/;
+
 function chainRow(entry, labels) {
   var e = entry || {}, nodes = e.nodes || [], chips = [];
   for (var i = 0; i < nodes.length; i++) {
@@ -1342,6 +1348,10 @@ function chainRow(entry, labels) {
     var label = (port && labels && labels[port]) || n.name || port || "?";
     var title = [];
     if (n.name && n.name !== label) title.push(n.name);
+    if (_RE_MAC_LABEL.test(label)) {          // mac ident(BayID=0) — 칩엔 뒤 2옥텟만, 전체는 툴팁
+      title.unshift(label);
+      label = "…" + label.slice(-5);
+    }
     if (n.rssi != null && n.rssi !== "") title.push(String(n.rssi) + "dBm");
     if (n.ms != null && n.ms !== "") title.push(String(n.ms) + "ms");
     chips.push({
@@ -1365,50 +1375,22 @@ function chainRow(entry, labels) {
   };
 }
 
-function groupDisplayLabel(g) {
-  if (!g) return null;
-  var ssm = g.ssm_port || null;
-  var base = g.label || g.name || null;
-  var nodes = g.nodes || [];
-  if (ssm) {
-    for (var i = 0; i < nodes.length; i++) {
-      var n = nodes[i] || {}, ports = n.ports || [];
-      for (var j = 0; j < ports.length; j++) {
-        if (ports[j] && ports[j].port === ssm && n.label) base = n.label;
-      }
-    }
-    return (base || ssm) + " (" + ssm + ")";
-  }
-  return base || g.id || "미분류";
-}
-
-function chainGroups(chains, groups, cap) {
+function chainRows(chains, groups) {
+  // 단일 로그 리스트(id 오름차순=오래된 위). groupNo 는 로스터 groups 배열 순번(그래프의
+  // "그룹 N"과 동일 원천) — 행 맨 앞 뱃지로 소속 그룹을 표기한다. 미귀속은 null.
   var cs = chains || [], gs = groups || [];
-  var labels = {}, order = [], buckets = {}, portLabels = portLabelMap(gs);
+  var portLabels = portLabelMap(gs), groupNo = {};
   for (var i = 0; i < gs.length; i++) {
     var g = gs[i] || {}, key = g.ssm_port || g.id;
-    if (!key) continue;
-    labels[key] = groupDisplayLabel(g);
-    order.push(key);
+    if (key && groupNo[key] == null) groupNo[key] = i + 1;
   }
+  var out = [];
   for (var j = 0; j < cs.length; j++) {
     var row = chainRow(cs[j], portLabels);
-    var k = row.group || "__unclassified";
-    if (!buckets[k]) buckets[k] = [];
-    buckets[k].push(row);
-    if (k !== "__unclassified" && !labels[k]) {
-      labels[k] = k;
-      order.push(k);
-    }
+    row.groupNo = row.group != null && groupNo[row.group] != null ? groupNo[row.group] : null;
+    out.push(row);
   }
-  if (buckets.__unclassified) order.push("__unclassified");
-  var out = [];
-  for (var x = 0; x < order.length; x++) {
-    var key2 = order[x], items = buckets[key2] || [];
-    if (!items.length) continue;
-    items.sort(function (a, b) { return (Number(a.id) || 0) - (Number(b.id) || 0); });
-    out.push({ key: key2, label: key2 === "__unclassified" ? "미분류" : labels[key2], items: items });
-  }
+  out.sort(function (a, b) { return (Number(a.id) || 0) - (Number(b.id) || 0); });
   return out;
 }
 
@@ -1422,7 +1404,7 @@ var SViewer = {
   decoText: decoText,
   rssiColor: rssiColor, edgeSegments: edgeSegments,
   hopWaypoints: hopWaypoints, hopColor: hopColor, hopDetail: hopDetail,
-  portLabelMap: portLabelMap, chainRow: chainRow, chainGroups: chainGroups
+  portLabelMap: portLabelMap, chainRow: chainRow, chainRows: chainRows
 };
 if (typeof module !== "undefined" && module.exports) module.exports = SViewer;
 if (typeof window !== "undefined") window.SViewer = SViewer;
@@ -1728,7 +1710,8 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
   }
 
   let _chainRows = {};
-  let _chainGroups = {};
+  let _chainHeader = null;
+  let _chainFollowBtn = null;
   let _chainFollow = true;
   let _chainScrollBound = false;
   let _chainScrollGuard = false;
@@ -1741,18 +1724,36 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     root.scrollTop = root.scrollHeight;
     setTimeout(() => { _chainScrollGuard = false; }, 50);
   }
+  function setChainFollow(root, v) {
+    _chainFollow = v;
+    if (_chainFollowBtn) _chainFollowBtn.classList.toggle("on", v);
+    if (v) chainScrollBottom(root);
+  }
   function bindChainScroll(root) {
     if (_chainScrollBound) return;
     _chainScrollBound = true;
     root.addEventListener("scroll", () => {
       if (_chainScrollGuard) return;
-      _chainFollow = chainNearBottom(root);
+      setChainFollow(root, chainNearBottom(root));   // 위로 스크롤=해제, 바닥 복귀=재고정
     });
+  }
+  function ensureChainHeader(root) {
+    if (_chainHeader && _chainHeader.parentNode === root) return;
+    const bar = el("div", "tch-bar");
+    bar.appendChild(txt("span", "체인 로그", "tch-bar-title"));
+    const btn = txt("button", "↓", "tch-follow" + (_chainFollow ? " on" : ""));
+    btn.title = "오토스크롤(최신 따라가기) 토글";
+    btn.onclick = () => setChainFollow(root, !_chainFollow);
+    bar.appendChild(btn);
+    root.insertBefore(bar, root.firstChild);
+    _chainHeader = bar;
+    _chainFollowBtn = btn;
   }
   function buildChainRow(row) {
     const item = el("div", "tch-row tch-enter");
     item.dataset.cid = row.id;
     const head = el("div", "tch-head");
+    head.appendChild(txt("span", row.groupNo != null ? "그룹" + row.groupNo : "—", "tch-gno"));
     const dot = el("span", "thd-dot"); dot.style.background = row.color;
     head.appendChild(dot);
     const path = el("div", "thd-path");
@@ -1770,75 +1771,46 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     return item;
   }
 
-  // 그룹 이동 행을 id 오름차순 위치에 삽입(신규 행은 최대 id라 사실상 append).
-  function insertRowSorted(box, item, id) {
-    const rows = box.querySelectorAll(".tch-row");
+  // 행을 id 오름차순 위치에 삽입(신규 행은 최대 id라 사실상 append).
+  function insertRowSorted(root, item, id) {
+    const rows = root.querySelectorAll(".tch-row");
     for (const r of rows) {
-      if (Number(r.dataset.cid) > Number(id)) { box.insertBefore(item, r); return; }
+      if (Number(r.dataset.cid) > Number(id)) { root.insertBefore(item, r); return; }
     }
-    box.appendChild(item);
+    root.appendChild(item);
   }
 
   window.renderChainLog = function (chains, groups) {
     const root = document.getElementById("topohops");
     if (!root) return;
     bindChainScroll(root);
-    const grouped = SV.chainGroups(chains || [], groups || [], 200);
+    const rows = SV.chainRows(chains || [], groups || []);
     const shouldFollow = _chainFollow || chainNearBottom(root);
-    if (!grouped.length) {
+    if (!rows.length) {
       root.innerHTML = "";
       _chainRows = {};
-      _chainGroups = {};
+      _chainHeader = null;
+      _chainFollowBtn = null;
       return;
     }
-    const activeGroups = new Set();
+    ensureChainHeader(root);
     const activeRows = new Set();
-    grouped.forEach(group => {
-      const gkey = group.key || group.label;
-      activeGroups.add(gkey);
-      let box = _chainGroups[gkey];
-      if (!box) {
-        box = el("div", "tch-group");
-        box.dataset.gkey = gkey;
-        box.appendChild(txt("div", group.label, "tch-group-title"));
-        _chainGroups[gkey] = box;
-      } else {
-        const title = box.querySelector(".tch-group-title");
-        if (title && title.textContent !== group.label) title.textContent = group.label;
-      }
-      if (box.parentNode !== root) root.appendChild(box);
-      group.items.forEach(row => {
-        const id = String(row.id);
-        activeRows.add(id);
-        const sig = JSON.stringify(row);
-        const rec = _chainRows[id];
-        if (rec && rec.sig === sig) {
-          // 정렬이 id 오름차순 고정이라 같은 박스 안 재배치는 불필요 — DOM 이동은 CSS
-          // 애니메이션을 재시작시켜 전체가 깜빡인다. 그룹 이동(미분류→귀속)일 때만 옮긴다.
-          if (rec.el.parentNode !== box) insertRowSorted(box, rec.el, row.id);
-          rec.group = gkey;
-          return;
-        }
-        const item = buildChainRow(row);
-        if (rec && rec.el.parentNode === box) box.replaceChild(item, rec.el);
-        else {
-          if (rec && rec.el.parentNode) rec.el.parentNode.removeChild(rec.el);   // 그룹 이동 — 옛 박스에서 제거
-          insertRowSorted(box, item, row.id);
-        }
-        _chainRows[id] = { el: item, sig: sig, group: gkey };
-      });
+    rows.forEach(row => {
+      const id = String(row.id);
+      activeRows.add(id);
+      const sig = JSON.stringify(row);
+      const rec = _chainRows[id];
+      if (rec && rec.sig === sig) return;         // 변경 없음 — DOM 이동 금지(애니메이션 재시작 방지)
+      const item = buildChainRow(row);
+      if (rec && rec.el.parentNode) rec.el.parentNode.replaceChild(item, rec.el);
+      else insertRowSorted(root, item, row.id);
+      _chainRows[id] = { el: item, sig: sig };
     });
     Object.keys(_chainRows).forEach(id => {
       if (activeRows.has(id)) return;
       const rec = _chainRows[id];
       if (rec.el && rec.el.parentNode) rec.el.parentNode.removeChild(rec.el);
       delete _chainRows[id];
-    });
-    Object.keys(_chainGroups).forEach(key => {
-      const box = _chainGroups[key];
-      if (activeGroups.has(key) && box.querySelector(".tch-row")) return;
-      if (box.parentNode) box.parentNode.removeChild(box);
-      delete _chainGroups[key];
     });
     if (shouldFollow) chainScrollBottom(root);
   };

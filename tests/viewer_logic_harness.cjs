@@ -311,30 +311,32 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   eq(SV.chainRow({ nodes: [] }).chips[0].label, "발신 미상", "chain-row-empty-fallback");
   eq(SV.chainRow({ ok: false, confidence: "timeout", nodes: [] }).status, "fail", "chain-row-status-fail");
   eq(SV.chainRow({ ok: null, nodes: [] }).status, "pending", "chain-row-status-pending");
+  // mac ident 라벨(BayID=0 장비) — 칩엔 뒤 2옥텟 축약, 전체는 툴팁 맨 앞.
+  const mac = SV.chainRow({ nodes: [{ name: "A0:85:E3:EA:5C:C4", port: null, role: "src", resolved: true }] });
+  eq(mac.chips[0].label, "…5C:C4", "chain-row-mac-shortened");
+  ok(mac.chips[0].title.indexOf("A0:85:E3:EA:5C:C4") === 0, "chain-row-mac-full-in-title");
 }
 
-/* C-2. portLabelMap/chainGroups: group port labels, unclassified, oldest-to-newest, no per-group cap. */
+/* C-2. portLabelMap/chainRows: flat log list, group number badge, oldest-to-newest. */
 {
   const groups = [
     { ssm_port: "COM4", nodes: [{ label: "SSM-A", ports: [{ port: "COM4" }] }, { label: "SB5", ports: [{ port: "COM14" }] }] },
     { ssm_port: "COM9", nodes: [{ label: "SSM-B", ports: [{ port: "COM9" }] }] },
   ];
   const chains = [
-    { id: 1, group: "COM4", dir: "up", nodes: [{ port: "COM14", name: "SB1" }] },
     { id: 3, group: "COM4", dir: "up", nodes: [{ name: "C" }] },
+    { id: 1, group: "COM4", dir: "up", nodes: [{ port: "COM14", name: "SB1" }] },
     { id: 2, group: null, dir: "down", nodes: [{ port: "COMX" }] },
     { id: 4, group: "COM9", dir: "up", nodes: [{ name: "D" }] },
   ];
   eq(SV.portLabelMap(groups).COM14, "SB5", "port-label-map-node-port");
-  const out = SV.chainGroups(chains, groups, 1);
-  eq(out[0].label, "SSM-A (COM4)", "chain-groups-label-ssm");
-  eq(out[0].items.length, 2, "chain-groups-no-group-cap");
-  eq(out[0].items[0].id, 1, "chain-groups-oldest-first");
-  eq(out[0].items[0].chips[0].label, "SB5", "chain-groups-applies-port-labels");
-  eq(out[1].label, "SSM-B (COM9)", "chain-groups-second-known");
-  eq(out[2].label, "미분류", "chain-groups-unclassified");
-  eq(out[2].items[0].id, 2, "chain-groups-unclassified-item");
-  eq(SV.chainGroups(null, null, 8).length, 0, "chain-groups-null-safe");
+  const rows = SV.chainRows(chains, groups);
+  eq(rows.map(r => r.id).join(","), "1,2,3,4", "chain-rows-id-ascending");
+  eq(rows[0].groupNo, 1, "chain-rows-group-no-first");
+  eq(rows[0].chips[0].label, "SB5", "chain-rows-applies-port-labels");
+  eq(rows[1].groupNo, null, "chain-rows-unclassified-null");
+  eq(rows[3].groupNo, 2, "chain-rows-group-no-second");
+  eq(SV.chainRows(null, null).length, 0, "chain-rows-null-safe");
 }
 
 if (fails.length) { console.error("FAILURES (" + fails.length + "):\n" + fails.map(f => " - " + f).join("\n")); process.exit(1); }
