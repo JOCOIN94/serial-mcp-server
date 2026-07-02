@@ -2184,7 +2184,9 @@ function connectStream(port) {
     updateStreamCount();
     scheduleRecount();
     if (state.follow && state.tab === "stream") scrollLogBottom("stream");
-    else if (state.tab === "stream" && node && !nearBottom("stream") && !node.classList.contains("hide")) {
+    // "새 로그 N건" — 지금 보는 로그 탭이 바닥 고정이 아니면 탭 불문 표시(버퍼 탭 포함 —
+    // 체인 ▸ 점프가 버퍼 탭·팔로우 해제 상태로 데려가므로 거기서도 새 로그를 알린다).
+    else if (node && !state.follow && !nearBottom(state.tab) && !node.classList.contains("hide")) {
       state.newCount++;
       $("newpillText").textContent = "새 로그 " + state.newCount + "건";
       $("newpill").classList.add("show");
@@ -2480,7 +2482,7 @@ function toggleVariants(ln) {
   ln.querySelector(".txt").appendChild(v);
 }
 
-$("newpill").onclick = () => { setTab("stream"); setFollow(true); };
+$("newpill").onclick = () => setFollow(true);    // 현재 탭 바닥으로 복귀 — 버퍼에서 눌러도 탭 유지
 function bindLogScroll(name) {
   const box = $(name);
   SVScroll.bindFollow(box, {                       // 해제=사용자 의도 이벤트만, 바닥 복귀=자동 재활성
