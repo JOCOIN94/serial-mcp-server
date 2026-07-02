@@ -238,7 +238,7 @@ _HTML = r"""<!DOCTYPE html>
 * { box-sizing: border-box; }
 html { height: 100%; }
 body {
-  margin: 0; min-height: 100vh;
+  margin: 0; min-height: 100vh; height: 100vh; overflow: hidden;
   background: var(--bg);
   color: var(--fg);
   font: var(--fs)/var(--lh) var(--mono);
@@ -254,7 +254,8 @@ body {
   display: flex; flex-direction: column; gap: 11px; padding: 10px;
   font-family: var(--ui); transition: flex-basis .16s ease;
 }
-#content { flex: 1 1 auto; min-width: 0; }
+#content { flex: 1 1 auto; min-width: 0; height: 100vh; overflow: hidden;
+           display: flex; flex-direction: column; }
 
 /* ============================ HEADER ============================ */
 header {
@@ -404,11 +405,21 @@ select.board:focus-visible { outline: none; border-color: var(--accent); }
 .row.toggle.on .switch::after { left: 15px; background: #fff; }
 
 /* ============================ LOG AREA ============================ */
-main { padding: 8px 14px 80px; }
+main { padding: 8px 14px 80px; flex: 1 1 auto; min-height: 0;
+       display: flex; flex-direction: column; }
+#stream, #buffer {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-anchor: auto;
+  padding-bottom: 80px;
+}
 
 .ln {
   display: grid; grid-template-columns: 9ch 1fr; column-gap: 12px;
   padding: var(--row-pad) 6px; border-radius: 4px; position: relative;
+}
+.ln-enter { animation: lnEnter .15s ease-out; }
+@keyframes lnEnter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .ln:not(.err):not(.warn):not(.boot):not(.noise):hover { background: var(--bg-hover); }
 .ln .ts { color: var(--faint); user-select: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -607,26 +618,28 @@ kbd {
 .tgroup-num { font: 700 10px var(--ui); letter-spacing: .08em; color: var(--muted); margin: 0 0 6px 2px; }
 .tcanvas { position: relative; }   /* width/height 인라인 — 절대배치 노드 컨테이너 */
 .tedges { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }   /* 링크선 — 노드 뒤·클릭 비간섭 */
+.tedges line { transition: stroke .15s, stroke-width .15s, stroke-opacity .15s; }
+.tedges line.eactive { stroke: #3fb950; stroke-width: 2.5; stroke-opacity: 1; }
 .thop { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }   /* 홉 경로 강조 — 노드 뒤(정적 링크선과 같은 층) */
-.topohops { font-family: var(--ui); display: flex; flex-direction: column; gap: 7px; padding: 2px; max-height: 36vh; overflow-y: auto; }   /* 체인 로그 패널 */
+.topohops { font-family: var(--ui); display: flex; flex-direction: column; gap: 7px; padding: 2px; max-height: 36vh; overflow-y: auto; overflow-anchor: auto; }   /* 체인 로그 패널 */
 .topohops:empty { display: none; }
-.thd-head { display: flex; align-items: center; gap: 6px; }
 .thd-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.thd-title { font: 700 10px var(--ui); letter-spacing: .06em; color: var(--muted); }
-.thd-status { margin-left: auto; font: 700 10px var(--ui); padding: 1px 6px; border-radius: 999px; }
+.thd-status { margin-left: auto; font: 700 10px var(--ui); white-space: nowrap; }
 .thd-ok { color: #3fb950; } .thd-fail { color: #f0786f; } .thd-pending { color: #e3b341; }
-.thd-path { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
-.thd-chip { font: 600 11px var(--ui); background: var(--bg-raised); border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 6px; }
+.thd-path { display: flex; flex-wrap: nowrap; align-items: center; gap: 3px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.thd-chip { font: 600 11px var(--ui); background: var(--bg-raised); border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 6px; min-width: 64px; max-width: 120px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .thd-chip.dim { color: var(--muted); border-style: dashed; opacity: .72; }
 .thd-arrow { color: var(--muted); font-size: 10px; }
 .thd-meta { font: 500 10px var(--ui); color: var(--muted); }
 .tch-group { display: flex; flex-direction: column; gap: 4px; }
 .tch-group-title { font: 700 10px var(--ui); letter-spacing: .06em; color: var(--muted); }
-.tch-row { border-left: 2px solid var(--border-2); padding: 4px 0 5px 7px; display: flex; flex-direction: column; gap: 3px; }
-.tch-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.tch-dir { font: 700 10px var(--ui); color: var(--fg); background: var(--bg); border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 5px; }
-.thd-dir-down { color: #8ab4f8; }
-.thd-heard { font: 500 10px var(--ui); color: var(--muted); }
+.tch-row { border-left: 2px solid var(--border-2); padding: 3px 0 4px 7px; display: flex; min-width: 0; }
+.tch-head { display: flex; align-items: center; gap: 6px; min-width: 0; width: 100%; }
+.tch-enter { animation: tchEnter .15s ease-out; }
+@keyframes tchEnter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 /* 노드 = 라벨(밖·위) + 박스(색). 단일 MCU(SSM/REPEAT/APU/APU_C)는 박스에 ESP 한 칸,
    SB 는 박스를 좌우로 나눠 ESP|STM 두 칸(각 칸이 포트 클릭 타깃·자체 상태점). */
@@ -1234,7 +1247,8 @@ function edgeSegments(placed, edges) {
     var e = es[j] || {}, a = byPort[e.from], b = byPort[e.to];
     if (!a || !b || e.from === e.to) continue;
     // source = rssi 출처(ladder): route_link/reprssi=링크별, info_rssi/info_table_rf=장비 평균.
-    out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, rssi: e.rssi, fresh: e.fresh,
+    out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, from: e.from, to: e.to,
+               rssi: e.rssi, fresh: e.fresh,
                source: e.rssi_source || null, via: e.via || null });
   }
   return out;
@@ -1305,26 +1319,43 @@ function chainStatus(entry) {
   return "pending";
 }
 
-function chainRow(entry) {
+function portLabelMap(groups) {
+  var out = {}, gs = groups || [];
+  for (var i = 0; i < gs.length; i++) {
+    var nodes = (gs[i] && gs[i].nodes) || [];
+    for (var j = 0; j < nodes.length; j++) {
+      var n = nodes[j] || {}, label = n.label, ports = n.ports || [];
+      if (!label) continue;
+      for (var k = 0; k < ports.length; k++) {
+        if (ports[k] && ports[k].port) out[ports[k].port] = label;
+      }
+    }
+  }
+  return out;
+}
+
+function chainRow(entry, labels) {
   var e = entry || {}, nodes = e.nodes || [], chips = [];
   for (var i = 0; i < nodes.length; i++) {
     var n = nodes[i] || {};
-    var label = n.name || n.port || "?";
-    var meta = [];
-    if (n.rssi != null && n.rssi !== "") meta.push(String(n.rssi) + "dBm");
-    if (n.ms != null && n.ms !== "") meta.push(String(n.ms) + "ms");
+    var port = n.port || null;
+    var label = (port && labels && labels[port]) || n.name || port || "?";
+    var title = [];
+    if (n.name && n.name !== label) title.push(n.name);
+    if (n.rssi != null && n.rssi !== "") title.push(String(n.rssi) + "dBm");
+    if (n.ms != null && n.ms !== "") title.push(String(n.ms) + "ms");
     chips.push({
       label: label,
-      meta: meta.join(" · "),
-      dim: !n.port || n.resolved === false,
+      title: title.join(" · "),
+      dim: !port || n.resolved === false || n.inferred === true,
       role: n.role || null,
     });
   }
+  if (!chips.length) chips.push({ label: "발신 미상", title: "", dim: true, role: null });
   var status = chainStatus(e);
   return {
     id: e.id,
     group: e.group || null,
-    dirLabel: e.dir === "down" ? "하달" : "보고",
     dir: e.dir || "up",
     status: status,
     color: hopColor({ ok: e.ok, confidence: e.confidence }),
@@ -1352,8 +1383,8 @@ function groupDisplayLabel(g) {
 }
 
 function chainGroups(chains, groups, cap) {
-  var cs = chains || [], gs = groups || [], limit = cap == null ? 8 : cap;
-  var labels = {}, order = [], buckets = {};
+  var cs = chains || [], gs = groups || [];
+  var labels = {}, order = [], buckets = {}, portLabels = portLabelMap(gs);
   for (var i = 0; i < gs.length; i++) {
     var g = gs[i] || {}, key = g.ssm_port || g.id;
     if (!key) continue;
@@ -1361,7 +1392,7 @@ function chainGroups(chains, groups, cap) {
     order.push(key);
   }
   for (var j = 0; j < cs.length; j++) {
-    var row = chainRow(cs[j]);
+    var row = chainRow(cs[j], portLabels);
     var k = row.group || "__unclassified";
     if (!buckets[k]) buckets[k] = [];
     buckets[k].push(row);
@@ -1375,9 +1406,8 @@ function chainGroups(chains, groups, cap) {
   for (var x = 0; x < order.length; x++) {
     var key2 = order[x], items = buckets[key2] || [];
     if (!items.length) continue;
-    items.sort(function (a, b) { return (Number(b.id) || 0) - (Number(a.id) || 0); });
-    if (limit > 0) items = items.slice(0, limit);
-    out.push({ label: key2 === "__unclassified" ? "미분류" : labels[key2], items: items });
+    items.sort(function (a, b) { return (Number(a.id) || 0) - (Number(b.id) || 0); });
+    out.push({ key: key2, label: key2 === "__unclassified" ? "미분류" : labels[key2], items: items });
   }
   return out;
 }
@@ -1392,7 +1422,7 @@ var SViewer = {
   decoText: decoText,
   rssiColor: rssiColor, edgeSegments: edgeSegments,
   hopWaypoints: hopWaypoints, hopColor: hopColor, hopDetail: hopDetail,
-  chainRow: chainRow, chainGroups: chainGroups
+  portLabelMap: portLabelMap, chainRow: chainRow, chainGroups: chainGroups
 };
 if (typeof module !== "undefined" && module.exports) module.exports = SViewer;
 if (typeof window !== "undefined") window.SViewer = SViewer;
@@ -1420,6 +1450,9 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     const e = document.createElementNS(SVGNS, tag);
     for (const k in attrs) e.setAttribute(k, attrs[k]);
     return e;
+  }
+  function edgeKey(a, b) {
+    return [String(a), String(b)].sort().join("|");
   }
 
   // 장비 타입 색·배지·상태 색 (디자인 토큰)
@@ -1489,9 +1522,10 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
       const heard = s.via === "heard";
       const ln = svgEl("line", {
         x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2,
-        stroke: SV.rssiColor(s.rssi), "stroke-width": "2",
-        "stroke-opacity": s.fresh === false ? "0.3" : heard ? "0.55" : "0.85",
+        stroke: "#4a5563", "stroke-width": "1.2",
+        "stroke-opacity": s.fresh === false ? "0.25" : heard ? "0.45" : "0.6",
         "stroke-linecap": "round",
+        "data-ekey": edgeKey(s.from, s.to),
       });
       if (heard) ln.setAttribute("stroke-dasharray", "4 4");
       if (s.rssi != null || s.source || s.via) { // 출처 툴팁 — via + RSSI ladder 출처 구분
@@ -1508,6 +1542,24 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     }
     return svg;
   }
+
+  window.flashTopologyEdges = function (pairs) {
+    const keys = new Set();
+    for (const pair of pairs || []) {
+      if (!pair || !pair[0] || !pair[1] || pair[0] === pair[1]) continue;
+      keys.add(edgeKey(pair[0], pair[1]));
+    }
+    if (!keys.size) return;
+    document.querySelectorAll(".tedges line[data-ekey]").forEach(line => {
+      if (!keys.has(line.dataset.ekey)) return;
+      line.classList.add("eactive");
+      if (line._edgeTimer) clearTimeout(line._edgeTimer);
+      line._edgeTimer = setTimeout(() => {
+        line.classList.remove("eactive");
+        line._edgeTimer = null;
+      }, 500);
+    });
+  };
 
   // 그룹 = "그룹 N" 순번(밖·위) + 박스(노드 절대배치). 그룹↔SSM 1:1.
   function renderGroup(g, idx, active, onSelect) {
@@ -1675,40 +1727,106 @@ if (typeof window !== "undefined") window.SViewer = SViewer;
     requestAnimationFrame(step);
   }
 
+  let _chainRows = {};
+  let _chainGroups = {};
+  let _chainFollow = true;
+  let _chainScrollBound = false;
+  let _chainScrollGuard = false;
+
+  function chainNearBottom(root) {
+    return root.scrollHeight - root.scrollTop - root.clientHeight < 30;
+  }
+  function chainScrollBottom(root) {
+    _chainScrollGuard = true;
+    root.scrollTop = root.scrollHeight;
+    setTimeout(() => { _chainScrollGuard = false; }, 50);
+  }
+  function bindChainScroll(root) {
+    if (_chainScrollBound) return;
+    _chainScrollBound = true;
+    root.addEventListener("scroll", () => {
+      if (_chainScrollGuard) return;
+      _chainFollow = chainNearBottom(root);
+    });
+  }
+  function buildChainRow(row) {
+    const item = el("div", "tch-row tch-enter");
+    item.dataset.cid = row.id;
+    const head = el("div", "tch-head");
+    const dot = el("span", "thd-dot"); dot.style.background = row.color;
+    head.appendChild(dot);
+    const path = el("div", "thd-path");
+    row.chips.forEach((chip, i) => {
+      if (i) path.appendChild(txt("span", "→", "thd-arrow"));
+      const c = txt("span", chip.label, "thd-chip" + (chip.dim ? " dim" : ""));
+      if (chip.title) c.title = chip.title;
+      path.appendChild(c);
+    });
+    if (!row.ordered) path.appendChild(txt("span", "순서 불확실", "thd-meta"));
+    head.appendChild(path);
+    const statusLabel = { ok: "성공", fail: "실패", pending: "미확정" }[row.status] || row.status;
+    head.appendChild(txt("span", statusLabel, "thd-status thd-" + row.status));
+    item.appendChild(head);
+    return item;
+  }
+
   window.renderChainLog = function (chains, groups) {
     const root = document.getElementById("topohops");
     if (!root) return;
-    const grouped = SV.chainGroups(chains || [], groups || [], 8);
-    if (!grouped.length) { root.innerHTML = ""; return; }
-    root.innerHTML = "";
+    bindChainScroll(root);
+    const grouped = SV.chainGroups(chains || [], groups || [], 200);
+    const shouldFollow = _chainFollow || chainNearBottom(root);
+    if (!grouped.length) {
+      root.innerHTML = "";
+      _chainRows = {};
+      _chainGroups = {};
+      return;
+    }
+    const activeGroups = new Set();
+    const activeRows = new Set();
     grouped.forEach(group => {
-      const box = el("div", "tch-group");
-      box.appendChild(txt("div", group.label, "tch-group-title"));
+      const gkey = group.key || group.label;
+      activeGroups.add(gkey);
+      let box = _chainGroups[gkey];
+      if (!box) {
+        box = el("div", "tch-group");
+        box.dataset.gkey = gkey;
+        box.appendChild(txt("div", group.label, "tch-group-title"));
+        _chainGroups[gkey] = box;
+      } else {
+        const title = box.querySelector(".tch-group-title");
+        if (title && title.textContent !== group.label) title.textContent = group.label;
+      }
+      if (box.parentNode !== root) root.appendChild(box);
       group.items.forEach(row => {
-        const item = el("div", "tch-row");
-        const head = el("div", "tch-head");
-        const dot = el("span", "thd-dot"); dot.style.background = row.color;
-        head.appendChild(dot);
-        const dir = txt("span", row.dirLabel, "tch-dir" + (row.dir === "down" ? " thd-dir-down" : ""));
-        head.appendChild(dir);
-        const statusLabel = { ok: "성공", fail: "실패", pending: "미확정" }[row.status] || row.status;
-        head.appendChild(txt("span", statusLabel, "thd-status thd-" + row.status));
-        item.appendChild(head);
-        const path = el("div", "thd-path");
-        row.chips.forEach((chip, i) => {
-          if (i) path.appendChild(txt("span", row.dir === "down" ? "⇒" : "→", "thd-arrow"));
-          const c = txt("span", chip.label, "thd-chip" + (chip.dim ? " dim" : ""));
-          if (chip.meta) c.title = chip.meta;
-          if (chip.meta) c.appendChild(txt("span", " " + chip.meta, "thd-meta"));
-          path.appendChild(c);
-        });
-        if (!row.ordered) path.appendChild(txt("span", "순서 불확실", "thd-meta"));
-        item.appendChild(path);
-        if (row.heard.length) item.appendChild(txt("div", "들림: " + row.heard.join(", "), "thd-heard"));
-        box.appendChild(item);
+        const id = String(row.id);
+        activeRows.add(id);
+        const sig = JSON.stringify(row);
+        const rec = _chainRows[id];
+        if (rec && rec.sig === sig) {
+          if (rec.el.parentNode !== box || rec.el !== box.lastElementChild) box.appendChild(rec.el);
+          rec.group = gkey;
+          return;
+        }
+        const item = buildChainRow(row);
+        if (rec && rec.el.parentNode) rec.el.parentNode.replaceChild(item, rec.el);
+        else box.appendChild(item);
+        _chainRows[id] = { el: item, sig: sig, group: gkey };
       });
-      root.appendChild(box);
     });
+    Object.keys(_chainRows).forEach(id => {
+      if (activeRows.has(id)) return;
+      const rec = _chainRows[id];
+      if (rec.el && rec.el.parentNode) rec.el.parentNode.removeChild(rec.el);
+      delete _chainRows[id];
+    });
+    Object.keys(_chainGroups).forEach(key => {
+      const box = _chainGroups[key];
+      if (activeGroups.has(key) && box.querySelector(".tch-row")) return;
+      if (box.parentNode) box.parentNode.removeChild(box);
+      delete _chainGroups[key];
+    });
+    if (shouldFollow) chainScrollBottom(root);
   };
 
   window.resetPortBoardSig = function () { lastSig = ""; };
@@ -1865,6 +1983,7 @@ function appendEntry(box, entry, ctx, opts) {
       return null;
     }
   }
+  if (!(opts && opts.noEnter)) built.node.classList.add("ln-enter");
   box.appendChild(built.node);
   applyVisibility(built.node);
   ctx.prevSig = built.sig; ctx.prevNode = model.blank ? ctx.prevNode : built.node;
@@ -1979,8 +2098,10 @@ function setCurrentMatch(i) {
   state.matchIdx = (i + state.matchEls.length) % state.matchEls.length;
   const el = state.matchEls[state.matchIdx];
   el.classList.add("cur");
+  const pane = $(state.tab);
   const r = el.getBoundingClientRect();
-  window.scrollTo({ top: window.scrollY + r.top - window.innerHeight / 2, behavior: "smooth" });
+  const pr = pane.getBoundingClientRect();
+  pane.scrollTo({ top: pane.scrollTop + r.top - pr.top - pane.clientHeight / 2, behavior: "smooth" });
   $("matchn").textContent = (state.matchIdx + 1) + "/" + state.matchEls.length;
 }
 function nextMatch(dir) {
@@ -1993,6 +2114,36 @@ function nextMatch(dir) {
 /* ============================ 스트림 (SSE) ============================ */
 let es = null;
 let streamCtx = {};
+let scrollQueued = false;
+let programmaticScroll = false;
+function logBox(tab) { return $(tab || state.tab); }
+function nearBottom(tab) {
+  const box = logBox(tab);
+  return !box || box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+}
+function scrollLogBottom(tab, behavior) {
+  if (scrollQueued) return;
+  scrollQueued = true;
+  requestAnimationFrame(() => {
+    scrollQueued = false;
+    const box = logBox(tab);
+    if (!box) return;
+    programmaticScroll = true;
+    box.scrollTo({ top: box.scrollHeight, behavior: behavior || "auto" });
+    setTimeout(() => { programmaticScroll = false; }, 60);
+  });
+}
+function trimStreamBox(box) {
+  const compensate = !(state.follow && state.tab === "stream");
+  let removedH = 0;
+  while (box.childNodes.length > MAX_STREAM) {
+    const removed = box.firstChild;
+    if (compensate) removedH += removed.getBoundingClientRect().height;
+    if (removed.classList && removed.classList.contains("ln")) state.streamLines--;
+    box.removeChild(removed);
+  }
+  if (compensate && removedH) box.scrollTop = Math.max(0, box.scrollTop - removedH);
+}
 function connectStream(port) {
   if (es) es.close();
   state.port = port;
@@ -2012,16 +2163,12 @@ function connectStream(port) {
     if (node) state.streamLines++;
     // 상한 초과 시 위에서부터 제거(원본 보관 배열도 함께 정리)
     const box = $("stream");
-    while (box.childNodes.length > MAX_STREAM) {
-      const removed = box.firstChild;
-      if (removed.classList && removed.classList.contains("ln")) state.streamLines--;
-      box.removeChild(removed);
-    }
+    trimStreamBox(box);
     if (state.streamItems.length > MAX_STREAM) state.streamItems.splice(0, state.streamItems.length - MAX_STREAM);
     updateStreamCount();
     scheduleRecount();
-    if (state.follow && state.tab === "stream") window.scrollTo(0, document.body.scrollHeight);
-    else if (state.tab === "stream" && node && !nearBottom() && !node.classList.contains("hide")) {
+    if (state.follow && state.tab === "stream") scrollLogBottom("stream");
+    else if (state.tab === "stream" && node && !nearBottom("stream") && !node.classList.contains("hide")) {
       state.newCount++;
       $("newpillText").textContent = "새 로그 " + state.newCount + "건";
       $("newpill").classList.add("show");
@@ -2035,13 +2182,12 @@ function renderStreamAll() {
   streamCtx = {};
   state.streamLines = 0;
   box.appendChild(markerDivider("실시간 수신 — 이전 기록은 [버퍼] 탭"));
-  for (const d of state.streamItems) { if (appendEntry(box, d, streamCtx)) state.streamLines++; }
+  for (const d of state.streamItems) { if (appendEntry(box, d, streamCtx, { noEnter: true })) state.streamLines++; }
   updateStreamCount();
   scheduleRecount();
-  if (state.follow && state.tab === "stream") window.scrollTo(0, document.body.scrollHeight);
+  if (state.follow && state.tab === "stream") scrollLogBottom("stream");
 }
 function updateStreamCount() { $("cStream").textContent = state.streamLines + "/" + MAX_STREAM; }
-function nearBottom() { return window.innerHeight + window.scrollY >= document.body.scrollHeight - 60; }
 
 /* ============================ 버퍼 (폴링) ============================ */
 async function refreshBuffer() {
@@ -2057,7 +2203,7 @@ async function refreshBuffer() {
   }
   $("cBuffer").textContent = (d.entries || []).length + "/" + (d.capacity != null ? d.capacity : "?");
   scheduleRecount();
-  if (state.follow && state.tab === "buffer") window.scrollTo(0, document.body.scrollHeight);
+  if (state.follow && state.tab === "buffer") scrollLogBottom("buffer");
 }
 setInterval(refreshBuffer, 2000);
 
@@ -2119,7 +2265,17 @@ function upsertChain(chain) {
   const idx = state.chains.findIndex(c => c && c.id === chain.id);
   if (idx >= 0) state.chains.splice(idx, 1, chain);
   else state.chains.push(chain);
-  if (state.chains.length > 100) state.chains.splice(0, state.chains.length - 100);
+  if (state.chains.length > 200) state.chains.splice(0, state.chains.length - 200);
+}
+function chainEdgePairs(chain) {
+  const pairs = [], nodes = (chain && chain.nodes) || [];
+  let prev = null;
+  for (const n of nodes) {
+    if (!n || !n.port) continue;
+    if (prev && prev !== n.port) pairs.push([prev, n.port]);
+    prev = n.port;
+  }
+  return pairs;
 }
 function scheduleChainRender() {
   if (_chainRenderTimer) return;
@@ -2137,9 +2293,12 @@ function connectTopologyStream() {
     let obj; try { obj = JSON.parse(ev.data); } catch (e) { return; }
     if (obj && obj.chain) {
       upsertChain(obj.chain);
+      if (window.flashTopologyEdges) window.flashTopologyEdges(chainEdgePairs(obj.chain));
       scheduleChainRender();
       return;
     }
+    if (obj && obj.src_port && obj.rx_port && window.flashTopologyEdges)
+      window.flashTopologyEdges([[obj.src_port, obj.rx_port]]);
     if (window.topologyHop) window.topologyHop(obj);
     scheduleTopologyRefresh();                          // 홉 관측 → 링크선도 즉시 갱신(멤버십 실시간)
   };
@@ -2171,15 +2330,16 @@ function setTab(name) {
   if (name === "buffer") refreshBuffer();
   state.matchIdx = -1;
   applyAll();
-  if (state.follow) window.scrollTo(0, document.body.scrollHeight);
+  if (state.follow) scrollLogBottom(name);
 }
 $("tabStream").onclick = () => setTab("stream");
 $("tabBuffer").onclick = () => setTab("buffer");
 
-function setFollow(v) {
+function setFollow(v, opts) {
   state.follow = v;
   $("follow").classList.toggle("on", v);
-  if (v) { window.scrollTo(0, document.body.scrollHeight); state.newCount = 0; $("newpill").classList.remove("show"); }
+  if (v && !(opts && opts.noScroll)) scrollLogBottom(state.tab);
+  if (v) { state.newCount = 0; $("newpill").classList.remove("show"); }
 }
 $("follow").onclick = () => setFollow(!state.follow);
 
@@ -2249,9 +2409,16 @@ function toggleVariants(ln) {
 }
 
 $("newpill").onclick = () => { setTab("stream"); setFollow(true); };
-window.addEventListener("scroll", () => {
-  if (nearBottom()) { state.newCount = 0; $("newpill").classList.remove("show"); }
-});
+function bindLogScroll(name) {
+  const box = $(name);
+  box.addEventListener("scroll", () => {
+    if (programmaticScroll || state.tab !== name) return;
+    if (!nearBottom(name) && state.follow) setFollow(false, { noScroll: true });
+    if (nearBottom(name)) { state.newCount = 0; $("newpill").classList.remove("show"); }
+  });
+}
+bindLogScroll("stream");
+bindLogScroll("buffer");
 
 /* ============================ 설정 popover ============================ */
 const gear = $("gear"), pop = $("pop");
@@ -2360,7 +2527,7 @@ document.addEventListener("keydown", e => {
     case "f": setFollow(!state.follow); break;
     case "1": setTab("stream"); break;
     case "2": setTab("buffer"); break;
-    case "g": window.scrollTo(0, document.body.scrollHeight); break;
+    case "g": scrollLogBottom(state.tab, "smooth"); break;
     case "n": nextMatch(e.shiftKey ? -1 : 1); break;
   }
 });
