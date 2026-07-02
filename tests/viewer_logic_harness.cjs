@@ -348,6 +348,7 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   const jr = SV.chainRow({ id: 9, key: ["c", 3028], nodes: [{ name: null, port: "COM4", role: "dst", resolved: true }] }, {});
   eq(jr.key.join(","), "c,3028", "chain-row-key-passthrough");
   eq(jr.chips[0].port, "COM4", "chain-row-chip-port");
+  eq(SV.chainRow({ id: 10, ts: 42.5, nodes: [] }, {}).ts, 42.5, "chain-row-ts-passthrough");
   const longPort = SV.chainRow({ nodes: [{ name: null, port: "/dev/tty.SLAB_USBtoUART", resolved: true }] }, {});
   eq(longPort.chips[0].label, "…oUART", "chain-row-long-port-shortened");
   ok(longPort.chips[0].title.indexOf("/dev/tty.SLAB_USBtoUART") === 0, "chain-row-long-port-full-in-title");

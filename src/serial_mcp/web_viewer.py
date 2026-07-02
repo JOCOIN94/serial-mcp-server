@@ -1391,6 +1391,7 @@ function chainRow(entry, labels) {
     chips: chips,
     heard: (e.heard || []).slice(),
     key: e.key || null,
+    ts: e.ts != null ? e.ts : null,
   };
 }
 
@@ -1775,7 +1776,7 @@ window.SVScroll = (function () {
   }
   const _jumpMiss = new Set();                     // "rowId|port" — 버퍼에서 밀려나 점프 실패한 칩
   async function jumpFromChip(btn, row, chip) {
-    const found = window.jumpToPortLog ? await window.jumpToPortLog(chip.port, row.key) : false;
+    const found = window.jumpToPortLog ? await window.jumpToPortLog(chip.port, row.key, row.ts) : false;
     if (!found) {
       _jumpMiss.add(row.id + "|" + chip.port);
       btn.classList.add("miss");
@@ -2225,7 +2226,7 @@ async function refreshBuffer() {
   const ctx = {};
   for (const e of entries) {
     const node = appendEntry(box, { ts: e.first_ts, text: e.text, count: e.count, firstTs: e.first_ts, lastTs: e.last_ts }, ctx, { noFold: true, noEnter: true });   // 폴링 전체 재렌더 — enter 애니메이션 금지
-    if (node) node.dataset.raw = e.text;           // 체인 칩 점프의 원문 매칭용
+    if (node) { node.dataset.raw = e.text; node.dataset.ts = e.first_ts || ""; }   // 체인 칩 점프의 원문·시각 매칭용
   }
   scheduleRecount();
   if (state.follow && state.tab === "buffer") scrollLogBottom("buffer");
@@ -2339,8 +2340,10 @@ function selectPort(port) {
 }
 
 /* 체인 칩 점프 — 해당 포트 버퍼에서 체인 키(ident/Unique 또는 Cidx)가 실린 라인을 찾아
-   가운데로 스크롤·강조한다. 버퍼(링)에서 이미 밀려났으면 false(호출부가 ▸ 를 회색 처리). */
-window.jumpToPortLog = async function (port, key) {
+   가운데로 스크롤·강조한다. Unique 는 1..99 롤링 재사용이라 토큰만으로는 다른 시점의
+   메시지를 짚을 수 있다 — 체인의 첫 관측 시각(ts)에 가장 가까운 매칭만 인정하고,
+   허용오차(30s) 밖이거나 버퍼(링)에서 밀려났으면 false(호출부가 ▸ 를 회색 처리). */
+window.jumpToPortLog = async function (port, key, ts) {
   if (!port || !key || !key.length) return false;
   const needles = [];
   if (key[0] === "u") {
@@ -2351,24 +2354,34 @@ window.jumpToPortLog = async function (port, key) {
     needles.push('"Cidx":' + key[1]);
   }
   if (!needles.length) return false;
+  let anchorMs = null;                             // 체인 관측 시각(epoch s) → 하루-내-ms
+  if (ts != null) {
+    const d = new Date(ts * 1000);
+    anchorMs = ((d.getHours() * 60 + d.getMinutes()) * 60 + d.getSeconds()) * 1000 + d.getMilliseconds();
+  }
   setFollow(false, { noScroll: true });            // 점프 = 과거 조회 — 팔로우 해제 후 이동
   if (state.port !== port) selectPort(port);
   setTab("buffer");
   await refreshBuffer();
   const box = $("buffer");
   const rows = box.querySelectorAll("[data-raw]");
+  let best = null, bestDiff = Infinity;
   for (let i = rows.length - 1; i >= 0; i--) {
     const raw = rows[i].dataset.raw || "";
     if (!needles.every(n => raw.indexOf(n) !== -1)) continue;
-    SVScroll.cancelPin(box);
-    const bb = box.getBoundingClientRect(), rb = rows[i].getBoundingClientRect();
-    box.scrollTop += rb.top - bb.top - box.clientHeight / 2 + rb.height / 2;
-    rows[i].classList.remove("ln-jump");
-    void rows[i].offsetWidth;                      // 강조 애니메이션 재트리거
-    rows[i].classList.add("ln-jump");
-    return true;
+    if (anchorMs == null) { best = rows[i]; break; }               // 앵커 없음(구버전 행) — 최신 매칭
+    const rowMs = SV.tsToMs(rows[i].dataset.ts);
+    const diff = rowMs == null ? Infinity : Math.abs(rowMs - anchorMs);
+    if (diff < bestDiff) { bestDiff = diff; best = rows[i]; }
   }
-  return false;
+  if (!best || (anchorMs != null && bestDiff > 30000)) return false;   // 같은 시점 라인이 버퍼에 없음
+  SVScroll.cancelPin(box);
+  const bb = box.getBoundingClientRect(), rb = best.getBoundingClientRect();
+  box.scrollTop += rb.top - bb.top - box.clientHeight / 2 + rb.height / 2;
+  best.classList.remove("ln-jump");
+  void best.offsetWidth;                           // 강조 애니메이션 재트리거
+  best.classList.add("ln-jump");
+  return true;
 };
 async function releaseSession(ports, session) {
   const label = ports.length ? ports.join(", ") : "전체 세션";

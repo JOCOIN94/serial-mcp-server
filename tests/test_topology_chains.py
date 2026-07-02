@@ -53,7 +53,8 @@ def labels(entry):
 
 
 def assert_public(entry):
-    assert "ts" not in entry
+    # ts = 첫 관측 시각(epoch s) — 뷰어 점프의 시각 앵커로 유일하게 공개하는 시각 필드.
+    assert isinstance(entry.get("ts"), (int, float))
     assert "first_ts" not in entry
     assert "last_ts" not in entry
     assert all(not k.startswith("_") for k in entry)
@@ -255,6 +256,32 @@ def test_uplink_cidx_ack_rx_marks_observed_success():
     assert entry["dir"] == "up"
     assert entry["ok"] is True
     assert entry["confidence"] == "observed"
+
+
+def test_uplink_cidx_ack_attaches_src_port_via_event_ident():
+    # Cidx 키("c") 항목은 키에 ident 가 없지만 이벤트 ids.unid 는 있다 — membership
+    # (port_idents) 역해소로 src 포트를 부착해야 뷰어가 로스터 라벨(SB5)로 표기한다.
+    # 미부착이면 SSM 접두 이름(SB1)이 노출돼 같은 장비가 SB1/SB5 로 혼재한다.
+    log = ChainLog(window_s=10)
+
+    entry = log.observe(
+        ev("rx", "COM4", ts=1.0, unid=5, unique=None, cidx=3033, src_name="SB1",
+           json_obj={"UnID": 5, "Stat": "OK", "Asn": 60, "Rev": True, "Cidx": 3033}),
+        scope={"COM4": "COM4"},
+        port_names={"COM4": "SSM"},
+        port_idents={"COM12": 5},
+    )[0]
+
+    src = entry["nodes"][0]
+    assert src["role"] == "src"
+    assert src["port"] == "COM12"
+
+
+def test_public_entry_carries_first_observation_ts():
+    # 뷰어 점프의 시각 앵커 — Unique(1..99 롤링) 재사용 충돌을 시각 근접 매칭으로 푼다.
+    log = ChainLog(window_s=10)
+    entry = log.observe(ev("tx", "COM12", ts=42.5), port_names={"COM12": "SB5"})[0]
+    assert entry["ts"] == 42.5
 
 
 def test_rx_observation_corrects_active_down_misclassification():

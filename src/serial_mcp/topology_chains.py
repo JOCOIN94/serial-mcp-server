@@ -2,7 +2,8 @@
 
 ChainLog 는 포트쌍 링크(PeerLinks)나 성공 판정(Correlator)을 다시 구현하지 않고,
 같은 메시지 키로 관측된 tx/pass/rx/wifirx/wifitx 이벤트를 하나의 직렬화 가능한 로그 항목으로
-병합한다. 서버 도착시각은 윈도 만료 판단에만 쓰고 공개 항목에는 싣지 않는다.
+병합한다. 서버 도착시각은 윈도 만료 판단에 쓰고, 공개 항목에는 첫 관측 시각(ts)만 싣는다 —
+뷰어의 로그 점프가 Unique(1..99 롤링) 충돌 없이 같은 시점 라인을 찾는 시각 앵커다.
 """
 
 from __future__ import annotations
@@ -158,6 +159,8 @@ class ChainLog:
             return changed
         ent["_seen"].add(seen_key)
         ent["_last_ts"] = ts
+        if ent.get("_ident") is None:
+            ent["_ident"] = self._event_ident(ev)   # "c" 키(Cidx)도 이벤트 ids 로 발신자 ident 를 안다
 
         before = self._public(ent)
         if kind == "tx":
@@ -241,6 +244,7 @@ class ChainLog:
             "rtt_ms": None,
             "complete": False,
             "_seen": set(),
+            "_ident": None,
             "_first_ts": ts,
             "_last_ts": ts,
         }
@@ -360,16 +364,24 @@ class ChainLog:
         (포트 기반)을 못 받는다 — 발신자 ident=key[1] 은 membership 이 포트를 아는
         관측 사실이므로 부착해도 '관측만 그린다' 원칙과 어긋나지 않는다.
         """
-        if not port_idents or ent.get("key", (None,))[0] != "u":
+        ident = self._entry_ident(ent)
+        if not port_idents or ident is None:
             return
         src = self._src(ent)
         if src is None or src.get("port"):
             return
-        ident = ent["key"][1]
         for port, pid in port_idents.items():
             if pid == ident:
                 src["port"] = port
                 return
+
+    @staticmethod
+    def _entry_ident(ent: dict):
+        """항목의 발신자 ident — "u" 키는 키 자체, "c" 키(Cidx)는 관측 이벤트 ids 에서 저장한 값."""
+        key = ent.get("key") or (None,)
+        if key[0] == "u":
+            return key[1]
+        return ent.get("_ident")
 
     @staticmethod
     def _correct_direction(ent: dict, direction: str) -> None:
@@ -582,4 +594,5 @@ class ChainLog:
             "confidence": ent.get("confidence"),
             "rtt_ms": ent.get("rtt_ms"),
             "complete": bool(ent.get("complete")),
+            "ts": ent.get("_first_ts"),   # 첫 관측 시각(서버 도착, epoch s) — 뷰어 점프의 시각 앵커
         }
