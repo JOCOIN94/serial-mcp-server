@@ -1,5 +1,7 @@
 # ChainLog v2 — 표기 통일·방향 수정·뷰어 폴리시 구현 핸드오프 (2026-07-02)
 
+> 상태: 구현 완료(2026-07-02) — `uv run python -m pytest` 463개 통과, `py -m compileall -q src` 통과.
+
 > **▶ 새 세션/에이전트 진입점 (자족적 맥락 캡슐).** 이 문서만 읽고 대화 맥락 없이 구현할 수
 > 있게 쓴다. 선행 맥락: `docs/plans/2026-07-02-hop-chain-log.md`(ChainLog v1 — 항목 shape·
 > 조립 알고리즘·대원칙 §8), `docs/plans/2026-07-02-peerlinks-universal-correlation.md`(키 파생·
