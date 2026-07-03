@@ -505,8 +505,8 @@ def test_list_ports_no_hint_when_only_bluetooth(monkeypatch):
 # ---- 체인 점프 가능성 데코(_decorate_chain_jumpable) — 추론 src 의 사전 회색 판정 ----
 
 def _chain(dir="down", key=("c", 5, 4704), needle='{"CHPLAN":[1],"Asn":58,"UnID":5}',
-           nodes=None):
-    return {"dir": dir, "key": list(key), "needle": needle,
+           nodes=None, id=1):
+    return {"id": id, "dir": dir, "key": list(key), "needle": needle,
             "nodes": nodes if nodes is not None else [
                 {"role": "src", "port": "COM4", "inferred": True},
                 {"role": "rx", "port": "COM12", "inferred": False},
@@ -539,3 +539,41 @@ def test_chain_jumpable_u_key_uses_unique_and_ident_needles():
     srv._decorate_chain_jumpable(chain, lambda p, ns: seen.append(list(ns)) or False)
     assert seen == [['"Unique":57', '"UnID":5']]
     assert chain["nodes"][0]["jumpable"] is False
+
+
+# ---- 발행 게이트(_chain_publishable) — 송신 콘솔 증거 없는 체인은 전 표면 발행 금지 ----
+
+def test_chain_gate_suppresses_no_evidence_inferred_src(monkeypatch):
+    # 추론 src + 프로브 실패(CHPLAN 류) → 발행 금지. 관측 src(ACK 상행)는 프로브와 무관하게 발행.
+    monkeypatch.setattr(srv, "_chain_gate", {})
+    assert srv._chain_publishable(_chain(nodes=[
+        {"role": "src", "port": "COM4", "inferred": True},
+        {"role": "rx", "port": "COM12", "inferred": False},
+    ]), has_line=lambda p, ns: False) is False
+    assert srv._chain_publishable({**_chain(), "id": 2, "nodes": [
+        {"role": "src", "port": "COM12", "inferred": False},   # 관측 src — 게이트 비대상
+        {"role": "dst", "port": "COM4", "inferred": False},
+    ]}, has_line=lambda p, ns: False) is True
+
+
+def test_chain_gate_keeps_inferred_src_with_console_evidence(monkeypatch):
+    # 추론 src 라도 송신 콘솔에서 니들이 찾아지면(INFO REQ 류) 발행 유지.
+    monkeypatch.setattr(srv, "_chain_gate", {})
+    assert srv._chain_publishable(_chain(), has_line=lambda p, ns: True) is True
+
+
+def test_chain_gate_keeps_portless_inferred_src(monkeypatch):
+    # 송신자 포트 미상(미연결 장비) — 검사할 콘솔이 없으므로 유지(증거 '없음'이 아니라 '모름').
+    monkeypatch.setattr(srv, "_chain_gate", {})
+    assert srv._chain_publishable(_chain(nodes=[
+        {"role": "src", "port": None, "inferred": True},
+        {"role": "rx", "port": "COM12", "inferred": False},
+    ]), has_line=lambda p, ns: False) is True
+
+
+def test_chain_gate_decision_is_sticky_per_id(monkeypatch):
+    # 판정은 체인 id당 1회 고정 — 이후 버퍼 밀림으로 프로브가 뒤집혀도 지위 불변.
+    monkeypatch.setattr(srv, "_chain_gate", {})
+    first = srv._chain_publishable(_chain(id=9), has_line=lambda p, ns: True)
+    second = srv._chain_publishable(_chain(id=9), has_line=lambda p, ns: False)   # 같은 id — 캐시 반환
+    assert first is True and second is True

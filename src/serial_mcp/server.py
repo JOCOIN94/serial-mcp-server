@@ -646,6 +646,35 @@ def _buffer_has_line(port: str, needles: list) -> bool:
         return False
 
 
+_chain_gate: dict = {}   # chain id → 발행 허용 여부(첫 판정 고정) — 엔진 재생성 시 clear
+
+
+def _chain_publishable(chain: dict, has_line=None) -> bool:
+    """송신 콘솔 증거 없는 체인은 전 표면(SSE·뷰어 시드·MCP) 발행 금지(사용자 결정 2026-07-03).
+
+    기준: 추론(inferred) src 노드의 포트 콘솔에서 이 메시지를 니들로 찾을 수 없으면
+    (jumpable=False — 펌웨어가 그 TX 를 콘솔에 출력하지 않는 CHPLAN/REQRSSI 류) 수신
+    관측만으로 송신자를 추정해 그리지 않는다. 포트 미상 src(미연결 장비)는 검사할
+    콘솔이 없으므로 '없음'이 아니라 '모름' — 발행 유지. 판정은 체인 id당 1회 고정 —
+    이후 버퍼 밀림으로 프로브가 뒤집혀도 이미 보인/숨긴 행의 지위는 바뀌지 않는다.
+    """
+    cid = chain.get("id")
+    if cid in _chain_gate:
+        return _chain_gate[cid]
+    _decorate_chain_jumpable(chain, has_line or _buffer_has_line)
+    ok = True
+    for node in chain.get("nodes") or []:
+        if node.get("role") == "src" and node.get("inferred") and node.get("jumpable") is False:
+            ok = False
+            break
+    if cid is not None:
+        _chain_gate[cid] = ok
+        if len(_chain_gate) > 2000:                # id 는 단조 증가 — 오래된 판정 정리
+            for k in sorted(_chain_gate)[:1000]:
+                _chain_gate.pop(k, None)
+    return ok
+
+
 def _publish_topology_chains(updates) -> None:
     """TopologyEngine chain 변경분을 뷰어 SSE feed로 발행한다(논블로킹·실패 격리)."""
     if not updates:
@@ -653,7 +682,8 @@ def _publish_topology_chains(updates) -> None:
     try:
         ts = datetime.now()
         for entry in updates:
-            _decorate_chain_jumpable(entry, _buffer_has_line)
+            if not _chain_publishable(entry):      # 송신 콘솔 증거 없는 체인 — 발행 금지
+                continue
             _topology_feed.publish(ts, {"chain": entry})
     except Exception as e:  # noqa: BLE001 - 뷰어 보조기능 실패가 관측 경로를 막으면 안 됨
         _log(f"topology chain stream publish 오류: {e!r}")
@@ -775,6 +805,7 @@ def _acquire_owner_locked() -> Optional[dict]:
         # (변환 시점 계산이라 NTP 보정도 자동 추종).
         _topology_engine = TopologyEngine(
             epoch_of=lambda mono: mono + (time.time() - time.monotonic()))
+        _chain_gate.clear()                        # 체인 id 는 엔진 생애 기준 — 판정 캐시 리셋
         _topology_owner_ts = time.monotonic()
         _topology_bootstrapped = set()
         _start_monitors_locked(cfg)
@@ -1174,7 +1205,10 @@ def get_topology(ctx: Optional[Context] = None) -> dict:
     [무엇을 반환] roster 는 현재 포트 로그와 routing 관측으로 만든 그룹/노드/엣지
     구조이고, recent_hops 는 최근 20개 실제 경로 후보/성공/실패/미확정 요약이다.
     recent_chains 는 같은 메시지 키의 관측을 병합한 최근 체인 로그다. 각 node.label 은
-    port 가 있으면 roster 라벨을 우선해 붙인다.
+    port 가 있으면 roster 라벨을 우선해 붙인다. 단 **송신측 콘솔에 증거가 없는 무선
+    통신은 recent_chains 에 싣지 않는다** — 일부 펌웨어는 특정 TX(예: SSM 의
+    CHPLAN/REQRSSI)를 콘솔에 출력하지 않으므로, 수신 로그가 보이는데 체인에 없다고
+    버그로 판단하지 마라(콘솔 텍스트로 대조 가능한 통신만 담는 설계).
     이 도구는 전 포트 토폴로지를 반환하므로 port 인자를 받지 않는다. 포트별 원문은
     get_recent_logs/query_serial_logs 로 이어서 확인하라.
 
@@ -1202,6 +1236,7 @@ def get_topology(ctx: Optional[Context] = None) -> dict:
         _log(f"topology 스냅샷 생성 실패: {e!r}")
         roster, recent_hops, recent_chains = {"groups": [], "unplaced": []}, [], []
 
+    recent_chains = [c for c in recent_chains if _chain_publishable(c)]   # 발행 게이트(뷰어와 동일)
     recent_chains = _enrich_chain_labels(recent_chains, roster)
     groups = roster.get("groups", []) if isinstance(roster, dict) else []
     return {
@@ -1580,8 +1615,8 @@ def _viewer_topology_info() -> dict:
         if eng is not None:
             roster, _hops, chains = eng.roster_and_recent_hops(
                 entries, now=time.monotonic(), n=0, chains_n=200)
-            for c in chains:                      # 시드에도 SSE 와 동일한 jumpable 주석
-                _decorate_chain_jumpable(c, _buffer_has_line)
+            # 시드에도 SSE 와 동일한 발행 게이트(+jumpable 주석)를 적용한다.
+            chains = [c for c in chains if _chain_publishable(c)]
             return {**roster, "chains": chains}   # routing enrich(edges·원격노드) + 체인 seed
         return {**build_roster(entries), "chains": []}
     except Exception as e:   # noqa: BLE001 - 뷰어 보조기능: 어떤 실패도 코어로 전파 금지
