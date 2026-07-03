@@ -7,12 +7,12 @@ from serial_mcp.topology_chains import ChainLog
 
 def ev(kind, port="COM1", ts=1.0, unid=5, unique=9, cidx=None,
        passed=None, rt_tokens=None, src_name=None, rssi=None, ms=None,
-       json_obj=None, mac=None):
+       json_obj=None, mac=None, raw_lines=None):
     return {
         "port": port,
         "ts": ts,
         "kind": kind,
-        "raw_lines": [],
+        "raw_lines": list(raw_lines or []),
         "json": json_obj,
         "route": None,
         "ids": {
@@ -275,6 +275,61 @@ def test_uplink_cidx_ack_attaches_src_port_via_event_ident():
     src = entry["nodes"][0]
     assert src["role"] == "src"
     assert src["port"] == "COM12"
+
+
+def test_cidx_key_carries_ident_and_separates_same_cidx_senders():
+    # F2: Cidx 는 장비별 카운터라 값 충돌이 가능 — ident 를 키에 넣어 다른 장비의
+    # 같은 Cidx 가 한 체인으로 오병합되지 않아야 한다(P2).
+    log = ChainLog(window_s=10)
+    e1 = log.observe(ev("wifirx", "COM12", ts=1.0, unid=5, unique=None, cidx=100,
+                        json_obj={"UnID": 5, "Asn": 1, "Cidx": 100}))[0]
+    e2 = log.observe(ev("wifirx", "COM13", ts=1.5, unid=7, unique=None, cidx=100,
+                        json_obj={"UnID": 7, "Asn": 2, "Cidx": 100}))[0]
+    assert e1["key"] == ["c", 5, 100]
+    assert e2["key"] == ["c", 7, 100]
+    assert e1["id"] != e2["id"]
+
+
+def test_cidx_key_without_ident_still_chains():
+    # UnID/Mac 없는 브로드캐스트 — ident=None 폴백으로 기존 동작 유지.
+    log = ChainLog(window_s=10)
+    entry = log.observe(ev("wifirx", "COM12", ts=1.0, unid=None, unique=None, cidx=200))[0]
+    assert entry["key"] == ["c", None, 200]
+
+
+def test_public_needle_strips_rev_and_cidx():
+    # D2: 수신 raw 에서 sendMessage 부착분만 벗기면 송신측 콘솔 라인과 원문 일치(F3).
+    raw = '[WiFi_Rx] {"UnID":5,"Stat":"OK","Asn":58,"Rev":true,"Cidx":4520}'
+    log = ChainLog(window_s=10)
+    entry = log.observe(ev("wifirx", "COM4", ts=1.0, unid=5, unique=None, cidx=4520,
+                           raw_lines=[raw]))[0]
+    assert entry["needle"] == '{"UnID":5,"Stat":"OK","Asn":58}'
+
+
+def test_public_needle_without_rev_ssm_sender():
+    # SSM 펌웨어는 Rev 없이 Cidx 만 부착 — Rev 제거가 선택적이어야 한다.
+    raw = '[Proc-WiFiRx] {"CHPLAN":[1,"00"],"Asn":58,"UnID":5,"Cidx":4704}'
+    log = ChainLog(window_s=10)
+    entry = log.observe(ev("rx", "COM12", ts=1.0, unid=5, unique=None, cidx=4704,
+                           raw_lines=[raw]))[0]
+    assert entry["needle"] == '{"CHPLAN":[1,"00"],"Asn":58,"UnID":5}'
+
+
+def test_needle_fixed_on_first_observation():
+    # 니들은 첫 성공 관측으로 고정 — 이후 관측(Rev 포함본)이 와도 안 바뀐다(안정 앵커).
+    log = ChainLog(window_s=10)
+    log.observe(ev("wifirx", "COM4", ts=1.0, unid=5, unique=None, cidx=300,
+                   raw_lines=['[WiFi_Rx] {"UnID":5,"A":1,"Cidx":300}']))
+    log.observe(ev("rx", "COM13", ts=1.2, unid=5, unique=None, cidx=300,
+                   raw_lines=['[Proc-WiFiRx] {"UnID":5,"A":1,"Rev":true,"Cidx":300}']))
+    assert log.recent(5)[-1]["needle"] == '{"UnID":5,"A":1}'
+
+
+def test_u_key_entry_has_no_needle():
+    # "u" 체인은 양측 콘솔에 키가 찍혀 폴백이 불필요 — needle 미추출(None) 확인.
+    log = ChainLog(window_s=10)
+    entry = log.observe(ev("tx", "COM12", ts=1.0), port_names={"COM12": "SB5"})[0]
+    assert entry["needle"] is None
 
 
 def test_public_entry_carries_first_observation_ts():

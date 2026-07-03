@@ -229,6 +229,17 @@ def test_drain_chain_updates_is_one_shot():
     assert eng.drain_chain_updates() == []
 
 
+def test_engine_publishes_cidx_ident_key_and_needle_from_raw_line():
+    # 실장비 원문(2026-07-02 COM4 실측) 그대로 관통 — assembler 가 raw_lines 를 이벤트에
+    # 싣고 ChainLog 가 needle/ident 키를 공개하는 경계를 검증한다.
+    eng = TopologyEngine()
+    eng.observe("COM4", 1.0, '[Proc-WiFiRx] {"UnID":5,"Stat":"OK","Asn":58,"Rev":true,"Cidx":4520}')
+    eng.flush()
+    updates = eng.drain_chain_updates()
+    chain = next(c for c in updates if c["key"] == ["c", 5, 4520])
+    assert chain["needle"] == '{"UnID":5,"Stat":"OK","Asn":58}'
+
+
 def test_epoch_of_converts_published_chain_ts():
     # server.py 는 observe 에 단조시각(time.monotonic)을 주입한다 — 공개 체인 ts 는
     # epoch_of 로 epoch 초로 변환돼야 뷰어 점프 앵커(버퍼 wall-clock 비교) 계약과 맞는다.

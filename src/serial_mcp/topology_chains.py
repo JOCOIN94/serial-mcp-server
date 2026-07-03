@@ -15,6 +15,8 @@ from typing import Optional
 _KINDS = {"tx", "wifitx", "rx", "pass", "wifirx"}
 _RESERVED_TOKENS = frozenset({"00", "FF"})
 _RE_PASSED_PAIR = re.compile(r"\(\s*([0-9A-Fa-f]+)\s*-\s*([^)]+?)\s*\)")
+_RE_NEEDLE_REV = re.compile(r',"Rev":true(?=[,}])')
+_RE_NEEDLE_CIDX = re.compile(r',"Cidx":\d+(?=[,}])')
 
 
 def _norm_token(tok) -> Optional[str]:
@@ -38,8 +40,30 @@ def _event_key(ev: dict) -> tuple[Optional[tuple], Optional[str]]:
         return ("u", ident, unique), "up"
     cidx = ids.get("cidx")
     if cidx is not None:
-        return ("c", cidx), "down"
+        ident = ids.get("unid")
+        if ident is None:
+            ident = ids.get("mac")
+        return ("c", ident, cidx), "down"
     return None, None
+
+
+def _jump_needle(ev: dict) -> Optional[str]:
+    """관측 raw 라인에서 sendMessage 부착분(Rev/Cidx)만 벗긴 점프 니들.
+
+    펌웨어 계약: 수신 라인 = 송신 콘솔 JSON + ,"Rev":true(비-SSM) + ,"Cidx":N append
+    (공백 없는 serializeJson, REP 중계는 bypass 무변형). 벗긴 결과는 송신측 콘솔
+    라인과 원문 일치하므로 뷰어가 송신측 버퍼에서 부분문자열 검색에 쓴다.
+    """
+    for line in (ev or {}).get("raw_lines") or []:
+        if '"Cidx"' not in line:
+            continue
+        start = line.find("{")
+        end = line.rfind("}")
+        if start == -1 or end <= start:
+            continue
+        frag = _RE_NEEDLE_REV.sub("", line[start:end + 1])
+        return _RE_NEEDLE_CIDX.sub("", frag)
+    return None
 
 
 def _dir_hint(ev: dict) -> Optional[str]:
@@ -163,8 +187,8 @@ class ChainLog:
             return changed
         ent["_seen"].add(seen_key)
         ent["_last_ts"] = ts
-        if ent.get("_ident") is None:
-            ent["_ident"] = self._event_ident(ev)   # "c" 키(Cidx)도 이벤트 ids 로 발신자 ident 를 안다
+        if key[0] == "c" and ent.get("_needle") is None:
+            ent["_needle"] = _jump_needle(ev)   # 송신측 점프 폴백 니들(첫 관측 고정)
 
         before = self._public(ent)
         if kind == "tx":
@@ -248,7 +272,7 @@ class ChainLog:
             "rtt_ms": None,
             "complete": False,
             "_seen": set(),
-            "_ident": None,
+            "_needle": None,
             "_first_ts": ts,
             "_last_ts": ts,
         }
@@ -381,11 +405,11 @@ class ChainLog:
 
     @staticmethod
     def _entry_ident(ent: dict):
-        """항목의 발신자 ident — "u" 키는 키 자체, "c" 키(Cidx)는 관측 이벤트 ids 에서 저장한 값."""
+        """항목의 발신자 ident — "u"/"c" 모두 key[1] (D1: 두 키가 동형)."""
         key = ent.get("key") or (None,)
-        if key[0] == "u":
+        if key[0] in ("u", "c"):
             return key[1]
-        return ent.get("_ident")
+        return None
 
     @staticmethod
     def _correct_direction(ent: dict, direction: str) -> None:
@@ -601,4 +625,5 @@ class ChainLog:
             "rtt_ms": ent.get("rtt_ms"),
             "complete": bool(ent.get("complete")),
             "ts": ts,                     # 첫 관측 시각(epoch s) — 뷰어 점프의 시각 앵커
+            "needle": ent.get("_needle"),  # "c" 체인 송신측 점프 폴백(§D2) — "u" 는 None
         }

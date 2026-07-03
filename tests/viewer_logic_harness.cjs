@@ -345,10 +345,13 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   eq(SV.shortPortLabel("/dev/cu.usbmodem14201"), "14201", "short-port-usbmodem-strip");
   eq(SV.shortPortLabel("/dev/tty.usbserial-A5069RR4"), "A5069RR4", "short-port-usbserial-strip");
   eq(SV.shortPortLabel("/dev/tty.SLAB_USBtoUART"), "…oUART", "short-port-tail-ellipsis");
-  const jr = SV.chainRow({ id: 9, key: ["c", 3028], nodes: [{ name: null, port: "COM4", role: "dst", resolved: true }] }, {});
-  eq(jr.key.join(","), "c,3028", "chain-row-key-passthrough");
+  const jr = SV.chainRow({ id: 9, key: ["c", null, 3028], nodes: [{ name: null, port: "COM4", role: "dst", resolved: true }] }, {});
+  eq(jr.key.join(","), "c,,3028", "chain-row-key-passthrough");
   eq(jr.chips[0].port, "COM4", "chain-row-chip-port");
   eq(SV.chainRow({ id: 10, ts: 42.5, nodes: [] }, {}).ts, 42.5, "chain-row-ts-passthrough");
+  eq(SV.chainRow({ id: 12, needle: '{"UnID":5,"Asn":58}', nodes: [] }, {}).needle,
+     '{"UnID":5,"Asn":58}', "chain-row-needle-passthrough");
+  eq(SV.chainRow({ id: 13, nodes: [] }, {}).needle, null, "chain-row-needle-default-null");
   const longPort = SV.chainRow({ nodes: [{ name: null, port: "/dev/tty.SLAB_USBtoUART", resolved: true }] }, {});
   eq(longPort.chips[0].label, "…oUART", "chain-row-long-port-shortened");
   ok(longPort.chips[0].title.indexOf("/dev/tty.SLAB_USBtoUART") === 0, "chain-row-long-port-full-in-title");
