@@ -187,8 +187,11 @@ class ChainLog:
             return changed
         ent["_seen"].add(seen_key)
         ent["_last_ts"] = ts
-        if key[0] == "c" and ent.get("_needle") is None:
-            ent["_needle"] = _jump_needle(ev)   # 송신측 점프 폴백 니들(첫 관측 고정)
+        if ent.get("_needle") is None:
+            # 송신측 점프 니들(첫 성공 관측 고정). "c" 전용이었으나 "u" 로 확장(2026-07-03) —
+            # REQRSSI 하행("u" 키)은 SSM 콘솔에 TX 미출력이라, 키 조각(Unique 1..99 롤링)만으론
+            # 게이트 프로브가 상행 에코와 무시간 충돌해 죽은 ▸ 가 발행됐다.
+            ent["_needle"] = _jump_needle(ev)
 
         before = self._public(ent)
         if kind == "tx":

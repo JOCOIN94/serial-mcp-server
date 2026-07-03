@@ -325,8 +325,19 @@ def test_needle_fixed_on_first_observation():
     assert log.recent(5)[-1]["needle"] == '{"UnID":5,"A":1}'
 
 
-def test_u_key_entry_has_no_needle():
-    # "u" 체인은 양측 콘솔에 키가 찍혀 폴백이 불필요 — needle 미추출(None) 확인.
+def test_u_key_needle_captured_from_cidx_line():
+    # "u" 키도 needle 캡처 — REQRSSI 하행("u" 키)은 SSM 콘솔에 TX 가 안 찍혀서, 키 조각
+    # (Unique+UnID)만으론 게이트 프로브가 SB 상행 에코와 무시간 충돌해 위양성이 난다
+    # (2026-07-03 실장비 재현). 원문 needle 이 정확한 판정 근거다.
+    raw = '[WiFi_Rx] {"UnID":5,"REQRSSI":"REQ","Rng":[0,4],"Unique":98,"Cidx":1059}'
+    log = ChainLog(window_s=10)
+    entry = log.observe(ev("wifirx", "COM12", ts=1.0, unid=5, unique=98, cidx=1059,
+                           raw_lines=[raw]))[0]
+    assert entry["needle"] == '{"UnID":5,"REQRSSI":"REQ","Rng":[0,4],"Unique":98}'
+
+
+def test_u_key_needle_none_without_cidx_line():
+    # Cidx 실린 관측 줄이 없으면 needle 없음 — 상행 TX 콘솔 라인은 키 조각으로 충분.
     log = ChainLog(window_s=10)
     entry = log.observe(ev("tx", "COM12", ts=1.0), port_names={"COM12": "SB5"})[0]
     assert entry["needle"] is None

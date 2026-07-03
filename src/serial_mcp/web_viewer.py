@@ -2408,16 +2408,16 @@ function selectPort(port) {
 window.jumpToPortLog = async function (port, key, ts, needle) {
   if (!port || !key || !key.length) return false;
   const attempts = [];
+  if (needle) attempts.push([needle]);                        // 송신측 원문(백엔드 needle) — 최정밀이라 최우선
   if (key[0] === "u") {
     const ns = [];
-    if (key[2] != null) ns.push('"Unique":' + key[2]);
+    if (key[2] != null) ns.push('"Unique":' + key[2]);        // 키 조각 폴백 — Unique 는 1..99 롤링이라 needle 뒤로
     if (typeof key[1] === "string") ns.push(key[1]);          // mac ident 는 원문 그대로
     else if (key[1] != null) ns.push('"UnID":' + key[1]);
     if (ns.length) attempts.push(ns);
   } else if (key[0] === "c") {
     if (key[2] != null) attempts.push(['"Cidx":' + key[2]]);
   }
-  if (needle) attempts.push([needle]);                        // 송신측 폴백(백엔드 needle 공개분)
   if (!attempts.length) return false;
   let anchorMs = null;                                        // 체인 관측 시각(epoch s) → 하루-내-ms
   if (ts != null) {
@@ -2430,17 +2430,23 @@ window.jumpToPortLog = async function (port, key, ts, needle) {
   await refreshBuffer();
   const box = $("buffer");
   const rows = box.querySelectorAll("[data-raw]");
-  function scan(needles) {                                    // 30s 밖 매칭은 실패로 쳐 다음 시도로
+  function scan(needles) {                                    // 앵커 ±5s 밖 매칭은 실패로 쳐 다음 시도로
+    // 5s 근거: 접힘 행도 first_ts 앵커라 정당한 오차는 도착 지터+재브로드캐스트 스팬 ~2s 이내.
+    // 넓히면(구 30s) 롤링 카운터(Unique 1..99) 재발과 겹쳐 밀집 환경에서 오점프가 는다.
     let best = null, bestDiff = Infinity;
     for (let i = rows.length - 1; i >= 0; i--) {
       const raw = rows[i].dataset.raw || "";
       if (!needles.every(n => raw.indexOf(n) !== -1)) continue;
       if (anchorMs == null) return rows[i];                   // 앵커 없음(구버전 행) — 최신 매칭
       const rowMs = SV.tsToMs(rows[i].dataset.ts);
-      const diff = rowMs == null ? Infinity : Math.abs(rowMs - anchorMs);
+      let diff = Infinity;
+      if (rowMs != null) {
+        const d = Math.abs(rowMs - anchorMs);
+        diff = Math.min(d, 86400000 - d);                     // 하루-내-ms 비교 — 자정 경계 랩어라운드
+      }
       if (diff < bestDiff) { bestDiff = diff; best = rows[i]; }
     }
-    return bestDiff > 30000 ? null : best;
+    return bestDiff > 5000 ? null : best;
   }
   let best = null;
   for (const needles of attempts) {

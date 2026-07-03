@@ -596,9 +596,16 @@ def _publish_topology_hops(hops) -> None:
 
 
 def _chain_jump_attempts(chain: dict) -> list:
-    """뷰어 jumpToPortLog 와 동일한 니들 시도 목록(원문 부분문자열 AND) — 동기화 유지."""
+    """뷰어 jumpToPortLog 와 동일한 니들 시도 목록(원문 부분문자열 AND) — 동기화 유지.
+
+    needle(송신측 원문 재구성)이 가장 정밀하므로 최우선. 키 조각(Unique/UnID·Cidx)은 폴백 —
+    Unique 는 장비별 1..99 롤링이라 다른 시점·다른 방향 트래픽과 충돌할 수 있다
+    (2026-07-03 REQRSSI 하행이 SB 상행 에코와 충돌해 게이트 오통과한 실측 버그).
+    """
     key = chain.get("key") or ()
     attempts: list = []
+    if chain.get("needle"):
+        attempts.append([chain["needle"]])
     if len(key) >= 3:
         kind, ident, val = key[0], key[1], key[2]
         if kind == "u":
@@ -613,8 +620,6 @@ def _chain_jump_attempts(chain: dict) -> list:
                 attempts.append(ns)
         elif kind == "c" and val is not None:
             attempts.append([f'"Cidx":{val}'])
-    if chain.get("needle"):
-        attempts.append([chain["needle"]])
     return attempts
 
 
@@ -625,13 +630,17 @@ def _decorate_chain_jumpable(chain: dict, has_line) -> dict:
     점프할 라인이 원천 부재라, 뷰어가 ▸ 를 사전 비활성(회색)으로 그린다. 관측 노드
     (수신·중계·관측 src)는 라인 존재가 이벤트의 근거이므로 주석하지 않는다(버퍼 밀림은
     클릭 시점 처리). has_line(port, needles)->bool 주입 — 버퍼 결합을 떼어 순수 테스트.
+
+    프로브는 최강 시도(needle 우선) 하나로만 판정한다 — 클릭측은 ±시간 앵커가 오매칭을
+    걸러주지만 버퍼 프로브는 무시간이라, 약한 키 조각(Unique 롤링)이 무관한 트래픽과
+    충돌하면 '발행은 되는데 클릭은 실패하는' 죽은 ▸ 가 생긴다(2026-07-03 REQRSSI 하행 실측).
     """
-    attempts = _chain_jump_attempts(chain)
+    probe = _chain_jump_attempts(chain)[:1]
     for node in chain.get("nodes") or []:
         if node.get("role") != "src" or not node.get("inferred") or not node.get("port"):
             continue
         port = node["port"]
-        node["jumpable"] = bool(attempts) and any(has_line(port, ns) for ns in attempts)
+        node["jumpable"] = bool(probe) and any(has_line(port, ns) for ns in probe)
     return chain
 
 

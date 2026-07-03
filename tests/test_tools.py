@@ -573,8 +573,10 @@ def test_chain_jumpable_false_when_no_line_on_src_console():
     assert "jumpable" not in chain["nodes"][1]
 
 
-def test_chain_jumpable_true_via_needle_fallback():
-    # 1차(Cidx)는 송신 콘솔에 원천 부재, needle 폴백이 찾으면 jumpable=True (INFO REQ 류).
+def test_chain_jumpable_probes_needle_only_when_present():
+    # needle(송신측 원문)이 있으면 프로브는 needle 하나로만 판정한다 — 키 조각(Cidx/Unique)은
+    # 시간 제약 없는 버퍼 검색이라 무관한 트래픽과 충돌할 수 있다(클릭측은 ±앵커로 보호되지만
+    # 게이트 프로브는 아니므로 최강 니들만 쓴다).
     seen = []
 
     def has_line(port, needles):
@@ -583,7 +585,26 @@ def test_chain_jumpable_true_via_needle_fallback():
 
     chain = srv._decorate_chain_jumpable(_chain(), has_line)
     assert chain["nodes"][0]["jumpable"] is True
-    assert seen[0] == ("COM4", ['"Cidx":4704'])   # 뷰어와 동일한 시도 순서
+    assert seen == [("COM4", ['{"CHPLAN":[1],"Asn":58,"UnID":5}'])]   # needle 단독 프로브
+
+
+def test_chain_jumpable_u_key_fragment_collision_not_trusted(monkeypatch):
+    # 2026-07-03 실장비 버그 재현: REQRSSI 하행("u" 키) — SSM 콘솔에 TX 미출력인데,
+    # 키 조각('"Unique":98'+'"UnID":5')이 몇 분 전 SB 상행 에코와 매칭돼 게이트를 오통과
+    # → 발행된 ▸ 가 클릭(±앵커) 시점엔 못 찾는 죽은 버튼이 됐다. needle 이 있으면
+    # 조각 매칭을 신뢰하지 않아야 한다.
+    chain = _chain(key=("u", 5, 98),
+                   needle='{"UnID":5,"REQRSSI":"REQ","Rng":[0,4],"Unique":98}')
+
+    def has_line(p, ns):
+        return ns == ['"Unique":98', '"UnID":5']   # 조각=옛 에코 위양성, needle=원천 부재
+
+    srv._decorate_chain_jumpable(chain, has_line)
+    assert chain["nodes"][0]["jumpable"] is False
+    monkeypatch.setattr(srv, "_chain_gate", {})
+    assert srv._chain_publishable(_chain(key=("u", 5, 98),
+                                         needle='{"UnID":5,"REQRSSI":"REQ","Rng":[0,4],"Unique":98}'),
+                                  has_line=has_line) is False
 
 
 def test_chain_jumpable_u_key_uses_unique_and_ident_needles():
