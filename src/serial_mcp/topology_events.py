@@ -9,6 +9,8 @@
 따라서 줄 단위 무상태 처리가 아니라 포트별 누산기(EventAssembler)로 헤더부터 블록을 조립한다.
 JSON 은 줄 앞 태그를 건너뛰고 '첫 {/[ 부터' 파싱한다(plan §7-2). [Proc-WebRTx] 는 별도
 이벤트(REPRSSI=링크품질)이고, 실제 경로는 RX 의 Rt/[Passed Device] 다(REPRSSI 아님).
+[BypassJson] 은 relay 가 Rt 를 스탬프한 뒤 남기는 실행 증거라 pass 이벤트로 본다.
+[Data_Pass] 중 같은 줄 JSON 이 없으면 송신 거부(pass_refused)로 누산해 다음 JSON 만 부착한다.
 
 I/O·시리얼 비의존 — 단위 테스트가 쉽다(test_topology_events.py).
 """
@@ -28,7 +30,7 @@ _HEADERS = [
     # 숫자·_ 가 붙는 변형이 다수라 \b 로는 놓친다(2026-07-02 SB_ESP32.ino 전수 대조).
     ("tx",     re.compile(r"\[(?:WiFi_)?Tx(?![a-z])[^\]]*\]|ForceQuit_Tx")),
     ("wifirx", re.compile(r"\[WiFi_Rx\]")),
-    ("pass",   re.compile(r"\[Data_Pass\]")),
+    ("pass",   re.compile(r"\[Data_Pass\]|\[BypassJson\]")),
     ("route",  re.compile(r"\[Route\]\s*Link\b")),
 ]
 
@@ -138,6 +140,11 @@ def _fill_from_json(ev: dict, obj) -> None:
 def _attach(ev: dict, text: str) -> None:
     """연속 줄을 현재 블록에 부착(보조 필드 추출). 매칭 없으면 raw_lines 보존만."""
     ev["raw_lines"].append(text)
+    if ev.get("kind") == "pass_refused" and ev.get("json") is None:
+        obj = extract_json(text)
+        if obj is not None:
+            ev["json"] = obj
+            _fill_from_json(ev, obj)
     m = _RE_TAKEN.search(text)
     if m:
         ev["metrics"]["takentime_ms"] = int(m.group(1))
@@ -150,8 +157,8 @@ def _attach(ev: dict, text: str) -> None:
     m = _RE_PASSED.search(text)
     if m:
         ev["hints"]["passed"] = m.group(1).strip()
-    # [Proc-Raw Packet](SSM)은 Rt 제거 전 원시 패킷이라 실제 경로 토큰 보유.
-    # SSM 은 [Proc-WiFiRx] 출력 전 Rt 를 remove 하므로(SSM_esp32.ino), rt_tokens 출처는 여기다.
+    # [Proc-Raw Packet](SSM)이 찍히면 Rt 제거 전 원시 패킷에서 실제 경로 토큰을 얻는다.
+    # 기본 모드에서는 중복수신 검사 통과분만 찍히므로 Rt 출처로 항상 존재한다고 가정하지 않는다.
     if "[Proc-Raw Packet]" in text:
         obj = extract_json(text)
         if isinstance(obj, dict) and isinstance(obj.get("Rt"), list):
@@ -165,8 +172,9 @@ class EventAssembler:
     헤더 사이의 연속 줄(takentime/<<<From/[Passed Device]/[Proc-Raw Packet] 등)은 현재 블록에
     부착된다. 한 이벤트 지연(다음 헤더가 와야 직전 이벤트 방출)이 있으나 윈도 상관에는 무해하다.
 
-    예외: **tx/pass/wifirx는 헤더 한 줄에 페이로드가 완결**(UnID/Mac·Unique/Cidx/Rt 전부
-    인라인, 부착 줄이 기여하는 필드 없음)이라 **즉시 방출**한다. tx 를 버퍼링하면 리프가
+    예외: **tx/pass(w/JSON)/wifirx는 헤더 한 줄에 페이로드가 완결**(UnID/Mac·Unique/Cidx/Rt 전부
+    인라인)이라 **즉시 방출**한다. Data_Pass 헤더에 JSON 이 없으면 송신 거부(pass_refused)로
+    버퍼링해 다음 줄 JSON 을 한 번만 부착한다. tx 를 버퍼링하면 리프가
     전송 후 침묵할 때 다음 헤더/유휴 flush(2s+스윕 위상)까지 방출이 밀려, correlator 의
     rx_grace(1s)가 먼저 만료돼 src_port 가 확률적으로 유실된다(2026-07-02 재검토 — RX 선행
     수정 63495ed 의 잔여 경쟁). pass/wifirx 도 PeerLinks 포트쌍 상관에 즉시 필요하다.
@@ -188,7 +196,13 @@ class EventAssembler:
                 out.append(self._cur)
                 self._cur = None
             ev = _new_event(self._port, ts, kind, text)
-            if kind in ("tx", "pass", "wifirx"):
+            if kind == "pass":
+                if ev["json"] is not None:
+                    out.append(ev)     # relay 실행 증거 — 헤더 한 줄에 완결
+                else:
+                    ev["kind"] = "pass_refused"
+                    self._cur = ev     # 송신 거부 — 다음 줄 JSON 을 부착한 뒤 방출
+            elif kind in ("tx", "wifirx"):
                 out.append(ev)         # 헤더 한 줄에 완결 — 즉시 방출(클래스 docstring 예외)
             else:
                 self._cur = ev

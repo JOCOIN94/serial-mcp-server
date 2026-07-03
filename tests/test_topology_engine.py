@@ -419,3 +419,61 @@ def test_recent_hops_zero_returns_empty():
     eng.observe("COM4", 1.0, '[Proc-WiFiRx] {"UnID":5,"Unique":2,"INFO":["4"]}')   # 앞 블록 flush
     assert eng.recent_hops(0) == []
     assert eng.recent_hops(-1) == []
+
+
+def test_uplink_bypass_json_forms_three_node_chain_with_relay_port():
+    eng = TopologyEngine()
+    eng.observe(
+        "COMR",
+        1.0,
+        '[BypassJson] {"UnID":1,"INFO":["4","SB260702-001",-57,false,false,"0",false],'
+        '"EQ":[0,0,0,0,0,0,1,[],0],"Unique":5,"Rev":true,"Cidx":996,"Rt":["7C"]}',
+    )
+    # 합성: 실측 규칙상 SSM 은 [Proc-WiFiRx] 출력 전 Rt 를 remove 하므로 1번 fixture 에서 Rt 만 뺀다.
+    eng.observe(
+        "COMS",
+        1.1,
+        '[Proc-WiFiRx] {"UnID":1,"INFO":["4","SB260702-001",-57,false,false,"0",false],'
+        '"EQ":[0,0,0,0,0,0,1,[],0],"Unique":5,"Rev":true,"Cidx":996}',
+    )
+    eng.flush()
+
+    chain = next(c for c in eng.recent_chains(10) if c["key"] == ["u", 1, 5])
+
+    assert any(n["role"] == "relay" and n["port"] == "COMR" for n in chain["nodes"])
+    assert chain["nodes"][-1]["role"] == "dst"
+    assert chain["nodes"][-1]["port"] == "COMS"
+    assert chain["ordered"] is True
+
+
+def test_pass_refused_is_inactive_for_chains_and_peer_edges():
+    eng = TopologyEngine()
+    for i, line in enumerate([
+        "[Data_Pass] Protected to bypass.",
+        '{"RTC":[26,33,16,3,7,2026],"CHANNEL":"11","INFO":"REQ","UnID":1,"Cidx":296}',
+        "[Bin] recorded_data:<garbage>",
+    ]):
+        eng.observe("COMR", 1.0 + i, line)
+    eng.flush()
+
+    entries = [{"port": "COMR", "alias": "REP", "lines": [], "connected": True}]
+    roster = eng.roster(entries, now=10.0)
+
+    assert eng.recent_chains(10) == []
+    assert all(
+        edge["from"] != "COMR" and edge["to"] != "COMR"
+        for group in roster["groups"]
+        for edge in group.get("edges", [])
+    )
+
+
+def test_direct_tx_rx_chain_remains_two_nodes_without_pass_events():
+    eng = TopologyEngine()
+    eng.observe("COM14", 1.0, '[Tx - my INFO] {"UnID":5,"Unique":25,"INFO":["4"]}')
+    eng.observe("COM4", 1.2, '[Proc-WiFiRx] {"UnID":5,"Unique":25,"INFO":["4"]}')
+    eng.flush()
+
+    chain = next(c for c in eng.recent_chains(10) if c["key"] == ["u", 5, 25])
+
+    assert [n["role"] for n in chain["nodes"]] == ["src", "dst"]
+    assert [n["port"] for n in chain["nodes"]] == ["COM14", "COM4"]

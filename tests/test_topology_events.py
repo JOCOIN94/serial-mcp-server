@@ -185,3 +185,99 @@ def test_two_headers_make_two_events():
 def test_continuation_without_header_is_ignored():
     # 헤더 없이 온 연속 줄은 버린다(현재 블록 없음).
     assert _run([" -- takentime : 61", "<<< From SB9."]) == []
+
+
+def test_bypass_json_immediately_emits_pass_event_with_rt_tokens():
+    evs = _run([
+        '[BypassJson] {"UnID":1,"INFO":["4","SB260702-001",-57,false,false,"0",false],'
+        '"EQ":[0,0,0,0,0,0,1,[],0],"Unique":5,"Rev":true,"Cidx":996,"Rt":["7C"]}'
+    ])
+
+    assert len(evs) == 1
+    ev = evs[0]
+    assert ev["kind"] == "pass"
+    assert ev["ids"]["unid"] == 1
+    assert ev["ids"]["unique"] == 5
+    assert ev["ids"]["cidx"] == 996
+    assert ev["ids"]["rt_tokens"] == ["7C"]
+    assert ev["json"]["Rev"] is True
+
+
+def test_bypass_json_cidx_series_emits_pass_event():
+    evs = _run([
+        '[BypassJson] {"UnID":1,"Stat":"OK","Asn":31,"Rev":true,"Cidx":998,"Rt":["7C"]}'
+    ])
+
+    assert len(evs) == 1
+    ev = evs[0]
+    assert ev["kind"] == "pass"
+    assert ev["ids"]["unid"] == 1
+    assert ev["ids"]["asn"] == 31
+    assert ev["ids"]["cidx"] == 998
+    assert ev["ids"]["rt_tokens"] == ["7C"]
+
+
+def test_data_pass_same_line_json_emits_pass_event():
+    evs = _run([
+        '[Data_Pass] {"REGMAC":[["10,06,1C,16,97,AC",0],["94,A9,90,1D,FF,74",0]],'
+        '"reqId":"k90xdhjy","Mac":"80,7D,3A,82,5A,AC","Cidx":261}'
+    ])
+
+    assert len(evs) == 1
+    ev = evs[0]
+    assert ev["kind"] == "pass"
+    assert ev["ids"]["mac"] == "80:7D:3A:82:5A:AC"
+    assert ev["ids"]["cidx"] == 261
+
+
+def test_data_pass_protected_becomes_pass_refused_and_attaches_next_json_once():
+    evs = _run([
+        "[Data_Pass] Protected to bypass.",
+        '{"RTC":[26,33,16,3,7,2026],"CHANNEL":"11","INFO":"REQ","UnID":1,"Cidx":296}',
+        "[Bin] recorded_data:<garbage>",
+        '[WiFi_Rx] {"UnID":1,"Stat":"OK","Asn":6,"Cidx":298}',
+    ])
+
+    assert len(evs) == 2
+    refused, wifirx = evs
+    assert refused["kind"] == "pass_refused"
+    assert refused["ids"]["unid"] == 1
+    assert refused["ids"]["cidx"] == 296
+    assert refused["json"]["CHANNEL"] == "11"
+    assert "[Bin] recorded_data:<garbage>" in refused["raw_lines"]
+    assert wifirx["kind"] == "wifirx"
+
+
+def test_data_pass_protected_chplan_sequence_flushes_as_pass_refused():
+    evs = _run([
+        "[Data_Pass] Protected to bypass.",
+        '{"CHPLAN":[2,["7C","02"],4,30,0],"Asn":6,"UnID":1,"Cidx":297}',
+    ])
+
+    assert len(evs) == 1
+    ev = evs[0]
+    assert ev["kind"] == "pass_refused"
+    assert ev["ids"]["asn"] == 6
+    assert ev["ids"]["cidx"] == 297
+    assert "CHPLAN" in ev["json"]
+
+
+def test_bare_json_without_active_block_is_ignored():
+    evs = _run([
+        '{"UnID":2,"INFO":["4","SB260630-002",-47,false,false,"0",false],'
+        '"EQ":[0,0,0,0,0,0,1,[],0],"Unique":75,"Rev":true,"Cidx":932}'
+    ])
+
+    assert evs == []
+
+
+def test_data_pass_variant_tolerance_for_dot_prefix_and_to_clause():
+    # 합성: 펌웨어 소스 유래 물리 변형. 실측 캡처 원문 라인은 아니다.
+    evs = _run([
+        '.[Data_Pass] {"Alive":"SSM","Cidx":900}',
+        '[Data_Pass]  To. Bay_B02, {"SPECIAL":"CHKRSSI","Unique":9,"UnID":1}',
+    ])
+
+    assert [ev["kind"] for ev in evs] == ["pass", "pass"]
+    assert evs[0]["ids"]["cidx"] == 900
+    assert evs[1]["ids"]["unique"] == 9
