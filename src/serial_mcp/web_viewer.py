@@ -2267,6 +2267,16 @@ async function refreshBuffer() {
   _bufSig = sig;
   const box = $("buffer");
   const st = box.scrollTop;
+  // follow off 복원은 픽셀이 아니라 '보던 줄' 앵커로 — 포화 버퍼(2000/2000)는 매 폴링
+  // 위가 잘려 내용 전체가 위로 밀리므로, 같은 픽셀을 복원하면 다른 줄이 보인다.
+  let anchor = null;
+  if (!state.follow) {
+    const boxTop = box.getBoundingClientRect().top;
+    for (const r of box.querySelectorAll("[data-raw]")) {
+      const rb = r.getBoundingClientRect();
+      if (rb.bottom > boxTop) { anchor = { ts: r.dataset.ts, raw: r.dataset.raw, off: rb.top - boxTop }; break; }
+    }
+  }
   box.innerHTML = "";
   const ctx = {};
   for (const e of entries) {
@@ -2274,8 +2284,16 @@ async function refreshBuffer() {
     if (node) { node.dataset.raw = e.text; node.dataset.ts = e.first_ts || ""; }   // 체인 칩 점프의 원문·시각 매칭용
   }
   scheduleRecount();
-  if (state.follow && state.tab === "buffer") scrollLogBottom("buffer");
-  else box.scrollTop = st;                         // follow off — 읽던 위치 복원
+  if (state.follow && state.tab === "buffer") { scrollLogBottom("buffer"); return; }
+  box.scrollTop = st;                              // 근사 복원(앵커 미발견 시의 최선)
+  if (anchor) {
+    for (const r of box.querySelectorAll("[data-raw]")) {
+      if (r.dataset.ts === anchor.ts && r.dataset.raw === anchor.raw) {
+        box.scrollTop += (r.getBoundingClientRect().top - box.getBoundingClientRect().top) - anchor.off;
+        break;                                     // 보던 줄을 같은 화면 위치에 고정(밀림 상쇄)
+      }
+    }
+  }
 }
 setInterval(refreshBuffer, 2000);
 
