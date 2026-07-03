@@ -1,0 +1,63 @@
+# Chain log — get_topology (reconnect 3/3 port holati)
+# generated 2026-07-03 ~16:34
+========================================================================
+
+### ROSTER (group g1 = SSM) ###
+  SSM      /dev/cu.usbmodem5A460910261   (ESP)  status=good
+  REPEAT   /dev/cu.usbserial-576E1231011 (ESP)  status=good
+  SB2      /dev/cu.usbserial-2140  UnID=2  route_token=02  MAC=80:7D:3A:82:5A:AC  status=good
+  (Bay_B02 = UnID1, MAC 30:AE:A4:4C:94:20 — konsolga ulanmagan, faqat SSM RX orqali kuzatiladi)
+
+### EDGES (fresh) ###
+  REPEAT (576E) -> SSM   rssi=-41  via=handled
+  SB2/Bay_B01 (2140) -> SSM   rssi=-47  via=handled
+
+### RECENT_CHAINS (36) — [id] dir  src(label) -> dst  | rtt | needle ###
+[200] up  Bay_B02      -> SSM  |      | {"UnID":1,"Stat":"OK","Asn":85}
+[204] up  Bay_B01(SB2) -> SSM  |      |
+[207] up  REPEATOR     -> SSM  | 48ms | rssi=-38
+[208] up  Bay_B02      -> SSM  |      |
+[211] up  Bay_B01(SB2) -> SSM  | 66ms | rssi=-47
+[213] up  Bay_B01(SB2) -> SSM  |      | {"UnID":2,"Stat":"OK","Asn":87}
+[215] up  Bay_B02      -> SSM  |      |
+[218] up  Bay_B02      -> SSM  |      |
+[222] up  Bay_B02      -> SSM  |      |
+[225] up  Bay_B02      -> SSM  |      |
+[227] up  Bay_B02      -> SSM  |      |
+[229] up  Bay_B02      -> SSM  |      |
+[233] up  Bay_B02      -> SSM  |      |
+[239] up  Bay_B02      -> SSM  | 78ms | rssi=-57
+[241] up  Bay_B02      -> SSM  |      | {"UnID":1,"Stat":"OK","Asn":88}
+[244] up  REPEATOR     -> SSM  | 61ms | rssi=-40
+[247] up  REPEATOR     -> SSM  |      |
+[249] up  Bay_B01(SB2) -> SSM  |      | {"UnID":2,"Stat":"OK","Asn":90}
+[252] up  Bay_B02      -> SSM  |      | {"UnID":1,"Stat":"OK","Asn":91}
+[254] up  Bay_B01(SB2) -> SSM  | 59ms | rssi=-46
+[257] up  Bay_B02      -> SSM  | 67ms | rssi=-57
+[259] up  Bay_B01(SB2) -> SSM  |      | {"UnID":2,"Stat":"OK","Asn":93}
+[261] up  Bay_B02      -> SSM  |      | {"UnID":1,"Stat":"OK","Asn":92}
+[265] up  Bay_B02      -> SSM  |      | {"UnID":1,"Stat":"OK","Asn":94}
+[268] up  Bay_B02      -> SSM  |      |
+[270] up  Bay_B02      -> SSM  |      | {"UnID":1,"Stat":"OK","Asn":96}
+[272] up  Bay_B01(SB2) -> SSM  |      | {"UnID":2,"Stat":"OK","Asn":97}
+[274] up  Bay_B02      -> SSM  |      | {"UnID":1,"Stat":"OK","Asn":98}
+[279] up  Bay_B01(SB2) -> SSM  |      | {"UnID":2,"Stat":"OK","Asn":99}
+[283] up  Bay_B02      -> SSM  |      | {"UnID":1,"Stat":"OK","Asn":1}
+[285] up  REPEATOR     -> SSM  | 61ms | rssi=-41
+[288] up  REPEATOR     -> SSM  |      |
+[289] up  Bay_B01(SB2) -> SSM  |      | {"UnID":2,"Stat":"OK","Asn":3}
+[292] up  Bay_B01(SB2) -> SSM  |      | {"UnID":2,"Stat":"OK","Asn":4}
+[294] up  Bay_B02      -> SSM  |      | {"UnID":1,"Stat":"OK","Asn":5}
+[298] up  Bay_B01(SB2) -> SSM  | 62ms | rssi=-47  (complete=false)
+
+### RECENT_HOPS (20, latest-last; NO timestamps by design) ###
+  Bay_B01(2)   ok  rssi=-47  rtt=66ms   src=2140 -> SSM
+  Bay_B01(2)   ok  rssi=-46  rtt=59ms   src=2140 -> SSM
+  Bay_B01(2)   ok  rssi=-47  rtt=62ms   src=2140 -> SSM
+  Bay_B02(1)   ok  rssi=-57  rtt=78ms   -> SSM
+  Bay_B02(1)   ok  rssi=-57  rtt=67ms   -> SSM
+  REPEATOR     ok  rssi=-38..-41  rtt=48/61ms   src=576E -> SSM
+  (qolgan Bay_B02 hoplari: rssi/rtt=null, ok=true)
+
+# Izoh: barcha zanjir/hop ok=true, confidence=observed. Uch tugun (SSM/Repeater/Bay_B01)
+# konsol orqali; Bay_B02 faqat SSM RX orqali. Bay_B01 RF SSM ga -46..-47 (sog'lom).

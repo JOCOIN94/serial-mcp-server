@@ -1,0 +1,503 @@
+# SSM (ESP32-S3, SSM260702-002) — /dev/cu.usbmodem5A460910261 — last 500
+# generated 2026-07-03 ~16:34  |  reconnect(3/3 port) holati
+========================================================================
+[16:30:09.243] [IOc] : ["message","{\"reqId\":\"p5ucqah4\",\"statusOk\":\"SKIP\",\"requestType\":\"OTAState\"}"]
+[16:30:09.243] ==> [SSM To Web] Skipped the stateOK.
+[16:30:09.251] [Proc-Alarm] Saved Reved msg From Web -> {"reqId":"p5ucqah4","statusOk":"SKIP","requestType":"OTAState"}
+[16:30:09.256] [Proc-WebRx] {"reqId":"p5ucqah4","statusOk":"SKIP","requestType":"OTAState"}
+[16:30:09.306] [Proc-WebTx] OTA Progress {"reqId":"p5ucqah4","requestType":"OTAState","state":[["b93fb85f-0560-4e7e-96ca-dd656131d32f","",false,0,[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],["abb9851a-05ae-4610-9e7c-4a1815eef639","",false,0,[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],["d75ba974-9b05-4aa3-bb90-56206843203a","SB260702-001",false,100,[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],["13c948ae-a71d-4415-88ef-6f9cd0aa8f13","SB260702-001",false,100,[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]]]}
+[16:30:09.306] Sent To a TCP Server - 4
+[16:30:09.362] [Proc-Alarm] Send data to socketIO - {"reqId":"p5ucqah4","requestType":"OTAState","state":[["b93fb85f-0560-4e7e-96ca-dd656131d32f","",false,0,[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],["abb9851a-05ae-4610-9e7c-4a1815eef639","",false,0,[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],["d75ba974-9b05-4aa3-bb90-56206843203a","SB260702-001",false,100,[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],["13c948ae-a71d-4415-88ef-6f9cd0aa8f13","SB260702-001",false,100,[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]]]}
+[16:30:09.412] [Proc-WebRTx] ["message",{"now":6799220,"reqId":"p5ucqah4","data":{"requestType":"OTAState","state":[["b93fb85f-0560-4e7e-96ca-dd656131d32f","",false,0,[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],["abb9851a-05ae-4610-9e7c-4a1815eef639","",false,0,[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],["d75ba974-9b05-4aa3-bb90-56206843203a","SB260702-001",false,100,[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],["13c948ae-a71d-4415-88ef-6f9cd0aa8f13","SB260702-001",false,100,[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]]]}}]
+[16:30:13.321] >>> From Web :
+[16:30:13.343] [IOc] : ["message","{\"type\":\"reflash\",\"deviceId\":\"295277e8-094f-4b28-9751-fa9ecc98d183\",\"statusOk\":\"SKIP\",\"chipType\":\"ESP32\",\"deviceTypeId\":\"4\",\"tdeviceId\":[\"d75ba974-9b05-4aa3-bb90-56206843203a\"],\"reqId\":\"xvf5lacc\",\"FWVer\":\"SB260702-001\"}"]
+[16:30:13.349] ==> [SSM To Web] Skipped the stateOK.
+[16:30:13.371] [Proc-Alarm] Saved Reved msg From Web -> {"type":"reflash","deviceId":"295277e8-094f-4b28-9751-fa9ecc98d183","statusOk":"SKIP","chipType":"ESP32","deviceTypeId":"4","tdeviceId":["d75ba974-9b05-4aa3-bb90-56206843203a"],"reqId":"xvf5lacc","FWVer":"SB260702-001"}
+[16:30:13.388] [Proc-WebRx] {"type":"reflash","deviceId":"295277e8-094f-4b28-9751-fa9ecc98d183","statusOk":"SKIP","chipType":"ESP32","deviceTypeId":"4","tdeviceId":["d75ba974-9b05-4aa3-bb90-56206843203a"],"reqId":"xvf5lacc","FWVer":"SB260702-001"}
+[16:30:13.393] [Proc-WebTx] Resp-Reflash  (2회 반복, 16:30:13~16:30:13)
+[16:30:13.393]  => {"Done":"OK","reqId":"xvf5lacc"}
+[16:30:13.405]  >>>> The status to carry out this command - All units of the same type have a communication error, It can't carry out more.
+[16:30:13.416]  => {"Done":"NOK","reqId":"xvf5lacc","reason":"All units of the same type have a communication error."}
+[16:30:13.421] Sent To a TCP Server - 4
+[16:30:13.432] [Proc-Alarm] Send data to socketIO - {"Done":"NOK","reqId":"xvf5lacc","reason":"All units of the same type have a communication error."}
+[16:30:13.443] [Proc-WebRTx] ["message",{"now":6803291,"reqId":"xvf5lacc","data":{"Done":"NOK","reason":"All units of the same type have a communication error."}}]
+[16:30:16.057] [ConnSt] 30,AE,A4,4C,94,20 ONLINE->STALE (age=15126ms)
+[16:30:17.647] [Proc_WiFiTx] Ask Info : To. VAC_01, {"RTC":[17,30,16,3,7,2026],"CHANNEL":"11","INFO":"REQ","Mac":"58,BF,25,A0,02,34"}
+[16:30:20.571] >> Ping - success, www.google.com
+[16:30:20.698] >>> From Web :
+[16:30:20.720] [IOc] : ["message","{\"type\":\"canceldown\",\"deviceId\":\"295277e8-094f-4b28-9751-fa9ecc98d183\",\"statusOk\":\"SKIP\",\"chipType\":\"ESP32\",\"deviceTypeId\":\"4\",\"tdeviceId\":[\"13c948ae-a71d-4415-88ef-6f9cd0aa8f13\"],\"reqId\":\"x79fljmg\"}"]
+[16:30:20.720] ==> [SSM To Web] Skipped the stateOK.
+[16:30:20.742] [Proc-Alarm] Saved Reved msg From Web -> {"type":"canceldown","deviceId":"295277e8-094f-4b28-9751-fa9ecc98d183","statusOk":"SKIP","chipType":"ESP32","deviceTypeId":"4","tdeviceId":["13c948ae-a71d-4415-88ef-6f9cd0aa8f13"],"reqId":"x79fljmg"}
+[16:30:20.759] [Proc-WebRx] {"type":"canceldown","deviceId":"295277e8-094f-4b28-9751-fa9ecc98d183","statusOk":"SKIP","chipType":"ESP32","deviceTypeId":"4","tdeviceId":["13c948ae-a71d-4415-88ef-6f9cd0aa8f13"],"reqId":"x79fljmg"}
+[16:30:20.764]  >>>> Reject the command - DOWNLOADING CANCEL
+[16:30:20.770] [Proc-WebTx] Resp-canceldown
+[16:30:20.775]  => {"reason":"Unknown","Done":"NOK","reqId":"x79fljmg"}
+[16:30:20.775] Sent To a TCP Server - 4
+[16:30:20.781] [Proc-Alarm] Send data to socketIO - {"reason":"Unknown","Done":"NOK","reqId":"x79fljmg"}
+[16:30:20.790] [Proc-WebRTx] ["message",{"now":6810646,"reqId":"x79fljmg","data":{"reason":"Unknown","Done":"NOK"}}]
+[16:30:23.873] >>> From Web :
+[16:30:23.900] [IOc] : ["message","{\"type\":\"reflash\",\"deviceId\":\"295277e8-094f-4b28-9751-fa9ecc98d183\",\"statusOk\":\"SKIP\",\"chipType\":\"ESP32\",\"deviceTypeId\":\"4\",\"tdeviceId\":[\"13c948ae-a71d-4415-88ef-6f9cd0aa8f13\",\"d75ba974-9b05-4aa3-bb90-56206843203a\"],\"reqId\":\"vp4kr5tl\",\"FWVer\":\"SB260702-001\"}"]
+[16:30:23.901] ==> [SSM To Web] Skipped the stateOK.
+[16:30:23.928] [Proc-Alarm] Saved Reved msg From Web -> {"type":"reflash","deviceId":"295277e8-094f-4b28-9751-fa9ecc98d183","statusOk":"SKIP","chipType":"ESP32","deviceTypeId":"4","tdeviceId":["13c948ae-a71d-4415-88ef-6f9cd0aa8f13","d75ba974-9b05-4aa3-bb90-56206843203a"],"reqId":"vp4kr5tl","FWVer":"SB260702-001"}
+[16:30:23.951] [Proc-WebRx] {"type":"reflash","deviceId":"295277e8-094f-4b28-9751-fa9ecc98d183","statusOk":"SKIP","chipType":"ESP32","deviceTypeId":"4","tdeviceId":["13c948ae-a71d-4415-88ef-6f9cd0aa8f13","d75ba974-9b05-4aa3-bb90-56206843203a"],"reqId":"vp4kr5tl","FWVer":"SB260702-001"}
+[16:30:23.956] [Proc-WebTx] Resp-Reflash
+[16:30:23.956]  => {"Done":"OK","reqId":"vp4kr5tl"}
+[16:30:23.962] [Proc-Clear] the InfoBuffer for Update...
+[16:30:23.962]  - Done.
+[16:30:23.967]  >>>> The status to carry out this command - working.
+[16:30:23.967] Sent To a TCP Server - 4
+[16:30:23.978] [Proc-Alarm] Send data to socketIO - {"Done":"OK","reqId":"vp4kr5tl"}
+[16:30:23.984] [Proc-WebRTx] ["message",{"now":6813832,"reqId":"vp4kr5tl","data":{"Done":"OK"}}]
+[16:30:23.989] [OTA] It will be sent the REFLASH cmd to SB_ESP32.
+[16:30:23.991] [OTA] Sent the REFLASH cmd with this data - OnlyYOU30,AE,A4,4C,94,20
+[16:30:23.995]  - Done.
+[16:30:27.678] [Proc_WiFiTx] Ask Info : To. REPEATOR, {"RTC":[27,30,16,3,7,2026],"CHANNEL":"11","INFO":"REQ","Mac":"10,06,1C,16,97,AC"}
+[16:30:27.689] [Proc-WiFiRx] {"Mac":"10,06,1C,16,97,AC","INFO":["5","REP260603-001",-38,false,false,"0"],"Unique":92,"Rev":true,"Cidx":889}
+[16:30:27.700] [Proc-Raw Packet] : {"Mac":"10,06,1C,16,97,AC","INFO":["5","REP260603-001",-38,false,false,"0"],"Unique":92,"Rev":true,"Cidx":889}
+[16:30:27.700]  -- Checking finished
+[16:30:27.701] <<< From REPEATOR.
+[16:30:27.706]  -- takentime : 48
+[16:30:27.710]  -- Normal Inspect cntRev[1] : 8, avrTakenTime : 62[ms]
+[16:30:27.710] Save Data in the buff of Info.
+[16:30:27.754] [Proc-WiFiRx] {"Mac":"10,06,1C,16,97,AC","INFO":["5","REP260603-001",-38,false,false,"0"],"Unique":92,"Rev":true,"Cidx":889}  (2회 반복, 16:30:27~16:30:27)
+[16:30:30.115] >>> From Web :
+[16:30:30.137] [IOc] : ["message","{\"type\":\"reflash\",\"deviceId\":\"295277e8-094f-4b28-9751-fa9ecc98d183\",\"statusOk\":\"SKIP\",\"chipType\":\"ESP32\",\"deviceTypeId\":\"4\",\"tdeviceId\":[\"d75ba974-9b05-4aa3-bb90-56206843203a\"],\"reqId\":\"queh0akx\",\"FWVer\":\"SB260702-001\"}"]
+[16:30:30.142] ==> [SSM To Web] Skipped the stateOK.
+[16:30:30.165] [Proc-Alarm] Saved Reved msg From Web -> {"type":"reflash","deviceId":"295277e8-094f-4b28-9751-fa9ecc98d183","statusOk":"SKIP","chipType":"ESP32","deviceTypeId":"4","tdeviceId":["d75ba974-9b05-4aa3-bb90-56206843203a"],"reqId":"queh0akx","FWVer":"SB260702-001"}
+[16:30:30.182] [Proc-WebRx] {"type":"reflash","deviceId":"295277e8-094f-4b28-9751-fa9ecc98d183","statusOk":"SKIP","chipType":"ESP32","deviceTypeId":"4","tdeviceId":["d75ba974-9b05-4aa3-bb90-56206843203a"],"reqId":"queh0akx","FWVer":"SB260702-001"}
+[16:30:30.187] [Proc-WebTx] Resp-Reflash  (2회 반복, 16:30:30~16:30:30)
+[16:30:30.187]  => {"Done":"OK","reqId":"queh0akx"}
+[16:30:30.198]  >>>> The status to carry out this command - All units of the same type have a communication error, It can't carry out more.
+[16:30:30.209]  => {"Done":"NOK","reqId":"queh0akx","reason":"All units of the same type have a communication error."}
+[16:30:30.215] Sent To a TCP Server - 4
+[16:30:30.226] [Proc-Alarm] Send data to socketIO - {"Done":"NOK","reqId":"queh0akx","reason":"All units of the same type have a communication error."}
+[16:30:30.237] [Proc-WebRTx] ["message",{"now":6820084,"reqId":"queh0akx","data":{"Done":"NOK","reason":"All units of the same type have a communication error."}}]
+[16:30:33.124] [Proc-WiFiRx] {"UnID":1,"devType":4,"procStep":7,"RepData":1,"Unique":17,"Asn":7,"Rev":true,"Cidx":1032}
+[16:30:33.135] [Proc-Raw Packet] : {"UnID":1,"devType":4,"procStep":7,"RepData":1,"Unique":17,"Asn":7,"Rev":true,"Cidx":1032}
+[16:30:33.135]  -- Checking finished
+[16:30:33.140] <<< From Bay_B02.
+[16:30:33.141] [Proc-Alarm] Registered a new UniqueID.
+[16:30:33.146] *** [Got status] devType : 4, Step : 7, Rep. : 1.
+[16:30:33.152]  => From : Bay_B02(4), Step : Reflashed, Result : SUCCESS.
+[16:30:33.157] [Proc-HttpTx] Send a state of reflashing.
+[16:30:33.163] [Proc-Alarm] Send data to socketIO - {"authCode":"cm38kfuhr000108me5phe46k4","chipType":"ESP32","done":"true"}
+[16:30:33.174] [Proc-WebRTx] ["message",{"now":6823024,"data":{"authCode":"cm38kfuhr000108me5phe46k4","chipType":"ESP32","done":"true"}}]
+[16:30:33.185] [Http_Proc] {"authCode":"cm38kfuhr000108me5phe46k4","chipType":"ESP32","done":"true"}
+[16:30:33.190] https://device.silotek.co.kr/device/13c948ae-a71d-4415-88ef-6f9cd0aa8f13/reflash/done
+[16:30:33.205] [HTTP] Recover heap before priority REST POST: heap=69640 url=https://device.silotek.co.kr/device/13c948ae-a71d-4415-88ef-6f9cd0aa8f13/reflash/done socketIO=1 fConnectSocket=1 reason=low-heap
+[16:30:33.208] [IOc] Disconnected!
+[16:30:33.911] [HTTP] Heap after REST preflight cleanup: 121340 Bytes.
+[16:30:33.914] Free Heap Memory : 121300 Bytes.
+[16:30:34.828] Posted time : 916[ms].
+[16:30:34.828] [Proc-HttpRx] HttpResCode=200
+[16:30:34.839]  - Success | OK. Request successfully processed. | Successful POST request
+[16:30:34.889] Get res={"data":{"isAvailable":true,"isActivated":true,"isPublic":true,"version":"{\"ESP32\":{\"version\":\"SB260702-001\",\"downloaded\":true,\"reflashed\":true},\"STM32\":{\"version\":\"v2.20-003\",\"downloaded\":false,\"reflashed\":true},\"sharing\":false}","authCode":"cmbw1h5rj0001s601a0dth71d","id":"13c948ae-a71d-4415-88ef-6f9cd0aa8f13","macAddress":"30,AE,A4,4C,94,20","name":"Bay_B02","displayName":"2번 베이","displayType":"BAY","typeId":4,"storeId":"710309bc-0eab-4940-8e3e-4ba59131e8b3","order":null,"createdAt":"2025-06-14T09:33:33.646Z","updatedAt":"2026-07-03T07:30:34.640Z","underWash":true}}
+[16:30:34.892] [HTTP] Reconnect Socket.IO after priority REST POST.
+[16:30:35.137] [Proc-WiFiTx] {"UnID":1,"Stat":"OK","Asn":7}
+[16:30:35.166]  To. Bay_B02, [Proc-WiFiRx] {"UnID":1,"devType":4,"procStep":7,"RepData":1,"Unique":17,"Asn":7,"Rev":true,"Cidx":1032}
+[16:30:35.173] [Proc-WiFiRx] {"UnID":1,"devType":4,"procStep":7,"RepData":1,"Unique":17,"Asn":7,"Rev":true,"Cidx":1032}
+[16:30:35.959] [IOc] Connected to url: /socket.io/?EIO=4
+[16:30:36.468] >>> From Web :
+[16:30:36.468] [IOc] : ["message","Authorized"]
+[16:30:36.472] [IOc] This payload received from IOC is not the Json form.
+[16:30:40.608] >> Ping - success, www.google.com
+[16:30:43.609] [ConnSt] 10,06,1C,16,97,AC ONLINE->STALE (age=15914ms)
+[16:30:46.697] [Proc_WiFiTx] Ask Info : To. Bay_B01, {"RTC":[46,30,16,3,7,2026],"CHANNEL":"11","INFO":"REQ","UnID":2}
+[16:30:46.708] [Proc-WiFiRx] {"UnID":2,"INFO":["4","SB260630-002",-47,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":73,"RS":[[11,"00",205,1,0],[12,"00",1397,1,0]],"Rev":true,"Cidx":923}
+[16:30:46.725] [Proc-Raw Packet] : {"UnID":2,"INFO":["4","SB260630-002",-47,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":73,"RS":[[11,"00",205,1,0],[12,"00",1397,1,0]],"Rev":true,"Cidx":923}
+[16:30:46.730]  -- Checking finished
+[16:30:46.730] <<< From Bay_B01.
+[16:30:46.730]  -- takentime : 66
+[16:30:46.736]  -- Normal Inspect cntRev[2] : 3, avrTakenTime : 67[ms]
+[16:30:46.738] Save Data in the buff of Info.
+[16:30:46.777]  To. Bay_B01, [Proc-WiFiRx] {"UnID":2,"INFO":["4","SB260630-002",-47,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":73,"RS":[[11,"00",205,1,0],[12,"00",1397,1,0]],"Rev":true,"Cidx":923}
+[16:30:46.802] [Proc-WiFiRx] {"UnID":2,"INFO":["4","SB260630-002",-47,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":73,"RS":[[11,"00",205,1,0],[12,"00",1397,1,0]],"Rev":true,"Cidx":923}  (2회 반복, 16:30:46~16:30:46)
+[16:30:46.941] [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":87,"Rev":true,"Cidx":924}
+[16:30:46.946] [Proc-Raw Packet] : {"UnID":2,"Stat":"OK","Asn":87,"Rev":true,"Cidx":924}
+[16:30:46.946]  -- Checking finished
+[16:30:46.946] <<< From Bay_B01.
+[16:30:46.952]  sWiFiRx: {"UnID":2,"Stat":"OK","Asn":87,"Rev":true,"Cidx":924}
+[16:30:46.957] tmpStr: {"UnID":2,"Stat":"OK","Asn":87,"Rev":true}
+[16:30:46.961] [Proc-WiFiTx]  {"UnID":2,"Stat":"OK","Asn":87}
+[16:30:46.994]  To. Bay_B01, [Proc-WiFiRx] {"UnID":1,"devType":4,"procStep":8,"RepData":1,"Unique":18,"Asn":8,"Rev":true,"Cidx":796}
+[16:30:47.005] [Proc-Raw Packet] : {"UnID":1,"devType":4,"procStep":8,"RepData":1,"Unique":18,"Asn":8,"DT":12,"Rev":true,"Cidx":796}
+[16:30:47.005]  -- Checking finished
+[16:30:47.010] <<< From Bay_B02.
+[16:30:47.010] [Proc-Alarm] Registered a new UniqueID.
+[16:30:47.016] *** [Got status] devType : 4, Step : 8, Rep. : 1.
+[16:30:47.022]  => From : Bay_B02(4), Step : Another step, Result : SUCCESS.
+[16:30:47.023] [Proc-WiFiTx] {"UnID":1,"Stat":"OK","Asn":8}
+[16:30:47.076]  To. Bay_B02, [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":87,"Rev":true,"Cidx":924}
+[16:30:47.087] [Proc-WiFiRx] {"UnID":2,"INFO":["4","SB260630-002",-47,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":73,"RS":[[11,"00",205,1,0],[12,"00",1397,1,0]],"Rev":true,"Cidx":923}  (2회 반복, 16:30:47~16:30:47)
+[16:30:47.099] [Proc-WiFiRx] {"UnID":1,"devType":4,"procStep":8,"RepData":1,"Unique":18,"Asn":8,"Rev":true,"Cidx":796}  (2회 반복, 16:30:47~16:30:47)
+[16:30:47.101] [OTA] Clear stale moving state: main loop idle
+[16:30:47.586] [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":87,"Rev":true,"Cidx":924}
+[16:30:48.503] [Proc-WiFiRx] {"Mac":"30,AE,A4,4C,94,20","UnID":1,"bOrder":"0","Reboot":"ESP32","FWVer":"SB260702-001","RSSI":"0","uID":"RF_uID","Unique":28,"Asn":1,"R":[1,1,"01","00","00",4,1],"Rev":true,"Cidx":797}
+[16:30:48.519] [Proc-Raw Packet] : {"Mac":"30,AE,A4,4C,94,20","UnID":1,"bOrder":"0","Reboot":"ESP32","FWVer":"SB260702-001","RSSI":"0","uID":"RF_uID","Unique":28,"Asn":1,"DT":2,"R":[1,1,"01","00","00",4,1],"Rev":true,"Cidx":797}
+[16:30:48.519]  -- Checking finished
+[16:30:48.525] <<< From Bay_B02.
+[16:30:48.525] [Proc-Alarm] Registered a new UniqueID.
+[16:30:48.542]  sWiFiRx: {"Mac":"30,AE,A4,4C,94,20","UnID":1,"bOrder":"0","Reboot":"ESP32","FWVer":"SB260702-001","RSSI":"0","uID":"RF_uID","Unique":28,"Asn":1,"R":[1,1,"01","00","00",4,1],"Rev":true,"Cidx":797}
+[16:30:48.558] tmpStr: {"Mac":"30,AE,A4,4C,94,20","UnID":1,"bOrder":"0","Reboot":"ESP32","FWVer":"SB260702-001","RSSI":"0","uID":"RF_uID","Unique":28,"Asn":1,"R":[1,1,"01","00","00",4,1],"Rev":true}
+[16:30:48.567] [Proc-WiFiTx]  {"UnID":1,"Rssid":"HulkWash_2G","Rpwd":"hulk009768","Cty":1,"Stat":"OK","Asn":1}
+[16:30:48.599]  To. Bay_B02, [Proc-CardInfo] Unit 30,AE,A4,4C,94,20 : Cleared the Card Info. due to reboot.
+[16:30:48.599] [Proc-Alarm] Try to send a version of deviceFW.
+[16:30:48.605]  - UTC Time: Fri Jul  3 07:30:46 2026
+[16:30:48.616] [Proc-Alarm] Send data to socketIO - {"authCode":"cm38kfuhr000108me5phe46k4","chipType":"ESP32","tag":"SB260702-001","UTC":[46,30,7,3,7,2026]}
+[16:30:48.632] [Proc-WebRTx] ["message",{"now":6838478,"data":{"authCode":"cm38kfuhr000108me5phe46k4","chipType":"ESP32","tag":"SB260702-001","UTC":[46,30,7,3,7,2026]}}]
+[16:30:48.643] [Http_Proc] {"authCode":"cm38kfuhr000108me5phe46k4","chipType":"ESP32","tag":"SB260702-001","UTC":[46,30,7,3,7,2026]}
+[16:30:48.649] https://device.silotek.co.kr/device/13c948ae-a71d-4415-88ef-6f9cd0aa8f13/version
+[16:30:48.664] [HTTP] Recover heap before priority REST POST: heap=67100 url=https://device.silotek.co.kr/device/13c948ae-a71d-4415-88ef-6f9cd0aa8f13/version socketIO=1 fConnectSocket=1 reason=low-heap
+[16:30:48.664] [IOc] Disconnected!
+[16:30:49.364] [HTTP] Heap after REST preflight cleanup: 118760 Bytes.
+[16:30:49.367] Free Heap Memory : 118728 Bytes.
+[16:30:50.192] Posted time : 827[ms].
+[16:30:50.192] [Proc-HttpRx] HttpResCode=200
+[16:30:50.203]  - Success | OK. Request successfully processed. | Successful POST request
+[16:30:50.203] Get res={}
+[16:30:50.209] [HTTP] Reconnect Socket.IO after priority REST POST.
+[16:30:50.209]  Save New Msg to WiFiRxMsgSaveArr[3].rxMsg 2
+[16:30:50.226] [Proc-WiFiRx] {"Mac":"30,AE,A4,4C,94,20","UnID":1,"bOrder":"0","Reboot":"ESP32","FWVer":"SB260702-001","RSSI":"0","uID":"RF_uID","Unique":28,"Asn":1,"R":[1,1,"01","00","00",4,1],"Rev":true,"Cidx":797}
+[16:30:50.233] [Proc-WiFiTx-ACK] {"UnID":1,"Stat":"OK","Asn":1,"R":[1,1,"00","01","7C",4,1]}
+[16:30:50.276]  To. Bay_B02, [Proc-WiFiRx] {"Mac":"30,AE,A4,4C,94,20","UnID":1,"bOrder":"0","Reboot":"ESP32","FWVer":"SB260702-001","RSSI":"0","uID":"RF_uID","Unique":28,"Asn":1,"R":[1,1,"01","00","00",4,1],"Rev":true,"Cidx":797}
+[16:30:50.279] [Proc-WiFiTx-ACK] {"UnID":1,"Stat":"OK","Asn":1,"R":[1,1,"00","01","00",4,1]}
+[16:30:50.322]  To. Bay_B02, [Proc-WiFiRx] {"UnID":1,"RPInfo":"SB-","Unique":29,"Asn":2,"Rev":true,"Cidx":798}  (2회 반복, 16:30:50~16:30:50)
+[16:30:50.327] [Proc-Raw Packet] : {"UnID":1,"RPInfo":"SB-","Unique":29,"Asn":2,"DT":4,"Rev":true,"Cidx":798}
+[16:30:50.333]  -- Checking finished
+[16:30:50.333] <<< From Bay_B02.
+[16:30:50.347] [Proc-WiFiTx] {"UnID":1,"RPInfo":"SB-","BPLst":[[0,180,3000,1,1,0],[1,180,3000,1,1,3],[2,180,3000,1,1,3],[3,180,3000,1,1,3],[4,60,3000,1,1,3],[5,60,3000,1,0,0],[6,180,3000,1,1,3]],"Stat":"OK","Asn":2}
+[16:30:51.318] [IOc] Connected to url: /socket.io/?EIO=4
+[16:30:51.793] >>> From Web :
+[16:30:51.793] [IOc] : ["message","Authorized"]
+[16:30:51.797] [IOc] This payload received from IOC is not the Json form.
+[16:30:51.911] [Proc-WiFiRx] {"UnID":1,"RUTInfo":"SB-","Unique":30,"Asn":3,"Rev":true,"Cidx":799}
+[16:30:51.917] [Proc-Raw Packet] : {"UnID":1,"RUTInfo":"SB-","Unique":30,"Asn":3,"DT":6,"Rev":true,"Cidx":799}
+[16:30:51.922]  -- Checking finished
+[16:30:51.922] <<< From Bay_B02.
+[16:30:51.927] [Proc-Alarm] stAdjUnitTimeBuf[0].Function_type : 0
+[16:30:51.933] [Proc-Alarm] stAdjUnitTimeBuf[1].Function_type : 1
+[16:30:51.933] [Proc-Alarm] stAdjUnitTimeBuf[2].Function_type : 2
+[16:30:51.939] [Proc-Alarm] stAdjUnitTimeBuf[3].Function_type : 3
+[16:30:51.944] [Proc-Alarm] stAdjUnitTimeBuf[4].Function_type : 4
+[16:30:51.950] [Proc-Alarm] stAdjUnitTimeBuf[5].Function_type : 5
+[16:30:51.955] [Proc-Alarm] stAdjUnitTimeBuf[6].Function_type : 6
+[16:30:51.955] [Proc-Alarm] stAdjUnitTimeBuf[7].Function_type : 7
+[16:30:51.961] [Proc-Alarm] stAdjUnitTimeBuf[8].Function_type : 8
+[16:30:51.966] [Proc-Alarm] stAdjUnitTimeBuf[9].Function_type : 9
+[16:30:51.980] [Proc-WiFiTx] {"UnID":1,"RUTInfo":"SB-","TIME":[[0,0,0,0],[1,0,0,0],[2,0,0,0],[3,0,0,0],[4,0,0,0],[5,0,0,0],[6,0,0,0],[7,0,0,0],[8,0,0,0],[9,0,0,0]],"Stat":"OK","Asn":3}
+[16:30:52.008]  To. Bay_B02, 
+[16:30:52.008] [Proc-Alarm] Registered a new UniqueID.
+[16:30:52.014]  sWiFiRx: {"UnID":1,"RUTInfo":"SB-","Unique":30,"Asn":3,"Rev":true,"Cidx":799}
+[16:30:52.020] tmpStr: {"UnID":1,"RUTInfo":"SB-","Unique":30,"Asn":3,"Rev":true}
+[16:30:52.035] [Proc-WiFiTx]  {"UnID":1,"RUTInfo":"SB-","TIME":[[0,0,0,0],[1,0,0,0],[2,0,0,0],[3,0,0,0],[4,0,0,0],[5,0,0,0],[6,0,0,0],[7,0,0,0],[8,0,0,0],[9,0,0,0]],"Stat":"OK","Asn":3}
+[16:30:52.088]  To. Bay_B02, [Proc-WiFiRx] {"UnID":1,"RUTInfo":"SB-","Unique":30,"Asn":3,"Rev":true,"Cidx":799}
+[16:30:52.094] [Proc-WiFiRx] {"UnID":1,"RUTInfo":"SB-","Unique":30,"Asn":3,"Rev":true,"Cidx":799}  (3회 반복, 16:30:52~16:30:52)
+[16:30:53.436] [Proc-WiFiRx] {"UnID":1,"RCBay":"SB-","Unique":31,"Asn":4,"Rev":true,"Cidx":800}
+[16:30:53.441] [Proc-Raw Packet] : {"UnID":1,"RCBay":"SB-","Unique":31,"Asn":4,"DT":7,"Rev":true,"Cidx":800}
+[16:30:53.447]  -- Checking finished
+[16:30:53.447] <<< From Bay_B02.
+[16:30:53.463] [Proc-WiFiTx] {"UnID":1,"RCBay":"SB-","CBay":[15,3000,1000,22957,0,300000,0,1,1,0,[0,0,[[255,255,255,255],[255,255,255,255],[255,255,255,255],[255,255,255,255],[255,255,255,255]]]],"Stat":"OK","Asn":4}
+[16:30:53.495]  To. Bay_B02, [Proc-WiFiRx] {"UnID":1,"RCBay":"SB-","Unique":31,"Asn":4,"Rev":true,"Cidx":800}
+[16:30:53.498] [Proc-WiFiRx] {"UnID":1,"RCBay":"SB-","Unique":31,"Asn":4,"Rev":true,"Cidx":800}
+[16:30:58.917] [Proc-WiFiRx] {"Mac":"30,AE,A4,4C,94,20","UnID":1,"bOrder":"0","Reboot":"STM32","FWVer":"v2.20-003","RSSI":"0","uID":"RF_uID","Unique":32,"Asn":5,"R":[1,2,"01","00","00",4,1],"Rev":true,"Cidx":801}
+[16:30:58.934] [Proc-Raw Packet] : {"Mac":"30,AE,A4,4C,94,20","UnID":1,"bOrder":"0","Reboot":"STM32","FWVer":"v2.20-003","RSSI":"0","uID":"RF_uID","Unique":32,"Asn":5,"R":[1,2,"01","00","00",4,1],"Rev":true,"Cidx":801}
+[16:30:58.934]  -- Checking finished
+[16:30:58.934] <<< From Bay_B02.
+[16:30:58.940] [Proc-Alarm] Registered a new UniqueID.
+[16:30:58.956]  sWiFiRx: {"Mac":"30,AE,A4,4C,94,20","UnID":1,"bOrder":"0","Reboot":"STM32","FWVer":"v2.20-003","RSSI":"0","uID":"RF_uID","Unique":32,"Asn":5,"R":[1,2,"01","00","00",4,1],"Rev":true,"Cidx":801}
+[16:30:58.973] tmpStr: {"Mac":"30,AE,A4,4C,94,20","UnID":1,"bOrder":"0","Reboot":"STM32","FWVer":"v2.20-003","RSSI":"0","uID":"RF_uID","Unique":32,"Asn":5,"R":[1,2,"01","00","00",4,1],"Rev":true}
+[16:30:58.980] [Proc-WiFiTx]  {"UnID":1,"Rssid":"HulkWash_2G","Rpwd":"hulk009768","Cty":1,"Stat":"OK","Asn":5}
+[16:30:59.010]  To. Bay_B02, [Proc-CardInfo] Unit 30,AE,A4,4C,94,20 : Cleared the Card Info. due to reboot.
+[16:30:59.010] [Proc-Alarm] Try to send a version of deviceFW.
+[16:30:59.021] [Proc-Alarm] Send data to socketIO - {"authCode":"cm38kfuhr000108me5phe46k4","chipType":"STM32","tag":"v2.20-003"}
+[16:30:59.032] [Proc-WebRTx] ["message",{"now":6848879,"data":{"authCode":"cm38kfuhr000108me5phe46k4","chipType":"STM32","tag":"v2.20-003"}}]
+[16:30:59.043] [Http_Proc] {"authCode":"cm38kfuhr000108me5phe46k4","chipType":"STM32","tag":"v2.20-003"}
+[16:30:59.049] https://device.silotek.co.kr/device/13c948ae-a71d-4415-88ef-6f9cd0aa8f13/version
+[16:30:59.064] [HTTP] Recover heap before priority REST POST: heap=66828 url=https://device.silotek.co.kr/device/13c948ae-a71d-4415-88ef-6f9cd0aa8f13/version socketIO=1 fConnectSocket=1 reason=low-heap
+[16:30:59.065] [IOc] Disconnected!
+[16:30:59.766] [HTTP] Heap after REST preflight cleanup: 118460 Bytes.
+[16:30:59.768] Free Heap Memory : 118428 Bytes.
+[16:31:00.533] Posted time : 767[ms].
+[16:31:00.533] [Proc-HttpRx] HttpResCode=200
+[16:31:00.544]  - Success | OK. Request successfully processed. | Successful POST request
+[16:31:00.544] Get res={}
+[16:31:00.550] [HTTP] Reconnect Socket.IO after priority REST POST.
+[16:31:00.550]  Save New Msg to WiFiRxMsgSaveArr[3].rxMsg 2
+[16:31:00.566] [Proc-WiFiRx] {"Mac":"30,AE,A4,4C,94,20","UnID":1,"bOrder":"0","Reboot":"STM32","FWVer":"v2.20-003","RSSI":"0","uID":"RF_uID","Unique":32,"Asn":5,"R":[1,2,"01","00","00",4,1],"Rev":true,"Cidx":801}
+[16:31:00.574] [Proc-WiFiTx-ACK] {"UnID":1,"Stat":"OK","Asn":5,"R":[1,2,"00","01","7C",4,1]}
+[16:31:00.622]  To. Bay_B02, [Proc-WiFiRx] {"Mac":"30,AE,A4,4C,94,20","UnID":1,"bOrder":"0","Reboot":"STM32","FWVer":"v2.20-003","RSSI":"0","uID":"RF_uID","Unique":32,"Asn":5,"R":[1,2,"01","00","00",4,1],"Rev":true,"Cidx":801}
+[16:31:00.624] [Proc-WiFiTx-ACK] {"UnID":1,"Stat":"OK","Asn":5,"R":[1,2,"00","01","00",4,1]}
+[16:31:00.712]  To. Bay_B02, 
+[16:31:00.712] >> Ping - success, www.google.com
+[16:31:01.134] [ConnSt] 30,AE,A4,4C,94,20 STALE->OFFLINE (age=60203ms)
+[16:31:01.567] [IOc] Connected to url: /socket.io/?EIO=4
+[16:31:02.065] >>> From Web :
+[16:31:02.065] [IOc] : ["message","Authorized"]
+[16:31:02.069] [IOc] This payload received from IOC is not the Json form.
+[16:31:02.133] [ConnSt] 80,7D,3A,82,5A,AC ONLINE->STALE (age=15407ms)
+[16:31:05.746] [Proc-WiFiRx] {"UnID":1,"bOrder":"1","uID":"RF_uID","uFault":"F0001","stFault":true,"uFmsg":"RFIDReader-NOK","Unique":33,"Asn":6,"R":[1,3,"01","00","00",4,1],"Rev":true,"Cidx":802}
+[16:31:05.763] [Proc-Raw Packet] : {"UnID":1,"bOrder":"1","uID":"RF_uID","uFault":"F0001","stFault":true,"uFmsg":"RFIDReader-NOK","Unique":33,"Asn":6,"DT":7,"R":[1,3,"01","00","00",4,1],"Rev":true,"Cidx":802}
+[16:31:05.769]  -- Checking finished
+[16:31:05.769] <<< From Bay_B02.
+[16:31:05.774] [Proc-Alarm] Registered a new UniqueID.
+[16:31:05.785]  sWiFiRx: {"UnID":1,"bOrder":"1","uID":"RF_uID","uFault":"F0001","stFault":true,"uFmsg":"RFIDReader-NOK","Unique":33,"Asn":6,"R":[1,3,"01","00","00",4,1],"Rev":true,"Cidx":802}
+[16:31:05.802] tmpStr: {"UnID":1,"bOrder":"1","uID":"RF_uID","uFault":"F0001","stFault":true,"uFmsg":"RFIDReader-NOK","Unique":33,"Asn":6,"R":[1,3,"01","00","00",4,1],"Rev":true}
+[16:31:05.805] [Proc-WiFiTx]  {"UnID":1,"Stat":"OK","Asn":6}
+[16:31:05.833]  To. Bay_B02,  - UTC Time: Fri Jul  3 07:30:58 2026
+[16:31:05.850] [Proc-Alarm] Send data to socketIO - {"macAddress":"30,AE,A4,4C,94,20","authCode":"cm38kfuhr000108me5phe46k4","userId":"RF_uID","faultCode":"F0001","reason":true,"message":"RFIDReader-NOK","UTC":[58,30,7,3,7,2026]}
+[16:31:05.872] [Proc-WebRTx] ["message",{"now":6855717,"data":{"macAddress":"30,AE,A4,4C,94,20","authCode":"cm38kfuhr000108me5phe46k4","userId":"RF_uID","faultCode":"F0001","reason":true,"message":"RFIDReader-NOK","UTC":[58,30,7,3,7,2026]}}]
+[16:31:05.888] [Http_Proc] {"macAddress":"30,AE,A4,4C,94,20","authCode":"cm38kfuhr000108me5phe46k4","userId":"RF_uID","faultCode":"F0001","reason":true,"message":"RFIDReader-NOK","UTC":[58,30,7,3,7,2026]}
+[16:31:05.894] https://device.silotek.co.kr/fault
+[16:31:05.903] [HTTP] Recover heap before priority REST POST: heap=65952 url=https://device.silotek.co.kr/fault socketIO=1 fConnectSocket=1 reason=low-heap
+[16:31:05.903] [IOc] Disconnected!
+[16:31:06.604] [HTTP] Heap after REST preflight cleanup: 117588 Bytes.
+[16:31:06.607] Free Heap Memory : 117556 Bytes.
+[16:31:07.502] Posted time : 897[ms].
+[16:31:07.502] [Proc-HttpRx] HttpResCode=200
+[16:31:07.513]  - Success | OK. Request successfully processed. | Successful POST request
+[16:31:07.513] Get res={"status":"ok"}
+[16:31:07.518] [HTTP] Reconnect Socket.IO after priority REST POST.
+[16:31:07.519]  Save New Msg to WiFiRxMsgSaveArr[3].rxMsg 2
+[16:31:07.527] [Proc-WiFiTx-ACK] {"UnID":1,"Stat":"OK","Asn":6,"R":[1,3,"00","01","00",4,1]}  (2회 반복, 16:31:07~16:31:07)
+[16:31:07.570]  To. Bay_B02, [Proc-WiFiRx] {"UnID":1,"bOrder":"1","uID":"RF_uID","uFault":"F0001","stFault":true,"uFmsg":"RFIDReader-NOK","Unique":33,"Asn":6,"R":[1,3,"01","00","00",4,1],"Rev":true,"Cidx":802}  (2회 반복, 16:31:07~16:31:07)
+[16:31:07.576] [Proc-WiFiTx-ACK] {"UnID":1,"Stat":"OK","Asn":6,"R":[1,3,"00","01","7C",4,1]}
+[16:31:08.526]  To. Bay_B02, 
+[16:31:08.526] [IOc] Connected to url: /socket.io/?EIO=4
+[16:31:09.031] >>> From Web :
+[16:31:09.031] [IOc] : ["message","Authorized"]
+[16:31:09.035] [IOc] This payload received from IOC is not the Json form.
+[16:31:19.236] [Proc_WiFiTx] Ask Info : To. Bay_B02, {"RTC":[19,31,16,3,7,2026],"CHANNEL":"11","INFO":"REQ","UnID":1}
+[16:31:19.237]  >>> Got the communication status at first after booting.
+[16:31:19.241]   1. 58,BF,25,A0,02,34 : Bad.
+[16:31:19.242]   2. 10,06,1C,16,97,AC : Good.
+[16:31:19.247]   3. 80,7D,3A,82,5A,AC : Good.
+[16:31:19.247]   4. 30,AE,A4,4C,94,20 : Good.
+[16:31:19.264] [Proc-WiFiRx] {"UnID":1,"INFO":["4","SB260702-001",-57,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":34,"RS":[[1,"00",216,1,0],[2,"00",182,1,0]],"Rev":true,"Cidx":803}
+[16:31:19.280] [Proc-Raw Packet] : {"UnID":1,"INFO":["4","SB260702-001",-57,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":34,"RS":[[1,"00",216,1,0],[2,"00",182,1,0]],"Rev":true,"Cidx":803}
+[16:31:19.286]  -- Checking finished
+[16:31:19.286] <<< From Bay_B02.
+[16:31:19.286]  -- takentime : 78
+[16:31:19.291]  -- Normal Inspect cntRev[3] : 9, avrTakenTime : 115[ms]
+[16:31:19.293] Save Data in the buff of Info.
+[16:31:19.332]  To. Bay_B02, [Proc-WiFiRx] {"UnID":1,"INFO":["4","SB260702-001",-57,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":34,"RS":[[1,"00",216,1,0],[2,"00",182,1,0]],"Rev":true,"Cidx":803}
+[16:31:19.352] [Proc-WiFiRx] {"UnID":1,"INFO":["4","SB260702-001",-57,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":34,"RS":[[1,"00",216,1,0],[2,"00",182,1,0]],"Rev":true,"Cidx":803}  (2회 반복, 16:31:19~16:31:19)
+[16:31:19.480] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":88,"Rev":true,"Cidx":804}
+[16:31:19.486] [Proc-Raw Packet] : {"UnID":1,"Stat":"OK","Asn":88,"Rev":true,"Cidx":804}
+[16:31:19.486]  -- Checking finished
+[16:31:19.486] <<< From Bay_B02.
+[16:31:19.491]  sWiFiRx: {"UnID":1,"Stat":"OK","Asn":88,"Rev":true,"Cidx":804}
+[16:31:19.497] tmpStr: {"UnID":1,"Stat":"OK","Asn":88,"Rev":true}
+[16:31:19.501] [Proc-WiFiTx]  {"UnID":1,"Stat":"OK","Asn":88}
+[16:31:19.529]  To. Bay_B02, [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":88,"Rev":true,"Cidx":804}
+[16:31:19.540] [Proc-WiFiRx] {"UnID":1,"INFO":["4","SB260702-001",-57,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":34,"RS":[[1,"00",216,1,0],[2,"00",182,1,0]],"Rev":true,"Cidx":803}
+[16:31:19.580] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":88,"Rev":true,"Cidx":804}  (3회 반복, 16:31:19~16:31:19)
+[16:31:20.750] >> Ping - success, www.google.com  (2회 반복, 16:31:20~16:31:40)
+[16:31:28.111] [ConnSt] 10,06,1C,16,97,AC STALE->OFFLINE (age=60416ms)
+[16:31:31.063] [Proc_WiFiTx] Ask Info : To. VAC_01, {"RTC":[30,31,16,3,7,2026],"CHANNEL":"11","INFO":"REQ","Mac":"58,BF,25,A0,02,34"}
+[16:31:35.111] [ConnSt] 30,AE,A4,4C,94,20 ONLINE->STALE (age=15828ms)
+[16:31:41.097] [Proc_WiFiTx] Ask Info : To. REPEATOR, {"RTC":[40,31,16,3,7,2026],"CHANNEL":"11","INFO":"REQ","Mac":"10,06,1C,16,97,AC"}
+[16:31:41.108] [Proc-WiFiRx] {"Mac":"10,06,1C,16,97,AC","INFO":["5","REP260603-001",-40,false,false,"0"],"Unique":93,"Rev":true,"Cidx":890}
+[16:31:41.119] [Proc-Raw Packet] : {"Mac":"10,06,1C,16,97,AC","INFO":["5","REP260603-001",-40,false,false,"0"],"Unique":93,"Rev":true,"Cidx":890}
+[16:31:41.119]  -- Checking finished
+[16:31:41.119] <<< From REPEATOR.
+[16:31:41.124]  -- takentime : 61
+[16:31:41.130]  -- Normal Inspect cntRev[1] : 9, avrTakenTime : 62[ms]
+[16:31:41.130] Save Data in the buff of Info.
+[16:31:41.139] [Proc-WiFiRx] {"Mac":"10,06,1C,16,97,AC","INFO":["5","REP260603-001",-40,false,false,"0"],"Unique":93,"Rev":true,"Cidx":890}  (2회 반복, 16:31:41~16:31:41)
+[16:31:47.136] [ConnSt] 80,7D,3A,82,5A,AC STALE->OFFLINE (age=60409ms)
+[16:31:47.326]  To. REPEATOR,  To. Bay_B01,  To. Bay_B02, [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":90,"Rev":true,"Cidx":925}
+[16:31:47.332] [Proc-Raw Packet] : {"UnID":2,"Stat":"OK","Asn":90,"Rev":true,"Cidx":925}
+[16:31:47.332]  -- Checking finished
+[16:31:47.332] <<< From Bay_B01.
+[16:31:47.337]  sWiFiRx: {"UnID":2,"Stat":"OK","Asn":90,"Rev":true,"Cidx":925}
+[16:31:47.343] tmpStr: {"UnID":2,"Stat":"OK","Asn":90,"Rev":true}
+[16:31:47.346] [Proc-WiFiTx]  {"UnID":2,"Stat":"OK","Asn":90}
+[16:31:47.404]  To. Bay_B01, [Proc-WiFiRx] {"Mac":"10,06,1C,16,97,AC","REPRSSI":[["80,7D,3A,82,5A,AC",-26,70],["94,A9,90,1D,FF,74",-39,57],["30,AE,A4,4B,1A,0C",-47,49],["98,3D,AE,EC,C9,C4",-50,46],["30,AE,A4,4C,94,20",-54,42]],"Unique":94,"Rev":true,"Cidx":891}
+[16:31:47.426] [Proc-Raw Packet] : {"Mac":"10,06,1C,16,97,AC","REPRSSI":[["80,7D,3A,82,5A,AC",-26,70],["94,A9,90,1D,FF,74",-39,57],["30,AE,A4,4B,1A,0C",-47,49],["98,3D,AE,EC,C9,C4",-50,46],["30,AE,A4,4C,94,20",-54,42]],"Unique":94,"Rev":true,"Cidx":891}
+[16:31:47.426]  -- Checking finished
+[16:31:47.432] <<< From REPEATOR.
+[16:31:47.432] [Proc-Alarm] respond to the req-RSSI.
+[16:31:47.448]  - {"macAddress":"10,06,1C,16,97,AC","REPRSSI":[["80,7D,3A,82,5A,AC",-26,70],["94,A9,90,1D,FF,74",-39,57],["30,AE,A4,4B,1A,0C",-47,49],["98,3D,AE,EC,C9,C4",-50,46],["30,AE,A4,4C,94,20",-54,42]],"Done":"OK"}
+[16:31:47.454] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":91,"Rev":true,"Cidx":805}
+[16:31:47.465] [Proc-Raw Packet] : {"UnID":1,"Stat":"OK","Asn":91,"Rev":true,"Cidx":805}
+[16:31:47.465]  -- Checking finished
+[16:31:47.465] <<< From Bay_B02.
+[16:31:47.471]  sWiFiRx: {"UnID":1,"Stat":"OK","Asn":91,"Rev":true,"Cidx":805}
+[16:31:47.476] tmpStr: {"UnID":1,"Stat":"OK","Asn":91,"Rev":true}
+[16:31:47.480] [Proc-WiFiTx]  {"UnID":1,"Stat":"OK","Asn":91}
+[16:31:47.518]  To. Bay_B02, [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":90,"Rev":true,"Cidx":925}
+[16:31:47.524] [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":90,"Rev":true,"Cidx":925}
+[16:31:47.524] Sent To a TCP Server - 4
+[16:31:47.546] [Proc-Alarm] Send data to socketIO - {"macAddress":"10,06,1C,16,97,AC","REPRSSI":[["80,7D,3A,82,5A,AC",-26,70],["94,A9,90,1D,FF,74",-39,57],["30,AE,A4,4B,1A,0C",-47,49],["98,3D,AE,EC,C9,C4",-50,46],["30,AE,A4,4C,94,20",-54,42]],"Done":"OK"}
+[16:31:47.565] [Proc-WebRTx] ["message",{"now":6897409,"data":{"macAddress":"10,06,1C,16,97,AC","REPRSSI":[["80,7D,3A,82,5A,AC",-26,70],["94,A9,90,1D,FF,74",-39,57],["30,AE,A4,4B,1A,0C",-47,49],["98,3D,AE,EC,C9,C4",-50,46],["30,AE,A4,4C,94,20",-54,42]],"Done":"OK"}}]
+[16:31:47.632] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":91,"Rev":true,"Cidx":805}
+[16:31:56.136] [ConnSt] 10,06,1C,16,97,AC ONLINE->STALE (age=15012ms)
+[16:31:59.043] [Proc_WiFiTx] Ask Info : To. Bay_B01, {"RTC":[58,31,16,3,7,2026],"CHANNEL":"11","INFO":"REQ","UnID":2}
+[16:31:59.063] [Proc-WiFiRx] {"UnID":2,"INFO":["4","SB260630-002",-46,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":74,"Rev":true,"Cidx":926}
+[16:31:59.074] [Proc-Raw Packet] : {"UnID":2,"INFO":["4","SB260630-002",-46,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":74,"Rev":true,"Cidx":926}
+[16:31:59.074]  -- Checking finished
+[16:31:59.079] <<< From Bay_B01.
+[16:31:59.080]  -- takentime : 59
+[16:31:59.085]  -- Normal Inspect cntRev[2] : 4, avrTakenTime : 65[ms]
+[16:31:59.085] Save Data in the buff of Info.
+[16:31:59.096] [Proc-WiFiRx] {"UnID":2,"INFO":["4","SB260630-002",-46,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":74,"Rev":true,"Cidx":926}  (5회 반복, 16:31:59~16:31:59)
+[16:32:00.837] >> Ping - success, www.google.com
+[16:32:07.126] [Proc_WiFiTx] Ask Info : To. Bay_B02, {"RTC":[6,32,16,3,7,2026],"CHANNEL":"11","INFO":"REQ","UnID":1}
+[16:32:07.137] [Proc-WiFiRx] {"UnID":1,"INFO":["4","SB260702-001",-57,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":35,"RS":[[3,"00",197,1,0]],"Rev":true,"Cidx":806}
+[16:32:07.153] [Proc-Raw Packet] : {"UnID":1,"INFO":["4","SB260702-001",-57,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":35,"RS":[[3,"00",197,1,0]],"Rev":true,"Cidx":806}
+[16:32:07.153]  -- Checking finished
+[16:32:07.154] <<< From Bay_B02.
+[16:32:07.159]  -- takentime : 67
+[16:32:07.162]  -- Normal Inspect cntRev[3] : 10, avrTakenTime : 111[ms]
+[16:32:07.163] Save Data in the buff of Info.
+[16:32:07.217]  To. Bay_B02, [Proc-WiFiRx] {"UnID":1,"INFO":["4","SB260702-001",-57,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":35,"RS":[[3,"00",197,1,0]],"Rev":true,"Cidx":806}
+[16:32:07.229] [Proc-WiFiRx] {"UnID":1,"INFO":["4","SB260702-001",-57,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":35,"RS":[[3,"00",197,1,0]],"Rev":true,"Cidx":806}
+[16:32:07.351]  To. Bay_B01,  To. Bay_B02, [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":93,"Rev":true,"Cidx":927}
+[16:32:07.357] [Proc-Raw Packet] : {"UnID":2,"Stat":"OK","Asn":93,"Rev":true,"Cidx":927}
+[16:32:07.357]  -- Checking finished
+[16:32:07.357] <<< From Bay_B01.
+[16:32:07.362]  sWiFiRx: {"UnID":2,"Stat":"OK","Asn":93,"Rev":true,"Cidx":927}
+[16:32:07.368] tmpStr: {"UnID":2,"Stat":"OK","Asn":93,"Rev":true}
+[16:32:07.371] [Proc-WiFiTx]  {"UnID":2,"Stat":"OK","Asn":93}
+[16:32:07.427]  To. Bay_B01, [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":92,"Rev":true,"Cidx":807}
+[16:32:07.433] [Proc-Raw Packet] : {"UnID":1,"Stat":"OK","Asn":92,"Rev":true,"Cidx":807}
+[16:32:07.433]  -- Checking finished
+[16:32:07.433] <<< From Bay_B02.
+[16:32:07.438]  sWiFiRx: {"UnID":1,"Stat":"OK","Asn":92,"Rev":true,"Cidx":807}
+[16:32:07.444] tmpStr: {"UnID":1,"Stat":"OK","Asn":92,"Rev":true}
+[16:32:07.447] [Proc-WiFiTx]  {"UnID":1,"Stat":"OK","Asn":92}
+[16:32:07.512]  To. Bay_B02, [Proc-WiFiRx] {"UnID":1,"INFO":["4","SB260702-001",-57,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":35,"RS":[[3,"00",197,1,0]],"Rev":true,"Cidx":806}
+[16:32:07.517] [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":93,"Rev":true,"Cidx":927}
+[16:32:07.530] [Proc-WiFiRx] {"UnID":1,"INFO":["4","SB260702-001",-57,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":35,"RS":[[3,"00",197,1,0]],"Rev":true,"Cidx":806}
+[16:32:07.557] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":94,"Rev":true,"Cidx":808}
+[16:32:07.562] [Proc-Raw Packet] : {"UnID":1,"Stat":"OK","Asn":94,"Rev":true,"Cidx":808}
+[16:32:07.563]  -- Checking finished
+[16:32:07.563] <<< From Bay_B02.
+[16:32:07.568]  sWiFiRx: {"UnID":1,"Stat":"OK","Asn":94,"Rev":true,"Cidx":808}
+[16:32:07.574] tmpStr: {"UnID":1,"Stat":"OK","Asn":94,"Rev":true}
+[16:32:07.578] [Proc-WiFiTx]  {"UnID":1,"Stat":"OK","Asn":94}
+[16:32:07.622]  To. Bay_B02, [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":94,"Rev":true,"Cidx":808}
+[16:32:07.687] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":94,"Rev":true,"Cidx":808}  (2회 반복, 16:32:07~16:32:08)
+[16:32:07.718] [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":93,"Rev":true,"Cidx":927}
+[16:32:07.928] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":92,"Rev":true,"Cidx":807}
+[16:32:14.227] [ConnSt] 80,7D,3A,82,5A,AC ONLINE->STALE (age=15155ms)
+[16:32:17.314]  To. Bay_B02, [Proc-WiFiRx] {"UnID":1,"REPRSSI":[["10,06,1C,16,97,AC",-52,44],["30,AE,A4,4B,1A,0C",-58,38],["80,7D,3A,82,5A,AC",-61,35],["94,A9,90,1D,FF,74",-62,34],["A0,85,E3,EA,5C,C4",-62,34]],"Unique":36,"Rev":true,"Cidx":809}
+[16:32:17.330] [Proc-Raw Packet] : {"UnID":1,"REPRSSI":[["10,06,1C,16,97,AC",-52,44],["30,AE,A4,4B,1A,0C",-58,38],["80,7D,3A,82,5A,AC",-61,35],["94,A9,90,1D,FF,74",-62,34],["A0,85,E3,EA,5C,C4",-62,34]],"Unique":36,"Rev":true,"Cidx":809}
+[16:32:17.335]  -- Checking finished
+[16:32:17.335] <<< From Bay_B02.
+[16:32:17.353]  To. Bay_B02, [Proc-Alarm] respond to the req-RSSI.
+[16:32:17.369]  - {"macAddress":"30,AE,A4,4C,94,20","REPRSSI":[["10,06,1C,16,97,AC",-52,44],["30,AE,A4,4B,1A,0C",-58,38],["80,7D,3A,82,5A,AC",-61,35],["94,A9,90,1D,FF,74",-62,34],["A0,85,E3,EA,5C,C4",-62,34]],"Done":"OK"}
+[16:32:17.391] [Proc-WiFiRx] {"UnID":1,"REPRSSI":[["10,06,1C,16,97,AC",-52,44],["30,AE,A4,4B,1A,0C",-58,38],["80,7D,3A,82,5A,AC",-61,35],["94,A9,90,1D,FF,74",-62,34],["A0,85,E3,EA,5C,C4",-62,34]],"Unique":36,"Rev":true,"Cidx":809}  (3회 반복, 16:32:17~16:32:17)
+[16:32:17.430] Sent To a TCP Server - 4
+[16:32:17.453] [Proc-Alarm] Send data to socketIO - {"macAddress":"30,AE,A4,4C,94,20","REPRSSI":[["10,06,1C,16,97,AC",-52,44],["30,AE,A4,4B,1A,0C",-58,38],["80,7D,3A,82,5A,AC",-61,35],["94,A9,90,1D,FF,74",-62,34],["A0,85,E3,EA,5C,C4",-62,34]],"Done":"OK"}
+[16:32:17.470] [Proc-WebRTx] ["message",{"now":6927312,"data":{"macAddress":"30,AE,A4,4C,94,20","REPRSSI":[["10,06,1C,16,97,AC",-52,44],["30,AE,A4,4B,1A,0C",-58,38],["80,7D,3A,82,5A,AC",-61,35],["94,A9,90,1D,FF,74",-62,34],["A0,85,E3,EA,5C,C4",-62,34]],"Done":"OK"}}]
+[16:32:17.522] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":96,"Rev":true,"Cidx":810}
+[16:32:17.528] [Proc-Raw Packet] : {"UnID":1,"Stat":"OK","Asn":96,"Rev":true,"Cidx":810}
+[16:32:17.528]  -- Checking finished
+[16:32:17.528] <<< From Bay_B02.
+[16:32:17.534]  sWiFiRx: {"UnID":1,"Stat":"OK","Asn":96,"Rev":true,"Cidx":810}
+[16:32:17.539] tmpStr: {"UnID":1,"Stat":"OK","Asn":96,"Rev":true}
+[16:32:17.543] [Proc-WiFiTx]  {"UnID":1,"Stat":"OK","Asn":96}
+[16:32:17.584]  To. Bay_B02, [Proc-WiFiRx] {"UnID":1,"REPRSSI":[["10,06,1C,16,97,AC",-52,44],["30,AE,A4,4B,1A,0C",-58,38],["80,7D,3A,82,5A,AC",-61,35],["94,A9,90,1D,FF,74",-62,34],["A0,85,E3,EA,5C,C4",-62,34]],"Unique":36,"Rev":true,"Cidx":809}
+[16:32:17.587] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":96,"Rev":true,"Cidx":810}  (3회 반복, 16:32:17~16:32:17)
+[16:32:17.691] [Proc-WiFiRx] {"UnID":1,"REPRSSI":[["10,06,1C,16,97,AC",-52,44],["30,AE,A4,4B,1A,0C",-58,38],["80,7D,3A,82,5A,AC",-61,35],["94,A9,90,1D,FF,74",-62,34],["A0,85,E3,EA,5C,C4",-62,34]],"Unique":36,"Rev":true,"Cidx":809}
+[16:32:20.878] >> Ping - success, www.google.com
+[16:32:22.227] [ConnSt] 30,AE,A4,4C,94,20 ONLINE->STALE (age=15075ms)
+[16:32:27.332]  To. Bay_B01,  To. Bay_B02, [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":97,"Rev":true,"Cidx":928}
+[16:32:27.338] [Proc-Raw Packet] : {"UnID":2,"Stat":"OK","Asn":97,"Rev":true,"Cidx":928}
+[16:32:27.338]  -- Checking finished
+[16:32:27.338] <<< From Bay_B01.
+[16:32:27.343]  sWiFiRx: {"UnID":2,"Stat":"OK","Asn":97,"Rev":true,"Cidx":928}
+[16:32:27.349] tmpStr: {"UnID":2,"Stat":"OK","Asn":97,"Rev":true}
+[16:32:27.352] [Proc-WiFiTx]  {"UnID":2,"Stat":"OK","Asn":97}
+[16:32:27.393]  To. Bay_B01, [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":97,"Rev":true,"Cidx":928}
+[16:32:27.398] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":98,"Rev":true,"Cidx":811}
+[16:32:27.404] [Proc-Raw Packet] : {"UnID":1,"Stat":"OK","Asn":98,"Rev":true,"Cidx":811}
+[16:32:27.404]  -- Checking finished
+[16:32:27.404] <<< From Bay_B02.
+[16:32:27.410]  sWiFiRx: {"UnID":1,"Stat":"OK","Asn":98,"Rev":true,"Cidx":811}
+[16:32:27.415] tmpStr: {"UnID":1,"Stat":"OK","Asn":98,"Rev":true}
+[16:32:27.418] [Proc-WiFiTx]  {"UnID":1,"Stat":"OK","Asn":98}
+[16:32:27.484]  To. Bay_B02, [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":97,"Rev":true,"Cidx":928}
+[16:32:27.490] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":98,"Rev":true,"Cidx":811}  (3회 반복, 16:32:27~16:32:27)
+[16:32:27.492] [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":97,"Rev":true,"Cidx":928}  (2회 반복, 16:32:27~16:32:27)
+[16:32:39.008] [Proc_WiFiTx] Ask Info : To. VAC_01, {"RTC":[38,32,16,3,7,2026],"CHANNEL":"11","INFO":"REQ","Mac":"58,BF,25,A0,02,34"}
+[16:32:40.915] >> Ping - success, www.google.com
+[16:32:41.227] [ConnSt] 10,06,1C,16,97,AC STALE->OFFLINE (age=60104ms)
+[16:32:47.349]  To. Bay_B01,  To. Bay_B02, [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":99,"Rev":true,"Cidx":929}
+[16:32:47.355] [Proc-Raw Packet] : {"UnID":2,"Stat":"OK","Asn":99,"Rev":true,"Cidx":929}
+[16:32:47.355]  -- Checking finished
+[16:32:47.355] <<< From Bay_B01.
+[16:32:47.360]  sWiFiRx: {"UnID":2,"Stat":"OK","Asn":99,"Rev":true,"Cidx":929}
+[16:32:47.366] tmpStr: {"UnID":2,"Stat":"OK","Asn":99,"Rev":true}
+[16:32:47.369] [Proc-WiFiTx]  {"UnID":2,"Stat":"OK","Asn":99}
+[16:32:47.419]  To. Bay_B01, [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":99,"Rev":true,"Cidx":929}
+[16:32:47.425] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":1,"Rev":true,"Cidx":812}
+[16:32:47.431] [Proc-Raw Packet] : {"UnID":1,"Stat":"OK","Asn":1,"Rev":true,"Cidx":812}
+[16:32:47.431]  -- Checking finished
+[16:32:47.431] <<< From Bay_B02.
+[16:32:47.436]  sWiFiRx: {"UnID":1,"Stat":"OK","Asn":1,"Rev":true,"Cidx":812}
+[16:32:47.442] tmpStr: {"UnID":1,"Stat":"OK","Asn":1,"Rev":true}
+[16:32:47.445] [Proc-WiFiTx]  {"UnID":1,"Stat":"OK","Asn":1}
+[16:32:47.500]  To. Bay_B02, [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":99,"Rev":true,"Cidx":929}
+[16:32:47.506] [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":99,"Rev":true,"Cidx":929}  (2회 반복, 16:32:47~16:32:47)
+[16:32:47.507] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":1,"Rev":true,"Cidx":812}  (2회 반복, 16:32:47~16:32:47)
+[16:32:59.041] [Proc_WiFiTx] Ask Info : To. REPEATOR, {"RTC":[58,32,16,3,7,2026],"CHANNEL":"11","INFO":"REQ","Mac":"10,06,1C,16,97,AC"}
+[16:32:59.052] [Proc-WiFiRx] {"Mac":"10,06,1C,16,97,AC","INFO":["5","REP260603-001",-41,false,false,"0"],"Unique":95,"Rev":true,"Cidx":892}
+[16:32:59.063] [Proc-Raw Packet] : {"Mac":"10,06,1C,16,97,AC","INFO":["5","REP260603-001",-41,false,false,"0"],"Unique":95,"Rev":true,"Cidx":892}
+[16:32:59.063]  -- Checking finished
+[16:32:59.063] <<< From REPEATOR.
+[16:32:59.068]  -- takentime : 61
+[16:32:59.074]  -- Normal Inspect cntRev[1] : 10, avrTakenTime : 63[ms]
+[16:32:59.074] Save Data in the buff of Info.
+[16:32:59.083] [Proc-WiFiRx] {"Mac":"10,06,1C,16,97,AC","INFO":["5","REP260603-001",-41,false,false,"0"],"Unique":95,"Rev":true,"Cidx":892}  (2회 반복, 16:32:59~16:32:59)
+[16:32:59.228] [ConnSt] 80,7D,3A,82,5A,AC STALE->OFFLINE (age=60155ms)
+[16:32:59.361]  To. REPEATOR, [Proc-WiFiRx] {"Mac":"10,06,1C,16,97,AC","REPRSSI":[["80,7D,3A,82,5A,AC",-27,69],["94,A9,90,1D,FF,74",-39,57],["30,AE,A4,4B,1A,0C",-44,52],["98,3D,AE,EC,C9,C4",-50,46],["A0,85,E3,EA,5C,C4",-51,45]],"Unique":96,"Rev":true,"Cidx":893}
+[16:32:59.383] [Proc-Raw Packet] : {"Mac":"10,06,1C,16,97,AC","REPRSSI":[["80,7D,3A,82,5A,AC",-27,69],["94,A9,90,1D,FF,74",-39,57],["30,AE,A4,4B,1A,0C",-44,52],["98,3D,AE,EC,C9,C4",-50,46],["A0,85,E3,EA,5C,C4",-51,45]],"Unique":96,"Rev":true,"Cidx":893}
+[16:32:59.383]  -- Checking finished
+[16:32:59.385] <<< From REPEATOR.
+[16:32:59.426]  To. Bay_B01, [Proc-Alarm] respond to the req-RSSI.
+[16:32:59.443]  - {"macAddress":"10,06,1C,16,97,AC","REPRSSI":[["80,7D,3A,82,5A,AC",-27,69],["94,A9,90,1D,FF,74",-39,57],["30,AE,A4,4B,1A,0C",-44,52],["98,3D,AE,EC,C9,C4",-50,46],["A0,85,E3,EA,5C,C4",-51,45]],"Done":"OK"}
+[16:32:59.465] [Proc-WiFiRx] {"Mac":"10,06,1C,16,97,AC","REPRSSI":[["80,7D,3A,82,5A,AC",-27,69],["94,A9,90,1D,FF,74",-39,57],["30,AE,A4,4B,1A,0C",-44,52],["98,3D,AE,EC,C9,C4",-50,46],["A0,85,E3,EA,5C,C4",-51,45]],"Unique":96,"Rev":true,"Cidx":893}
+[16:32:59.470] [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":3,"Rev":true,"Cidx":930}
+[16:32:59.476] [Proc-Raw Packet] : {"UnID":2,"Stat":"OK","Asn":3,"Rev":true,"Cidx":930}
+[16:32:59.481]  -- Checking finished
+[16:32:59.481] <<< From Bay_B01.
+[16:32:59.487]  sWiFiRx: {"UnID":2,"Stat":"OK","Asn":3,"Rev":true,"Cidx":930}
+[16:32:59.492] tmpStr: {"UnID":2,"Stat":"OK","Asn":3,"Rev":true}
+[16:32:59.493] [Proc-WiFiTx]  {"UnID":2,"Stat":"OK","Asn":3}
+[16:32:59.532]  To. Bay_B01, [Proc-WiFiRx] {"Mac":"10,06,1C,16,97,AC","REPRSSI":[["80,7D,3A,82,5A,AC",-27,69],["94,A9,90,1D,FF,74",-39,57],["30,AE,A4,4B,1A,0C",-44,52],["98,3D,AE,EC,C9,C4",-50,46],["A0,85,E3,EA,5C,C4",-51,45]],"Unique":96,"Rev":true,"Cidx":893}
+[16:32:59.537] [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":3,"Rev":true,"Cidx":930}  (3회 반복, 16:32:59~16:32:59)
+[16:32:59.543] Sent To a TCP Server - 4
+[16:32:59.560] [Proc-Alarm] Send data to socketIO - {"macAddress":"10,06,1C,16,97,AC","REPRSSI":[["80,7D,3A,82,5A,AC",-27,69],["94,A9,90,1D,FF,74",-39,57],["30,AE,A4,4B,1A,0C",-44,52],["98,3D,AE,EC,C9,C4",-50,46],["A0,85,E3,EA,5C,C4",-51,45]],"Done":"OK"}
+[16:32:59.582] [Proc-WebRTx] ["message",{"now":6969421,"data":{"macAddress":"10,06,1C,16,97,AC","REPRSSI":[["80,7D,3A,82,5A,AC",-27,69],["94,A9,90,1D,FF,74",-39,57],["30,AE,A4,4B,1A,0C",-44,52],["98,3D,AE,EC,C9,C4",-50,46],["A0,85,E3,EA,5C,C4",-51,45]],"Done":"OK"}}]
+[16:33:00.953] >> Ping - success, www.google.com
+[16:33:07.228] [ConnSt] 30,AE,A4,4C,94,20 STALE->OFFLINE (age=60075ms)
+[16:33:07.347]  To. Bay_B01,  To. Bay_B02, [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":4,"Rev":true,"Cidx":931}
+[16:33:07.353] [Proc-Raw Packet] : {"UnID":2,"Stat":"OK","Asn":4,"Rev":true,"Cidx":931}
+[16:33:07.353]  -- Checking finished
+[16:33:07.353] <<< From Bay_B01.
+[16:33:07.358]  sWiFiRx: {"UnID":2,"Stat":"OK","Asn":4,"Rev":true,"Cidx":931}
+[16:33:07.364] tmpStr: {"UnID":2,"Stat":"OK","Asn":4,"Rev":true}
+[16:33:07.366] [Proc-WiFiTx]  {"UnID":2,"Stat":"OK","Asn":4}
+[16:33:07.407]  To. Bay_B01, [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":4,"Rev":true,"Cidx":931}
+[16:33:07.412] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":5,"Rev":true,"Cidx":813}
+[16:33:07.418] [Proc-Raw Packet] : {"UnID":1,"Stat":"OK","Asn":5,"Rev":true,"Cidx":813}
+[16:33:07.418]  -- Checking finished
+[16:33:07.418] <<< From Bay_B02.
+[16:33:07.423]  sWiFiRx: {"UnID":1,"Stat":"OK","Asn":5,"Rev":true,"Cidx":813}
+[16:33:07.429] tmpStr: {"UnID":1,"Stat":"OK","Asn":5,"Rev":true}
+[16:33:07.432] [Proc-WiFiTx]  {"UnID":1,"Stat":"OK","Asn":5}
+[16:33:07.472]  To. Bay_B02, [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":4,"Rev":true,"Cidx":931}
+[16:33:07.473] [Proc-WiFiRx] {"UnID":1,"Stat":"OK","Asn":5,"Rev":true,"Cidx":813}  (2회 반복, 16:33:07~16:33:07)
+[16:33:07.534] [Proc-WiFiRx] {"UnID":2,"Stat":"OK","Asn":4,"Rev":true,"Cidx":931}  (2회 반복, 16:33:07~16:33:07)
+[16:33:14.227] [ConnSt] 10,06,1C,16,97,AC ONLINE->STALE (age=15170ms)
+[16:33:18.993] [Proc_WiFiTx] Ask Info : To. Bay_B01, {"RTC":[18,33,16,3,7,2026],"CHANNEL":"11","INFO":"REQ","UnID":2}
+[16:33:19.020] [Proc-WiFiRx] {"UnID":2,"INFO":["4","SB260630-002",-47,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":75,"Rev":true,"Cidx":932}
+[16:33:19.031] [Proc-Raw Packet] : {"UnID":2,"INFO":["4","SB260630-002",-47,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":75,"Rev":true,"Cidx":932}
+[16:33:19.031]  -- Checking finished
+[16:33:19.036] <<< From Bay_B01.
+[16:33:19.036]  -- takentime : 62
+[16:33:19.042]  -- Normal Inspect cntRev[2] : 5, avrTakenTime : 64[ms]
+[16:33:19.042] Save Data in the buff of Info.
+[16:33:19.053] [Proc-WiFiRx] {"UnID":2,"INFO":["4","SB260630-002",-47,false,false,"0",false],"EQ":[0,0,0,0,0,0,1,[],0],"Unique":75,"Rev":true,"Cidx":932}  (5회 반복, 16:33:19~16:33:19)
