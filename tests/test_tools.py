@@ -500,3 +500,42 @@ def test_list_ports_no_hint_when_only_bluetooth(monkeypatch):
     monkeypatch.setattr(srv.list_ports, "comports", lambda: fake)
     out = srv.list_serial_ports()
     assert "hint" not in out
+
+
+# ---- 체인 점프 가능성 데코(_decorate_chain_jumpable) — 추론 src 의 사전 회색 판정 ----
+
+def _chain(dir="down", key=("c", 5, 4704), needle='{"CHPLAN":[1],"Asn":58,"UnID":5}',
+           nodes=None):
+    return {"dir": dir, "key": list(key), "needle": needle,
+            "nodes": nodes if nodes is not None else [
+                {"role": "src", "port": "COM4", "inferred": True},
+                {"role": "rx", "port": "COM12", "inferred": False},
+            ]}
+
+
+def test_chain_jumpable_false_when_no_line_on_src_console():
+    # 송신자 콘솔 미출력(CHPLAN 류) — 추론 src 만 jumpable=False, 관측 노드는 무주석.
+    chain = srv._decorate_chain_jumpable(_chain(), lambda port, needles: False)
+    assert chain["nodes"][0]["jumpable"] is False
+    assert "jumpable" not in chain["nodes"][1]
+
+
+def test_chain_jumpable_true_via_needle_fallback():
+    # 1차(Cidx)는 송신 콘솔에 원천 부재, needle 폴백이 찾으면 jumpable=True (INFO REQ 류).
+    seen = []
+
+    def has_line(port, needles):
+        seen.append((port, list(needles)))
+        return needles == ['{"CHPLAN":[1],"Asn":58,"UnID":5}']
+
+    chain = srv._decorate_chain_jumpable(_chain(), has_line)
+    assert chain["nodes"][0]["jumpable"] is True
+    assert seen[0] == ("COM4", ['"Cidx":4704'])   # 뷰어와 동일한 시도 순서
+
+
+def test_chain_jumpable_u_key_uses_unique_and_ident_needles():
+    chain = _chain(key=("u", 5, 57), needle=None)
+    seen = []
+    srv._decorate_chain_jumpable(chain, lambda p, ns: seen.append(list(ns)) or False)
+    assert seen == [['"Unique":57', '"UnID":5']]
+    assert chain["nodes"][0]["jumpable"] is False

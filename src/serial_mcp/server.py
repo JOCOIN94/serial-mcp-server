@@ -595,6 +595,57 @@ def _publish_topology_hops(hops) -> None:
         _log(f"topology stream publish 오류: {e!r}")
 
 
+def _chain_jump_attempts(chain: dict) -> list:
+    """뷰어 jumpToPortLog 와 동일한 니들 시도 목록(원문 부분문자열 AND) — 동기화 유지."""
+    key = chain.get("key") or ()
+    attempts: list = []
+    if len(key) >= 3:
+        kind, ident, val = key[0], key[1], key[2]
+        if kind == "u":
+            ns = []
+            if val is not None:
+                ns.append(f'"Unique":{val}')
+            if isinstance(ident, str):
+                ns.append(ident)                     # mac ident 는 원문 그대로
+            elif ident is not None:
+                ns.append(f'"UnID":{ident}')
+            if ns:
+                attempts.append(ns)
+        elif kind == "c" and val is not None:
+            attempts.append([f'"Cidx":{val}'])
+    if chain.get("needle"):
+        attempts.append([chain["needle"]])
+    return attempts
+
+
+def _decorate_chain_jumpable(chain: dict, has_line) -> dict:
+    """추론(inferred) src 노드에 jumpable 주석 — 그 포트 콘솔에 점프 대상 라인이 실재하는가.
+
+    송신자가 콘솔에 TX 를 출력하지 않는 메시지 타입(예: SSM 의 CHPLAN/REQRSSI 하행)은
+    점프할 라인이 원천 부재라, 뷰어가 ▸ 를 사전 비활성(회색)으로 그린다. 관측 노드
+    (수신·중계·관측 src)는 라인 존재가 이벤트의 근거이므로 주석하지 않는다(버퍼 밀림은
+    클릭 시점 처리). has_line(port, needles)->bool 주입 — 버퍼 결합을 떼어 순수 테스트.
+    """
+    attempts = _chain_jump_attempts(chain)
+    for node in chain.get("nodes") or []:
+        if node.get("role") != "src" or not node.get("inferred") or not node.get("port"):
+            continue
+        port = node["port"]
+        node["jumpable"] = bool(attempts) and any(has_line(port, ns) for ns in attempts)
+    return chain
+
+
+def _buffer_has_line(port: str, needles: list) -> bool:
+    """포트 링버퍼에 니들 AND 매칭 라인이 있는지 — 미모니터 포트는 False(점프 불가)."""
+    mon = _monitors.get(port)
+    if mon is None:
+        return False
+    try:
+        return mon.buffer.contains_all(needles)
+    except Exception:  # noqa: BLE001 - 프로브 실패는 '모름'이 아니라 비활성으로 안전측
+        return False
+
+
 def _publish_topology_chains(updates) -> None:
     """TopologyEngine chain 변경분을 뷰어 SSE feed로 발행한다(논블로킹·실패 격리)."""
     if not updates:
@@ -602,6 +653,7 @@ def _publish_topology_chains(updates) -> None:
     try:
         ts = datetime.now()
         for entry in updates:
+            _decorate_chain_jumpable(entry, _buffer_has_line)
             _topology_feed.publish(ts, {"chain": entry})
     except Exception as e:  # noqa: BLE001 - 뷰어 보조기능 실패가 관측 경로를 막으면 안 됨
         _log(f"topology chain stream publish 오류: {e!r}")
@@ -1528,6 +1580,8 @@ def _viewer_topology_info() -> dict:
         if eng is not None:
             roster, _hops, chains = eng.roster_and_recent_hops(
                 entries, now=time.monotonic(), n=0, chains_n=200)
+            for c in chains:                      # 시드에도 SSE 와 동일한 jumpable 주석
+                _decorate_chain_jumpable(c, _buffer_has_line)
             return {**roster, "chains": chains}   # routing enrich(edges·원격노드) + 체인 seed
         return {**build_roster(entries), "chains": []}
     except Exception as e:   # noqa: BLE001 - 뷰어 보조기능: 어떤 실패도 코어로 전파 금지

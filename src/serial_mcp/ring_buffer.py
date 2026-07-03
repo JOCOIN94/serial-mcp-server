@@ -107,6 +107,22 @@ class LineBuffer:
             items = list(self._buf)[-lines:]
         return [e.render() for e in items]
 
+    def contains_all(self, needles: list) -> bool:
+        """모든 needle 이 '한 항목의 원문'에 함께 포함된 항목이 있는지(리터럴 부분문자열 AND).
+
+        체인 점프 가능성 프로브(뷰어 ▸ 사전 비활성 판정)용 — 최신부터 역방향 조기 종료.
+        정규식이 아니라 리터럴 비교다(니들에 대괄호 등 메타문자가 그대로 들어온다).
+        """
+        if not needles:
+            return False
+        with self._lock:
+            snapshot = list(self._buf)
+        for e in reversed(snapshot):
+            text = e.text
+            if all(n in text for n in needles):
+                return True
+        return False
+
     def query(self, pattern: str, max_results: int = 100) -> list[str]:
         """정규식으로 버퍼를 검색해 매칭 항목을 render해 반환.
 

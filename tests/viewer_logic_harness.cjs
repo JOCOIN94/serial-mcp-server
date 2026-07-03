@@ -352,6 +352,28 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   eq(SV.chainRow({ id: 12, needle: '{"UnID":5,"Asn":58}', nodes: [] }, {}).needle,
      '{"UnID":5,"Asn":58}', "chain-row-needle-passthrough");
   eq(SV.chainRow({ id: 13, nodes: [] }, {}).needle, null, "chain-row-needle-default-null");
+  // jumpable — 백엔드 프로브 false 만 사전 비활성, 무주석은 기본 활성
+  const jchips = SV.chainRow({ id: 14, key: ["c", 5, 1], nodes: [
+    { name: null, port: "COM4", role: "src", resolved: true, inferred: true, jumpable: false },
+    { name: null, port: "COM12", role: "rx", resolved: true },
+  ] }, {}).chips;
+  eq(jchips[0].jumpable, false, "chain-chip-jumpable-false-passthrough");
+  eq(jchips[1].jumpable, true, "chain-chip-jumpable-default-true");
+  // chainTsLabel — 첫 관측 epoch s → 로컬 HH:MM:SS(포트 로그 거터와 동일 표기)
+  ok(/^\d{2}:\d{2}:\d{2}$/.test(SV.chainTsLabel(1700000000)), "chain-ts-label-format");
+  eq(SV.chainTsLabel(null), "", "chain-ts-label-null-empty");
+  {
+    const base = Math.floor(new Date(2026, 6, 3, 12, 13, 19).getTime() / 1000);
+    const rows = SV.chainRows([
+      { id: 1, ts: base, nodes: [] },
+      { id: 2, ts: base + 0.4, nodes: [] },        // 같은 초 — 어둡게(tsNew=false)
+      { id: 3, ts: base + 1, nodes: [] },          // 새 초 — 밝게
+    ], []);
+    eq(rows[0].tsLabel, "12:13:19", "chain-rows-ts-label");
+    eq(rows[0].tsNew, true, "chain-rows-first-second-bright");
+    eq(rows[1].tsNew, false, "chain-rows-same-second-dim");
+    eq(rows[2].tsNew, true, "chain-rows-next-second-bright");
+  }
   const longPort = SV.chainRow({ nodes: [{ name: null, port: "/dev/tty.SLAB_USBtoUART", resolved: true }] }, {});
   eq(longPort.chips[0].label, "…oUART", "chain-row-long-port-shortened");
   ok(longPort.chips[0].title.indexOf("/dev/tty.SLAB_USBtoUART") === 0, "chain-row-long-port-full-in-title");

@@ -331,3 +331,21 @@ def test_snapshot_chronological_order():
     buf.add("first", BASE)
     buf.add("second", BASE)
     assert [e["text"] for e in buf.snapshot()] == ["first", "second"]
+
+
+# ---- contains_all (체인 점프 가능성 프로브 — 부분문자열 AND, 정규식 아님) ----
+
+def test_contains_all_requires_every_needle_on_one_line():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    buf.add('[Proc_WiFiTx] Ask Info : To. SB1, {"RTC":[1,2],"UnID":5}', BASE)
+    buf.add('other {"UnID":7}', BASE)
+    assert buf.contains_all(['"UnID":5', "Ask Info"]) is True
+    assert buf.contains_all(['"UnID":5', '"UnID":7']) is False   # 서로 다른 줄 — AND 불성립
+    assert buf.contains_all(['"Cidx":999']) is False
+
+
+def test_contains_all_is_literal_not_regex():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    buf.add('{"Rng":[0,4]}', BASE)
+    assert buf.contains_all(['[0,4]']) is True     # 대괄호가 정규식으로 해석되면 실패한다
+    assert buf.contains_all([]) is False           # 빈 니들 — 프로브 불가로 취급

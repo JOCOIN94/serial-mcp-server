@@ -427,7 +427,9 @@ main { padding: 8px 14px 0; flex: 1 1 auto; min-height: 0;
   to { background: transparent; }
 }
 .ln:not(.err):not(.warn):not(.boot):not(.noise):hover { background: var(--bg-hover); }
-.ln .ts { color: var(--faint); user-select: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 타임스탬프 밝기 — 초가 바뀌는 첫 줄만 밝게(스캔 앵커), 같은 초 반복은 저대비로 가라앉힘 */
+.ln .ts { color: #333b46; user-select: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ln.ts-new .ts { color: var(--fg-bright); }
 .ln .txt { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; min-width: 0; }
 body.nowrap .ln .txt { white-space: pre; overflow-x: hidden; text-overflow: ellipsis; }
 body.no-ts .ln { grid-template-columns: 0 1fr; column-gap: 0; }
@@ -442,7 +444,7 @@ body.no-ts .ln .ts { display: none; }
 .ln.noise .txt { color: var(--faint); }     /* 깨진/바이너리: 저대비, 강조 금지 */
 
 .ln.blank { padding: 0; line-height: .5em; }
-.ln.blank .ts { opacity: .14; font-size: .8em; }
+.ln.blank .ts { visibility: hidden; }   /* 빈 줄은 간격만 — 축소 ts 가 '미니 타임스탬프'로 오인됐음 */
 .ln.hide { display: none; }
 
 /* repeat-count badge */
@@ -641,7 +643,10 @@ kbd {
 .thd-jump.miss { color: var(--muted); cursor: default; }
 .thd-arrow { color: var(--muted); font-size: 10px; }
 .thd-meta { font: 500 10px var(--ui); color: var(--muted); }
-.tch-row { border-left: 2px solid var(--border-2); margin-top: 5px; padding: 3px 0 4px 7px; display: flex; min-width: 0; }
+.tch-row { border-left: 2px solid var(--border-2); margin-top: 5px; padding: 3px 0 4px 7px; display: flex; min-width: 0; border-radius: 4px; }
+.tch-row:hover { background: var(--bg-hover); }
+.tch-ts { font: 10.5px var(--mono); color: #333b46; font-variant-numeric: tabular-nums; flex: none; white-space: nowrap; }
+.tch-row.ts-new .tch-ts { color: var(--fg-bright); }
 .tch-head { display: flex; align-items: center; gap: 6px; min-width: 0; width: 100%; }
 .tch-enter { animation: tchEnter .15s ease-out; }
 @keyframes tchEnter {
@@ -1377,6 +1382,7 @@ function chainRow(entry, labels) {
       dim: !port || n.resolved === false || n.inferred === true,
       role: n.role || null,
       port: port,
+      jumpable: n.jumpable !== false,   // 백엔드 프로브가 false 로 판정한 칩만 사전 비활성
     });
   }
   if (!chips.length) chips.push({ label: "발신 미상", title: "", dim: true, role: null, port: null });
@@ -1396,6 +1402,14 @@ function chainRow(entry, labels) {
   };
 }
 
+/* 체인 ts 라벨 — 첫 관측 시각(epoch s)을 로컬 HH:MM:SS 로. 포트 로그 거터와 같은 표기. */
+function chainTsLabel(ts) {
+  if (ts == null || !isFinite(ts)) return "";
+  var d = new Date(ts * 1000);
+  var p = function (n) { return (n < 10 ? "0" : "") + n; };
+  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+}
+
 function chainRows(chains, groups) {
   // 단일 로그 리스트(id 오름차순=오래된 위). groupNo 는 로스터 groups 배열 순번(그래프의
   // "그룹 N"과 동일 원천) — 행 맨 앞 뱃지로 소속 그룹을 표기한다. 미귀속은 null.
@@ -1412,6 +1426,14 @@ function chainRows(chains, groups) {
     out.push(row);
   }
   out.sort(function (a, b) { return (Number(a.id) || 0) - (Number(b.id) || 0); });
+  // ts 밝기 — 포트 로그와 같은 규칙: 초가 바뀌는 첫 행만 밝게. 정렬 뒤 계산해야 안정.
+  var prevSec = null;
+  for (var k = 0; k < out.length; k++) {
+    var lbl = chainTsLabel(out[k].ts);
+    out[k].tsLabel = lbl;
+    out[k].tsNew = !!lbl && lbl !== prevSec;
+    if (lbl) prevSec = lbl;
+  }
   return out;
 }
 
@@ -1426,6 +1448,7 @@ var SViewer = {
   rssiColor: rssiColor, edgeSegments: edgeSegments,
   hopWaypoints: hopWaypoints, hopColor: hopColor, hopDetail: hopDetail,
   portLabelMap: portLabelMap, chainRow: chainRow, chainRows: chainRows,
+  chainTsLabel: chainTsLabel,
   shortPortLabel: shortPortLabel
 };
 if (typeof module !== "undefined" && module.exports) module.exports = SViewer;
@@ -1747,7 +1770,9 @@ window.SVScroll = (function () {
     return window.SVScroll.near(root, 30);
   }
   function chainScrollBottom(root) {
-    window.SVScroll.pinBottom(root, 140);            // 보간 스크롤 — 기존 행이 위로 밀려 올라간다
+    // 체인 렌더는 400ms 디바운스 배치라 140ms 보간으론 스텝식이 된다 — 렌더 간격을 덮는
+    // 지속시간으로 늘려 연속 밀어내기(포트 로그와 같은 감)로 만든다(burst 시 deadline 연장).
+    window.SVScroll.pinBottom(root, 420);
   }
   function setChainFollow(root, v) {
     _chainFollow = v;
@@ -1778,16 +1803,22 @@ window.SVScroll = (function () {
   const _jumpMiss = new Set();                     // "rowId|port" — 버퍼에서 밀려나 점프 실패한 칩
   async function jumpFromChip(btn, row, chip) {
     const found = window.jumpToPortLog ? await window.jumpToPortLog(chip.port, row.key, row.ts, row.needle) : false;
-    if (!found) {
+    if (found) {                                   // 성공 — 과거 miss 기록도 원복(영구 회색 방지)
+      _jumpMiss.delete(row.id + "|" + chip.port);
+      btn.classList.remove("miss");
+      btn.title = "클릭 — " + chip.port + " 로그에서 이 메시지 보기";
+    } else {
       _jumpMiss.add(row.id + "|" + chip.port);
       btn.classList.add("miss");
-      btn.title = chip.port + " 로그에서 못 찾음(콘솔 미출력 또는 버퍼에서 밀림)";
+      btn.title = chip.port + " 로그에서 못 찾음(버퍼에서 밀렸거나 아직 미도착)";
     }
   }
-  function buildChainRow(row) {
-    const item = el("div", "tch-row tch-enter");
+  function buildChainRow(row, isNew) {
+    // enter 애니메이션은 신규 행에만 — 갱신 교체 행에 다시 걸면 행이 깜빡인다.
+    const item = el("div", "tch-row" + (isNew ? " tch-enter" : "") + (row.tsNew ? " ts-new" : ""));
     item.dataset.cid = row.id;
     const head = el("div", "tch-head");
+    if (row.tsLabel) head.appendChild(txt("span", row.tsLabel, "tch-ts"));   // 첫 관측 시각
     head.appendChild(txt("span", row.groupNo != null ? "그룹" + row.groupNo : "—", "tch-gno"));
     const dot = el("span", "thd-dot"); dot.style.background = row.color;
     head.appendChild(dot);
@@ -1798,10 +1829,16 @@ window.SVScroll = (function () {
       if (chip.title) c.title = chip.title;
       path.appendChild(c);
       if (chip.port && row.key) {                  // 포트 있는 칩 — 그 포트 로그의 해당 라인으로 점프
-        const jb = txt("button", "▸", "thd-jump" + (_jumpMiss.has(row.id + "|" + chip.port) ? " miss" : ""));
-        jb.title = "클릭 — " + chip.port + " 로그에서 이 메시지 보기";
-        jb.onclick = ev2 => { ev2.stopPropagation(); jumpFromChip(jb, row, chip); };
-        path.appendChild(jb);
+        if (chip.jumpable === false) {             // 백엔드 프로브: 그 콘솔에 라인이 원천 부재 — 사전 비활성
+          const dead = txt("span", "▸", "thd-jump miss");
+          dead.title = chip.port + " 콘솔에는 이 메시지가 출력되지 않음 — 점프할 라인 없음";
+          path.appendChild(dead);
+        } else {
+          const jb = txt("button", "▸", "thd-jump" + (_jumpMiss.has(row.id + "|" + chip.port) ? " miss" : ""));
+          jb.title = "클릭 — " + chip.port + " 로그에서 이 메시지 보기";
+          jb.onclick = ev2 => { ev2.stopPropagation(); jumpFromChip(jb, row, chip); };
+          path.appendChild(jb);
+        }
       }
     });
     if (!row.ordered) path.appendChild(txt("span", "순서 불확실", "thd-meta"));
@@ -1842,7 +1879,7 @@ window.SVScroll = (function () {
       const sig = JSON.stringify(row);
       const rec = _chainRows[id];
       if (rec && rec.sig === sig) return;         // 변경 없음 — DOM 이동 금지(애니메이션 재시작 방지)
-      const item = buildChainRow(row);
+      const item = buildChainRow(row, !rec);      // 갱신 교체는 enter 애니 없이(깜빡임 방지)
       if (rec && rec.el.parentNode) rec.el.parentNode.replaceChild(item, rec.el);
       else insertRowSorted(root, item, row.id);
       _chainRows[id] = { el: item, sig: sig };
@@ -2011,6 +2048,11 @@ function appendEntry(box, entry, ctx, opts) {
     }
   }
   if (!(opts && opts.noEnter)) built.node.classList.add("ln-enter");
+  // ts 밝기 — 초가 바뀌는 첫 줄만 밝게(ts-new). 빈 줄은 ts 를 숨기므로 소비하지 않는다.
+  if (!model.blank) {
+    const secKey = (model.firstTs || "").slice(0, 8);
+    if (secKey && secKey !== ctx.prevSec) { built.node.classList.add("ts-new"); ctx.prevSec = secKey; }
+  }
   box.appendChild(built.node);
   applyVisibility(built.node);
   ctx.prevSig = built.sig; ctx.prevNode = model.blank ? ctx.prevNode : built.node;
