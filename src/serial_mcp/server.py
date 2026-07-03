@@ -1197,10 +1197,14 @@ def get_serial_status(port: str = "", ctx: Optional[Context] = None) -> dict:
 
 
 @mcp.tool()
-def get_topology(ctx: Optional[Context] = None) -> dict:
+def get_topology(chains: int = 20, ctx: Optional[Context] = None) -> dict:
     """[언제 호출] 메시/멀티포트 장비에서 "어느 보드가 어디로 지나갔는지"를
     해석하기 전에 호출한다. AI가 웹 뷰어를 보지 않고도 SSM/Repeater/APU/SB
     로스터, 최근 홉, 최근 체인 로그를 한 번에 읽는 전 포트 스냅샷 도구다.
+
+    [chains] 최근 체인 로그 개수(기본 20, 상한 200). 찾는 사건이 이미 20개 밖으로
+    밀려났으면 chains 를 늘려(예: 100) 재호출하라 — 필요 없을 때 기본값보다 높게
+    부르면 응답만 커지니 늘 크게 부르지는 마라.
 
     [무엇을 반환] roster 는 현재 포트 로그와 routing 관측으로 만든 그룹/노드/엣지
     구조이고, recent_hops 는 최근 20개 실제 경로 후보/성공/실패/미확정 요약이다.
@@ -1209,8 +1213,10 @@ def get_topology(ctx: Optional[Context] = None) -> dict:
     통신은 recent_chains 에 싣지 않는다** — 일부 펌웨어는 특정 TX(예: SSM 의
     CHPLAN/REQRSSI)를 콘솔에 출력하지 않으므로, 수신 로그가 보이는데 체인에 없다고
     버그로 판단하지 마라(콘솔 텍스트로 대조 가능한 통신만 담는 설계).
-    이 도구는 전 포트 토폴로지를 반환하므로 port 인자를 받지 않는다. 포트별 원문은
-    get_recent_logs/query_serial_logs 로 이어서 확인하라.
+    이 도구는 전 포트 토폴로지를 반환하므로 port 인자를 받지 않는다. 체인 항목의
+    원문 줄까지 정밀 확인하려면 그 노드의 port 에 대고 query_serial_logs 를
+    context 인자와 함께 호출하라 — 검색어 선택 규칙(needle 필드 존재 여부 기준,
+    dir 기준이 아님)은 query_serial_logs docstring 을 따른다.
 
     [주의] recent_hops 에는 시각(timestamp)이 없다 — 일부러 뺐다. 홉의 나열·도착 순서로
     송수신 인과나 시간차를 추론하지 마라: 펌웨어가 sendMessage 후 [Tx] 를 출력하고 포트별
@@ -1225,11 +1231,12 @@ def get_topology(ctx: Optional[Context] = None) -> dict:
         return {**busy, "roster": {"groups": [], "unplaced": []},
                 "recent_hops": [], "recent_chains": []}
 
+    chains_n = max(0, min(chains, 200))
     eng = _topology_engine
     try:
         if eng is not None:
             roster, recent_hops, recent_chains = eng.roster_and_recent_hops(
-                _topology_entries(), now=time.monotonic(), n=20, chains_n=20)
+                _topology_entries(), now=time.monotonic(), n=20, chains_n=chains_n)
         else:
             roster, recent_hops, recent_chains = build_roster(_topology_entries()), [], []
     except Exception as e:  # noqa: BLE001 - 토폴로지 보조 조회 실패는 빈 스냅샷으로 격리
@@ -1294,17 +1301,37 @@ def query_serial_logs(
     pattern: str,
     max_results: int = 100,
     port: str = "",
+    context: int = 0,
+    literal: bool = False,
     ctx: Optional[Context] = None,
 ) -> dict:
     """[언제 호출] 특정 키워드/에러/마커를 버퍼에서 찾을 때. 예: 부팅 완료 문구,
-    'ERROR', 특정 상태 출력의 등장 여부.
+    'ERROR', 특정 상태 출력의 등장 여부. 매칭 줄 하나로 판단이 안 서면(원인 분석
+    등) get_recent_logs 로 전체를 다시 읽지 말고 context 를 써서 이 도구 한 번으로
+    끝내라.
 
     [port 규약] get_recent_logs 와 동일 — 복수 포트면 지정, 미지정 에러 시 ports
     목록에서 골라 재호출.
 
-    [무엇을 반환] 정규식 pattern 매칭 라인들(최신 우선 max_results개, 반환은 시간
-    오름차순, 접힌 묶음 표기 포함). 매칭 0이면 그 문구가 아직 안 나온 것 — 사람에게
-    해당 동작을 요청하거나 더 기다린 뒤 재조회하라.
+    [context] 매칭 줄 앞뒤로 N줄을 더 받는다(기본 0=매칭 줄만). 여러 매칭의 문맥
+    구간이 겹치거나 맞닿으면 하나로 합쳐 중복 없이 반환하고, 멀리 떨어진 구간은
+    "---" 로 구분한다. 매칭 줄 자체는 "▶ " 접두사로 문맥 줄과 구분된다.
+
+    [literal] get_topology 의 recent_chains 에서 얻은 needle(원문 텍스트 조각)을
+    검색할 땐 반드시 literal=True 로 호출하라. needle 은 로그 원문이라 `[` `{` 같은
+    정규식 메타문자가 그대로 들어있을 수 있어, literal 없이 그대로 넘기면 에러 없이
+    조용히 매칭이 어긋난다(0건이거나 엉뚱한 줄). recent_chains 항목의 needle 필드가
+    있으면(null 아님) 반드시 그 값을 literal=True 로 검색하라 — 판단 기준은
+    dir(up/down)이 아니라 needle 존재 여부다(같은 방향이라도 메시지 종류에 따라
+    needle 유무가 갈린다, 실장비 로그로 확인됨). needle 이 없으면(null) key 의
+    원값으로 발신측(src) 포트를 먼저 검색하고, 그래도 0건이면 그 값이 발신측
+    콘솔에 안 찍히는 메시지 종류일 수 있으니 수신측(dst) 포트로 재시도하거나
+    사람에게 재현을 요청하라 — needle 없는 경우의 원값 검색은 100% 보장되지 않는다.
+
+    [무엇을 반환] 정규식(또는 literal=True 면 부분 문자열) pattern 매칭 라인들
+    (최신 우선 max_results개, 반환은 시간 오름차순, 접힌 묶음 표기 포함, context>0
+    이면 문맥 줄 포함). 매칭 0이면 그 문구가 아직 안 나온 것 — 사람에게 해당
+    동작을 요청하거나 더 기다린 뒤 재조회하라.
 
     [루프 단계] 결과 확인(표적 검색).
     """
@@ -1315,12 +1342,13 @@ def query_serial_logs(
     if err:
         return {**err, "count": 0, "lines": []}
     try:
-        got = mon.buffer.query(pattern, max_results)
+        got = mon.buffer.query(pattern, max_results, context=context, literal=literal)
     except re.error as e:
         return {"status": "error", "message": f"정규식 오류: {e}", "count": 0, "lines": []}
+    count_desc = f"{len(got)}줄 매칭" if not context else f"{len(got)}줄 반환(문맥 포함)"
     return {
         "status": "ok",
-        "message": f"{mon.label}: {len(got)}줄 매칭",
+        "message": f"{mon.label}: {count_desc}",
         "port": mon.port,
         "name": mon.name,
         "pattern": pattern,

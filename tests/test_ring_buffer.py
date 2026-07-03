@@ -219,6 +219,82 @@ def test_query_searches_raw_text_not_rendered_form():
     assert "(2회 반복" in got[0]           # 반환은 render된 형태
 
 
+# ---- query context (v1.15.0) ----
+
+def test_query_context_merges_overlapping_windows():
+    buf = LineBuffer(maxlen=20, dedup=False)
+    lines = ["boot", "wifi init", "connecting", "ERROR one", "retry1",
+             "retry2", "ERROR two", "retry3", "connected", "ready"]
+    for t in lines:
+        buf.add(t, BASE)
+    got = buf.query(r"ERROR", context=2)
+    # 매칭 idx3([1,5])과 idx6([4,8])의 문맥 구간이 겹쳐 [1,8] 하나로 병합돼야 한다
+    assert "---" not in got
+    assert len(got) == 8
+    assert got[0] == "[14:00:00.000] wifi init"
+    assert got[2] == "▶ [14:00:00.000] ERROR one"
+    assert got[5] == "▶ [14:00:00.000] ERROR two"
+    assert got[-1] == "[14:00:00.000] connected"
+
+
+def test_query_context_separates_distant_matches_with_separator():
+    buf = LineBuffer(maxlen=30, dedup=False)
+    texts = ["ERROR a" if i == 2 else ("ERROR b" if i == 17 else f"noise{i}")
+             for i in range(20)]
+    for t in texts:
+        buf.add(t, BASE)
+    got = buf.query(r"ERROR", context=2)
+    assert got.count("---") == 1
+    sep = got.index("---")
+    first_block, second_block = got[:sep], got[sep + 1:]
+    assert len(first_block) == 5   # idx 0..4
+    assert len(second_block) == 5  # idx 15..19
+    assert first_block[2] == "▶ [14:00:00.000] ERROR a"
+    assert second_block[2] == "▶ [14:00:00.000] ERROR b"
+
+
+def test_query_context_respects_max_results_on_match_count():
+    buf = LineBuffer(maxlen=20, dedup=False)
+    for i in range(5):
+        buf.add(f"ERROR {i}", BASE)
+    got = buf.query(r"ERROR", max_results=2, context=1)
+    # 최근 매칭 2개(idx3,idx4)만 문맥 대상 — idx0,1,2는 애초에 매칭 후보에서 제외됨
+    assert got == [
+        "[14:00:00.000] ERROR 2",
+        "▶ [14:00:00.000] ERROR 3",
+        "▶ [14:00:00.000] ERROR 4",
+    ]
+
+
+def test_query_context_zero_is_unmarked_and_unchanged():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    buf.add("ERROR one", BASE)
+    assert buf.query(r"ERROR", context=0) == buf.query(r"ERROR")
+
+
+def test_query_literal_matches_substring_with_regex_metacharacters():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    text = '{"CHPLAN":[1,"00"],"Asn":58,"UnID":5}'
+    buf.add(text, BASE)
+    assert buf.query(text, literal=True) == [f"[14:00:00.000] {text}"]
+    # literal=False(기본)면 '[' 가 정규식 문자 클래스로 해석돼 조용히 매칭 실패한다
+    # (에러 없이 0건 — literal 스위치가 왜 필요한지 보여주는 대조군)
+    assert buf.query(text) == []
+
+
+def test_query_literal_with_context_returns_marked_window():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    buf.add("before", BASE)
+    buf.add('{"A":[1]}', BASE)
+    buf.add("after", BASE)
+    got = buf.query('{"A":[1]}', literal=True, context=1)
+    assert got == [
+        "[14:00:00.000] before",
+        '▶ [14:00:00.000] {"A":[1]}',
+        "[14:00:00.000] after",
+    ]
+
+
 # ---- info / clear ----
 
 def test_info_reports_capacity_and_endpoints():

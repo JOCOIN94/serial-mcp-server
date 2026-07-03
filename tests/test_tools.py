@@ -240,6 +240,45 @@ def test_get_topology_busy_keeps_snapshot_shape(monkeypatch):
     assert out["recent_chains"] == []
 
 
+def test_get_topology_chains_param_passthrough(monkeypatch, dual):
+    class FakeTopologyEngine:
+        def roster_and_recent_hops(self, entries, now=None, n=20, chains_n=0):
+            self.chains_n = chains_n
+            return {"groups": [], "unplaced": []}, [], []
+
+    engine = FakeTopologyEngine()
+    monkeypatch.setattr(srv, "_topology_engine", engine, raising=False)
+
+    srv.get_topology(chains=50)
+    assert engine.chains_n == 50
+
+
+def test_get_topology_chains_param_caps_at_200(monkeypatch, dual):
+    class FakeTopologyEngine:
+        def roster_and_recent_hops(self, entries, now=None, n=20, chains_n=0):
+            self.chains_n = chains_n
+            return {"groups": [], "unplaced": []}, [], []
+
+    engine = FakeTopologyEngine()
+    monkeypatch.setattr(srv, "_topology_engine", engine, raising=False)
+
+    srv.get_topology(chains=999)
+    assert engine.chains_n == 200
+
+
+def test_get_topology_chains_param_floors_at_zero(monkeypatch, dual):
+    class FakeTopologyEngine:
+        def roster_and_recent_hops(self, entries, now=None, n=20, chains_n=0):
+            self.chains_n = chains_n
+            return {"groups": [], "unplaced": []}, [], []
+
+    engine = FakeTopologyEngine()
+    monkeypatch.setattr(srv, "_topology_engine", engine, raising=False)
+
+    srv.get_topology(chains=-5)
+    assert engine.chains_n == 0
+
+
 def test_viewer_topology_info_includes_chain_seed(monkeypatch, dual):
     class FakeTopologyEngine:
         def roster_and_recent_hops(self, entries, now=None, n=20, chains_n=0):
@@ -274,6 +313,20 @@ def test_query_invalid_regex_still_reports(single):
     out = srv.query_serial_logs("[")
     assert out["status"] == "error"
     assert "정규식" in out["message"]
+
+
+def test_query_context_and_literal_passthrough(dual):
+    a, _ = dual
+    a.buffer.add("before", BASE)
+    a.buffer.add('{"A":[1]}', BASE)
+    a.buffer.add("after", BASE)
+    out = srv.query_serial_logs('{"A":[1]}', port="COM_A", literal=True, context=1)
+    assert out["status"] == "ok"
+    assert out["lines"] == [
+        "[14:00:00.000] before",
+        '▶ [14:00:00.000] {"A":[1]}',
+        "[14:00:00.000] after",
+    ]
 
 
 def test_buffer_info_routes_and_includes_label(dual):

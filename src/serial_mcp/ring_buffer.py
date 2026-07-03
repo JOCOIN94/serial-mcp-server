@@ -123,22 +123,62 @@ class LineBuffer:
                 return True
         return False
 
-    def query(self, pattern: str, max_results: int = 100) -> list[str]:
-        """정규식으로 버퍼를 검색해 매칭 항목을 render해 반환.
+    def query(self, pattern: str, max_results: int = 100, context: int = 0,
+              literal: bool = False) -> list[str]:
+        """패턴으로 버퍼를 검색해 매칭 항목을 render해 반환.
 
         최신 항목부터 훑어 max_results개를 모은 뒤, 시간 오름차순으로 돌려준다.
-        잘못된 정규식이면 re.error 를 그대로 올린다(호출부에서 처리).
+        literal=False(기본)면 pattern은 정규식이고, 잘못된 정규식이면 re.error를
+        그대로 올린다(호출부에서 처리). literal=True면 정규식이 아니라 부분
+        문자열 매칭이다 — 대괄호·중괄호 등 정규식 메타문자가 그대로 든 니들(예:
+        JSON 조각)을 안전하게 찾을 때 쓴다.
+
+        context>0이면 매칭 줄 앞뒤로 그만큼을 더 묶어 반환한다. 겹치거나 맞닿은
+        구간은 하나로 병합해 같은 줄이 중복 반환되지 않게 하고, 떨어진 구간은
+        "---" 로 구분한다. 매칭 줄 자체는 "▶ " 접두사로 문맥 줄과 구분한다.
+        context=0(기본)이면 매칭 줄만 마커 없이 반환한다(기존 동작과 동일).
         """
-        rx = re.compile(pattern)
+        if literal:
+            def _hit(text: str) -> bool:
+                return pattern in text
+        else:
+            rx = re.compile(pattern)
+
+            def _hit(text: str) -> bool:
+                return rx.search(text) is not None
+
         with self._lock:
             snapshot = list(self._buf)
-        out: list[str] = []
-        for e in reversed(snapshot):
-            if rx.search(e.text):
-                out.append(e.render())
-                if len(out) >= max_results:
+
+        n = len(snapshot)
+        match_idx: list[int] = []
+        for i in range(n - 1, -1, -1):
+            if _hit(snapshot[i].text):
+                match_idx.append(i)
+                if len(match_idx) >= max_results:
                     break
-        out.reverse()
+        match_idx.reverse()
+
+        if context <= 0:
+            return [snapshot[i].render() for i in match_idx]
+
+        match_set = set(match_idx)
+        windows: list[list[int]] = []
+        for i in match_idx:
+            start = max(0, i - context)
+            end = min(n - 1, i + context)
+            if windows and start <= windows[-1][1] + 1:
+                windows[-1][1] = max(windows[-1][1], end)
+            else:
+                windows.append([start, end])
+
+        out: list[str] = []
+        for wi, (start, end) in enumerate(windows):
+            if wi > 0:
+                out.append("---")
+            for i in range(start, end + 1):
+                line = snapshot[i].render()
+                out.append(("▶ " + line) if i in match_set else line)
         return out
 
     def info(self) -> dict:
