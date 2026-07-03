@@ -938,7 +938,7 @@ wheels = [
 
 [[package]]
 name = "serial-mcp-server"
-version = "1.14.0"
+version = "1.15.0"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
