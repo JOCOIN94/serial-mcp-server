@@ -1608,11 +1608,16 @@ window.SVScroll = (function () {
       vis.forEach((r, i) => { rowY[r] = y; y += SH; if (i < vis.length - 1) y += RG; });
       prev = true;
     }
-    let maxCol = 0;
-    for (const n of nodes) maxCol = Math.max(maxCol, n.col || 0);
-    const w = (maxCol + 1) * (SW + GX) - GX, h = y;
-    const placed = nodes.map(n => ({ n: n, x: (n.col || 0) * (SW + GX), y: rowY[n.row] || 0, w: SW, h: SH }));
-    return { w: w, h: h, placed: placed };
+    // REPEAT 만 노드 절반만큼 우측 오프셋 — 같은 col 의 SSM↔SB 수직 경로선과 REP 경유선이
+    // 한 X 에 겹쳐 구분이 안 되는 문제(2026-07-06 사용자 지시). 배치 시작점만 밀고 행은 유지.
+    const placed = nodes.map(n => ({
+      n: n,
+      x: (n.col || 0) * (SW + GX) + (n.type === "REPEAT" ? SW / 2 : 0),
+      y: rowY[n.row] || 0, w: SW, h: SH,
+    }));
+    let w = 0;
+    for (const p of placed) w = Math.max(w, p.x + SW);
+    return { w: w, h: y, placed: placed };
   }
 
   // 노드: 라벨(밖·위) + 박스. 단일 MCU=박스에 한 칸, SB=좌우 두 칸(ESP|STM, 각 칸 클릭·상태점).
