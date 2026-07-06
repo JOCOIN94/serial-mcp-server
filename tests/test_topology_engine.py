@@ -325,7 +325,8 @@ def test_roster_and_recent_hops_builds_roster_outside_engine_lock(monkeypatch):
     eng.flush()
     locked_during_build = []
 
-    def fake_build_roster(entries, routing=None, membership=None, pairing=None, peer_links=None, now=None):
+    def fake_build_roster(entries, routing=None, membership=None, pairing=None, peer_links=None,
+                          now=None, type_cache=None):
         locked_during_build.append(eng._lock.locked())
         return {"groups": [{"id": "g", "edges": routing.edges(now), "peer_links": peer_links}], "unplaced": []}
 
@@ -518,3 +519,24 @@ def test_direct_downlink_without_chplan_keeps_two_nodes_and_no_route_plan():
     assert chain["nodes"][1]["port"] == "COM12"
     assert chain["ok"] is True
     assert chain["route_plan"] is None
+
+
+def test_engine_type_cache_sticky_across_snapshots_and_cleared_on_forget():
+    # 2026-07-06 실장비 회귀: 분류는 첫 강증거로 고정되고(창에서 INFO 가 밀려도 불변),
+    # 포트 disconnect(forget_port)에서만 해제된다.
+    eng = TopologyEngine()
+
+    def entry(lines):
+        return [{"port": "COM9", "alias": None, "lines": lines, "connected": True}]
+
+    info_lines = ['[Tx - my INFO] {"UnID":0,"INFO":["5","REP1"],"Unique":1}']
+    r1 = eng.roster(entry(info_lines), now=1.0)
+    assert r1["groups"][0]["nodes"][0]["type"] == "REPEAT"
+
+    noise = ['[WiFi_Rx] {"UnID":1,"Stat":"OK","Asn":2,"Cidx":10}'] * 300
+    r2 = eng.roster(entry(noise), now=2.0)
+    assert r2["groups"][0]["nodes"][0]["type"] == "REPEAT"    # 이력 고정
+
+    eng.forget_port("COM9")
+    r3 = eng.roster(entry(noise), now=3.0)
+    assert r3["unplaced"] == ["COM9"]                          # 해제 후엔 재분류(미상)

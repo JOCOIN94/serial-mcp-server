@@ -47,9 +47,11 @@ _MEMBERSHIP_FRESH_S = 30.0   # 멤버십 링크선 최신성 임계(초) — 넘
 # classify_device ②단계 INFO[0] enum 이 전담한다(SB-ESP 도 INFO[0]=4 로만 식별). over-broad
 # 패턴을 SB 로 등록하면 INFO 없는 윈도의 APU/REPEAT 를 SB 로 오분류하므로 두지 않는다(§7-1 미확정=UNKNOWN).
 _SIGNATURES = [
-    # SSM-ESP(게이트웨이): Proc-* 는 WiFi 활성 시만 나오므로 Route/From SB/REPRSSI 도 함께.
+    # SSM-ESP(게이트웨이): Proc-* 는 WiFi 활성 시만 나오므로 Route Link/From SB 도 함께.
+    # REPRSSI 는 금지 — SSM 전용이 아니다(SB 자기 응답 [Tx_RSSI]·REP 중계 [BypassJson]에 상시,
+    # 2026-07-06 실장비 재현: REP/SB 포트가 SSM(signature) 오분류 → 그룹 분열·타입 플래핑).
     ("SSM", "ESP", 3, re.compile(r"\[Proc-WiFiRx\]|\[Proc-Raw Packet\]|\[Proc_WiFiTx\]|\[Proc-WebRTx\]")),
-    ("SSM", "ESP", 3, re.compile(r"\[Route\] Link|<<<\s*From\s+SB|REPRSSI")),
+    ("SSM", "ESP", 3, re.compile(r"\[Route\] Link|<<<\s*From\s+SB")),
     # SB-STM: 베이 컨트롤러(카드·가격·베이설정) — SB 고유. 부팅/설정 시점에 나옴.
     ("SB", "STM", 3, re.compile(r"\bBayID\s*:|<\s*MasterCard\s*>|BayConfig Info|minCoinSensingTime|Price1st")),
     # SB-STM 런타임(카드/상태 동작) — 부팅·설정 시그니처가 없는 카드처리 윈도를 보강한다(실장비서
@@ -258,7 +260,38 @@ def _local_port_to_ssm(membership: Optional[dict]) -> dict:
     return {lp: v[0] for lp, v in best.items()}
 
 
-def build_roster(entries, routing=None, membership=None, pairing=None, now=None, peer_links=None) -> dict:
+def _apply_type_cache(ids: list, type_cache: Optional[dict]) -> list:
+    """포트 타입 이력 고정 — 하드웨어는 안 바뀐다(사용자 원칙 2026-07-06).
+
+    분류는 '최근 창'만 보므로 자기 보고([Tx - my INFO])가 창에서 밀리면 미상/약증거로
+    강등돼 타입이 왔다갔다 한다(실장비 재현: 그룹 분열). 규칙: 새 판정의 신뢰도가 캐시
+    이상일 때만 캐시를 교체하고, 약하거나 무증거면 캐시 판정을 재사용한다(connected 만
+    현재값). 캐시 해제는 포트 disconnect(엔진 forget_port) 몫. type_cache=None 이면 무동작
+    (하위호환 — 엔진 없는 호출부).
+    """
+    if type_cache is None:
+        return ids
+    out = []
+    for d in ids:
+        cached = type_cache.get(d["port"])
+        conf = d.get("type_confidence") or 0.0
+        if cached is not None and (d.get("type") is None or conf < cached["type_confidence"]):
+            out.append({**cached, "port": d["port"], "connected": d.get("connected", True)})
+            continue
+        if d.get("type") is not None:
+            keep = dict(d)
+            if keep.get("number") is None and cached and cached.get("type") == keep.get("type"):
+                keep["number"] = cached.get("number")     # 번호는 이전 창의 자기 보고에서 승계
+            type_cache[d["port"]] = {k: keep.get(k) for k in
+                                     ("type", "mcu", "number", "type_confidence", "type_source")}
+            out.append(keep)
+        else:
+            out.append(d)
+    return out
+
+
+def build_roster(entries, routing=None, membership=None, pairing=None, now=None, peer_links=None,
+                 type_cache=None) -> dict:
     """포트 목록(+선택 라우팅 상태·멤버십·카드페어링) → 토폴로지 로스터.
 
     entries: [{port, alias, lines, connected}] (lines 는 최근 수신 줄 list).
@@ -281,6 +314,7 @@ def build_roster(entries, routing=None, membership=None, pairing=None, now=None,
     """
     ids = [identify_port(e["port"], e.get("alias"), e.get("lines"), e.get("connected", True))
            for e in entries]
+    ids = _apply_type_cache(ids, type_cache)   # 타입 이력 고정(약증거 강등 금지) — 엔진이 캐시 소유
     # 카드페어링 번호 폴백: 번호 미상 SB 포트(주로 STM)를 카드상관 베이번호로 채워 ESP 짝과 병합.
     for d in ids:
         if d["type"] == "SB" and d.get("number") is None and pairing:

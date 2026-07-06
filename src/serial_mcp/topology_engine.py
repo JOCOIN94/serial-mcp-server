@@ -83,6 +83,9 @@ class TopologyEngine:
         self._names_routing_ver = -1
         # 카드상관 페어링: STM 은 베이번호를 안 흘려서, 카드 sCuID+UnID 로 포트→베이를 잇는다(build_roster 번호 폴백).
         self._pairing = CardPairing()
+        # 포트 타입 이력 고정(2026-07-06): 하드웨어는 안 바뀐다 — 강증거 판정을 보관해
+        # 약증거/무증거 창의 강등을 막는다. 해제는 forget_port(물리 disconnect)에서만.
+        self._type_cache: dict = {}
 
     def observe(self, port: str, ts: float, text: str) -> list:
         """리더 스레드가 수신 줄마다 호출(비차단·예외삼킴은 호출측 on_line 훅). 새 홉 리스트 반환."""
@@ -105,6 +108,7 @@ class TopologyEngine:
         다음 INFO 사이클의 TX↔RX 상관이 다시 채운다(관측 기반·자기 교정).
         """
         with self._lock:
+            self._type_cache.pop(port, None)          # 타입 이력 해제 — 보드 교체 가능 지점
             self._pairing.forget_port(port)
             self._peerlinks.forget_port(port)
             self._chains.forget_port(port)
@@ -160,8 +164,9 @@ class TopologyEngine:
             peer_links = self._peerlinks.snapshot(now)
             hops = [] if n <= 0 else list(self._hops)[-n:]
             chains = self._chains.recent(chains_n)
+        # type_cache 는 Lock 밖에서 갱신된다 — 값이 불변 dict 스냅샷이라 최악이 '한 스냅샷 지연'.
         return build_roster(entries, routing=snap, membership=membership, pairing=pairing,
-                            peer_links=peer_links, now=now), hops, chains
+                            peer_links=peer_links, now=now, type_cache=self._type_cache), hops, chains
 
     def roster(self, entries, now: Optional[float] = None) -> dict:
         """관측된 routing(링크그래프·토큰맵)을 얹은 로스터 스냅샷. 읽기 전용."""

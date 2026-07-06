@@ -593,3 +593,49 @@ def test_roster_standalone_group_has_empty_edges():
     entries = [{"port": "COM14", "alias": None, "lines": SB_ESP_LINES, "connected": True}]
     r = build_roster(entries, membership=membership, now=2.0)
     assert r["groups"][0]["kind"] == "standalone" and r["groups"][0]["edges"] == []
+
+
+# ---- 2026-07-06 실장비 회귀: relay 콘솔 오분류·타입 이력 고정 ----
+
+def test_relay_console_reprssi_lines_do_not_classify_ssm():
+    # REPRSSI 는 SSM 전용이 아니다 — SB 는 자기 응답([Tx_RSSI]), REP 는 중계([BypassJson])로
+    # 상시 출력한다(2026-07-06 실장비 재현: REP 포트가 SSM(signature) 오분류 → 그룹 분열).
+    lines = [
+        '[BypassJson] {"UnID":1,"REPRSSI":[["AA,BB,CC,DD,EE,FF",-51,45]],"Unique":6,"Rev":true,"Cidx":997,"Rt":["7C"]}',
+        '[Tx_RSSI] {"UnID":5,"REPRSSI":[["AA,BB,CC,DD,EE,FF",-20,10]]}',
+    ]
+    d = classify_device(lines)
+    assert d["type"] is None          # SSM 아님 — 확정 증거 없으면 미상이 정답
+
+
+def test_build_roster_type_cache_prevents_weak_downgrade():
+    # 강한 증거(info_json)로 확정된 타입은, 이후 증거 없는 창에서도 유지된다(이력 고정).
+    cache: dict = {}
+    info = [{"port": "COM9", "alias": None, "connected": True,
+             "lines": ['[Tx - my INFO] {"UnID":0,"INFO":["5","REP1"],"Unique":1}']}]
+    r1 = build_roster(info, type_cache=cache)
+    assert r1["groups"][0]["nodes"][0]["type"] == "REPEAT"
+
+    silent = [{"port": "COM9", "alias": None, "connected": True,
+               "lines": ['[WiFi_Rx] {"UnID":1,"Stat":"OK","Asn":2,"Cidx":10}']}]
+    r2 = build_roster(silent, type_cache=cache)
+    assert r2["groups"][0]["nodes"][0]["type"] == "REPEAT"   # 캐시 유지 — 강등 금지
+    assert r2["unplaced"] == []
+
+    # 캐시 없이(현행 경로) 같은 창이면 미상 — 하위호환 확인
+    r3 = build_roster(silent)
+    assert r3["unplaced"] == ["COM9"]
+
+
+def test_build_roster_type_cache_upgrades_with_stronger_evidence():
+    # 같은/더 강한 신뢰도의 새 증거는 캐시를 교체한다(manual 이 최상위).
+    cache: dict = {}
+    weak = [{"port": "COM7", "alias": None, "connected": True,
+             "lines": ['[Proc-WebRTx] ["message",{}]']}]
+    r1 = build_roster(weak, type_cache=cache)
+    assert r1["groups"][0]["ssm_port"] == "COM7"             # signature SSM
+
+    manual = [{"port": "COM7", "alias": "SB3-ESP", "connected": True, "lines": []}]
+    r2 = build_roster(manual, type_cache=cache)
+    types = [n["type"] for n in r2["groups"][0]["nodes"]]
+    assert types == ["SB"]                                    # manual(1.0) 이 signature(0.6) 교체
