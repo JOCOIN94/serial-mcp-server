@@ -2497,7 +2497,7 @@ window.jumpToPortLog = async function (port, key, ts, needle) {
   if (key[0] === "u") {
     const ns = [];
     if (key[2] != null) ns.push('"Unique":' + key[2]);        // 키 조각 폴백 — Unique 는 1..99 롤링이라 needle 뒤로
-    if (typeof key[1] === "string") ns.push(key[1]);          // mac ident 는 원문 그대로
+    if (typeof key[1] === "string") ns.push(key[1].replace(/:/g, ","));  // mac ident — 콘솔 원문은 콤마("Mac":"10,06,...")
     else if (key[1] != null) ns.push('"UnID":' + key[1]);
     if (ns.length) attempts.push(ns);
   } else if (key[0] === "c") {

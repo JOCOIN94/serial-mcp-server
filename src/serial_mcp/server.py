@@ -614,7 +614,9 @@ def _chain_jump_attempts(chain: dict) -> list:
             if val is not None:
                 ns.append(f'"Unique":{val}')
             if isinstance(ident, str):
-                ns.append(ident)                     # mac ident 는 원문 그대로
+                # mac ident 는 콘솔 표기(콤마)로 — 정규화 콜론 그대로 쓰면 원문
+                # "Mac":"10,06,..." 과 영원히 불일치(2026-07-06 REPEAT 체인 죽은 ▸).
+                ns.append(ident.replace(":", ","))
             elif ident is not None:
                 ns.append(f'"UnID":{ident}')
             if ns:

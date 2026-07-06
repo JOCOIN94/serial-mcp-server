@@ -615,6 +615,17 @@ def test_chain_jumpable_u_key_uses_unique_and_ident_needles():
     assert chain["nodes"][0]["jumpable"] is False
 
 
+def test_chain_jumpable_mac_ident_needle_uses_console_comma_format():
+    # 2026-07-06 실장비 버그: REPEAT↔SSM 체인("u" 키 mac ident)의 점프 니들이 정규화 콜론
+    # mac("10:06:1C:16:97:AC")인데 콘솔 JSON 원문은 콤마("Mac":"10,06,1C,16,97,AC")라
+    # AND 매칭이 영원히 실패 — 파란 ▸ 가 클릭 시점에 항상 죽었다(REPEAT-SSM 전 행).
+    # mac ident 는 콘솔 표기(콤마)로 변환해 니들을 만들어야 한다.
+    chain = _chain(key=("u", "10:06:1C:16:97:AC", 34), needle=None)
+    seen = []
+    srv._decorate_chain_jumpable(chain, lambda p, ns: seen.append(list(ns)) or False)
+    assert seen == [['"Unique":34', "10,06,1C,16,97,AC"]]
+
+
 # ---- 발행 게이트(_chain_publishable) — 송신 콘솔 증거 없는 체인은 전 표면 발행 금지 ----
 
 def test_chain_gate_suppresses_no_evidence_inferred_src(monkeypatch):
