@@ -260,6 +260,21 @@ def _local_port_to_ssm(membership: Optional[dict]) -> dict:
     return {lp: v[0] for lp, v in best.items()}
 
 
+def _pair_group(groups: list[dict], d: dict) -> Optional[dict]:
+    """번호 있는 SB 포트의 짝(같은 번호 SB)이 이미 배치된 그룹 — 없으면 None.
+
+    STM 콘솔은 무선 상관이 불가능해 membership 에 절대 안 잡힌다 — 카드페어링/자체 번호로
+    ESP 짝을 찾아 그 그룹을 따라간다(같은 그룹이어야 _merge_sb 가 한 베이 노드로 병합).
+    """
+    num = d.get("number")
+    if d.get("type") != "SB" or num is None:
+        return None
+    for g in groups:
+        if any(m.get("type") == "SB" and m.get("number") == num for m in g["_members"]):
+            return g
+    return None
+
+
 def _apply_type_cache(ids: list, type_cache: Optional[dict]) -> list:
     """포트 타입 이력 고정 — 하드웨어는 안 바뀐다(사용자 원칙 2026-07-06).
 
@@ -298,7 +313,8 @@ def build_roster(entries, routing=None, membership=None, pairing=None, now=None,
     routing: 선택 RoutingTable(모듈4) — 주면 링크그래프 edges·원격 mesh 노드·mac/토큰 enrich 를
       얹는다. 없으면(Phase A 호출부) edges=[]·원격노드 없음으로 하위호환 유지. now=fresh 판정 클럭.
     membership: 선택 {ssm_port:{unid:{device_type,local_port,last_ts}}}(엔진 모듈6) — 주면 각 leaf 를
-      그 leaf 를 수신한 SSM 의 그룹에 배치한다(멀티-SSM 정확). 없거나 매칭 안 되면 첫 그룹 폴백.
+      그 leaf 를 수신한 SSM 의 그룹에 배치한다(멀티-SSM 정확). None(Phase A)이면 첫 그룹 폴백,
+      dict(엔진 가동)인데 매칭 안 되는 RF 콘솔은 미귀속 standalone 그룹으로 분리(STM 은 pair-follow).
     pairing: 선택 {port: bay}(엔진 CardPairing 스냅샷) — STM 은 정상 로그에 번호가 없으므로, 카드상관으로
       해소된 베이번호를 번호 미상 SB 포트에 채워 ESP 짝과 병합(_merge_sb)하게 한다. 없으면 번호 폴백 없음.
     peer_links: 선택 [{from,to,via,fresh}] — PeerLinks 가 관측한 범용 H.W↔H.W 포트쌍. 양끝이
@@ -311,6 +327,8 @@ def build_roster(entries, routing=None, membership=None, pairing=None, now=None,
       - 원격 mesh 노드([Passed Device] 로만 등장, 직접 포트 없음)는 ports=[]·status="unknown".
       - row=타입 계층, col=같은 타입 내 번호/발견순.
     불변식: 그룹↔SSM 1:1. SSM 0개면 단일 standalone 그룹, 1개면 그 SSM 그룹, N개면 N그룹.
+    예외: membership 가동 중 무관측 RF 콘솔이 있으면 끝에 미귀속 standalone 그룹("(SSM 미관측)")
+    이 하나 더 붙을 수 있다(SSM 그룹 아님 — 그룹↔SSM 1:1 불변식은 kind="ssm" 그룹에만 적용).
     """
     ids = [identify_port(e["port"], e.get("alias"), e.get("lines"), e.get("connected", True))
            for e in entries]
@@ -336,14 +354,35 @@ def build_roster(entries, routing=None, membership=None, pairing=None, now=None,
                    "kind": "standalone", "_members": []}]
 
     # 비-SSM 귀속: membership(SSM포트→leaf 로컬포트)이 있으면 각 leaf 를 그 leaf 를 수신한 SSM
-    # 그룹에 배치한다(멀티-SSM 정확). 없거나(Phase A) 매칭 안 되면 첫 그룹 폴백(단일 SSM 가정) /
-    # standalone. (링크 edges·원격 mesh 노드의 SSM별 분할은 routing 의 SSM별 미파싱이라 후속 — 현재
-    # 첫 그룹에만 얹는다. 실측 기준 구성은 SSM 1개라 영향 없음.)
+    # 그룹에 배치한다(멀티-SSM 정확). membership=None(Phase A)이면 첫 그룹 폴백(단일 SSM 가정).
+    # membership 가동 중(dict — 빈 dict 포함)이며 SSM 그룹이 있으면, 어느 SSM 에도 관측 귀속이
+    # 없는 RF 콘솔은 첫 그룹에 붙이지 않고 미귀속 standalone 그룹으로 분리한다 — '단일 SSM 가정'
+    # 폴백이 이웃 mesh 장비(예: 남의 SSM 의 REP)를 오배치해 체인로그 group 판정(같은 membership
+    # 원천)과 그래프가 갈라졌던 2026-07-06 실장비 회귀. 단 STM 콘솔은 무선 상관이 원천 불가라
+    # membership 부재가 증거가 아니다 — 같은 번호 SB 짝(ESP)이 배치된 그룹을 따라가고(pair-follow,
+    # 번호는 자체/카드페어링), 짝이 없으면 기존 첫 그룹 폴백을 유지한다(베이 STM 찢김 방지).
     group_by_ssm = {g["ssm_port"]: g for g in groups if g.get("ssm_port")}
     local_to_ssm = _local_port_to_ssm(membership)
+    strict = membership is not None and bool(ssms)
+    deferred_stm: list = []
+    orphans: list = []
     for d in others:
-        target = group_by_ssm.get(local_to_ssm.get(d["port"])) or groups[0]
+        target = group_by_ssm.get(local_to_ssm.get(d["port"]))
+        if target is None:
+            if d.get("mcu") == "STM":
+                deferred_stm.append(d)      # ESP 짝 배치가 끝난 뒤 pair-follow
+                continue
+            if strict:
+                orphans.append(d)
+                continue
+            target = groups[0]
         target["_members"].append(d)
+    for d in deferred_stm:
+        target = _pair_group(groups, d) or groups[0]
+        target["_members"].append(d)
+    if orphans:
+        groups.append({"id": f"g{len(groups) + 1}", "label": "(SSM 미관측)",
+                       "ssm_port": None, "kind": "standalone", "_members": orphans})
 
     token_map = routing.tokens() if routing is not None else {}
     unid_idx = _unid_index(token_map)                       # unid → (token, entry): mac/토큰 enrich

@@ -639,3 +639,53 @@ def test_build_roster_type_cache_upgrades_with_stronger_evidence():
     r2 = build_roster(manual, type_cache=cache)
     types = [n["type"] for n in r2["groups"][0]["nodes"]]
     assert types == ["SB"]                                    # manual(1.0) 이 signature(0.6) 교체
+
+
+def test_roster_membership_active_unmatched_rf_port_goes_unattributed():
+    # 2026-07-06 실장비 회귀: 이웃 mesh 의 REP(COM9)가 membership 관측 0인데 '첫 그룹 폴백'으로
+    # SSM 그룹에 편입 — 체인로그 group(멤버십 판정)과 그래프가 갈라졌다. membership 가동 중
+    # (엔진 — dict, 빈 dict 포함)이며 SSM 그룹이 있으면, 무관측 RF 콘솔은 미귀속 standalone
+    # 그룹으로 분리한다(관측만 그린다).
+    entries = [
+        {"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM13", "alias": "SB5-ESP", "lines": [], "connected": True},
+        {"port": "COM9", "alias": "REP1", "lines": [], "connected": True},
+    ]
+    membership = {"COM4": {5: {"device_type": "4", "local_port": "COM13", "last_ts": 1.0}}}
+    r = build_roster(entries, membership=membership)
+    assert len(r["groups"]) == 2
+    g1, g2 = r["groups"]
+    g1_ports = {p["port"] for n in g1["nodes"] for p in n["ports"]}
+    g2_ports = {p["port"] for n in g2["nodes"] for p in n["ports"]}
+    assert g1["ssm_port"] == "COM4" and g1_ports == {"COM4", "COM13"}
+    assert g2["kind"] == "standalone" and g2["ssm_port"] is None and g2_ports == {"COM9"}
+    assert r["unplaced"] == []
+
+
+def test_roster_membership_active_unmatched_stm_follows_sb_pair():
+    # STM 콘솔은 무선 상관이 원천 불가 — membership 부재가 '다른 mesh' 증거가 아니다.
+    # 같은 번호 SB 짝(ESP)이 배치된 그룹을 따라가 병합된다(미귀속으로 찢지 않는다).
+    entries = [
+        {"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM13", "alias": "SB5-ESP", "lines": [], "connected": True},
+        {"port": "COM12", "alias": "SB5-STM", "lines": [], "connected": True},
+    ]
+    membership = {"COM4": {5: {"device_type": "4", "local_port": "COM13", "last_ts": 1.0}}}
+    r = build_roster(entries, membership=membership)
+    assert len(r["groups"]) == 1
+    sb = [n for n in r["groups"][0]["nodes"] if n["type"] == "SB"]
+    assert len(sb) == 1
+    assert {p["port"] for p in sb[0]["ports"]} == {"COM12", "COM13"}
+
+
+def test_roster_membership_active_unpaired_stm_keeps_first_group_fallback():
+    # 번호 미상 STM(카드페어링 전)은 기존 첫 그룹 폴백 유지 — 부팅 직후 베이 STM 이
+    # 미귀속 그룹으로 찢기는 UX 회귀 방지(짝 관측이 생기면 pair-follow 가 우선).
+    entries = [
+        {"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM12", "alias": "SB-STM", "lines": [], "connected": True},
+    ]
+    r = build_roster(entries, membership={})
+    assert len(r["groups"]) == 1
+    ports = {p["port"] for n in r["groups"][0]["nodes"] for p in n["ports"]}
+    assert "COM12" in ports
