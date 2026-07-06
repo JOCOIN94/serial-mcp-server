@@ -240,7 +240,7 @@ class ChainLog:
                 return changed
             if ent.get("group") is None and group is not None:
                 ent["group"] = group
-            if direction and direction != ent.get("dir"):
+            if direction and direction != ent.get("dir") and not self._direction_locked(ent):
                 self._correct_direction(ent, direction)
 
         seen_key = (port, kind)
@@ -615,6 +615,22 @@ class ChainLog:
         ent["ok"] = None
         ent["confidence"] = None
         ent["rtt_ms"] = None
+
+    @staticmethod
+    def _direction_locked(ent: dict) -> bool:
+        """src 와 종단(dst/rx)이 모두 실포트 관측으로 채워진 항목은 방향이 기하로 확정된 것.
+
+        양단 관측 후의 방향 힌트는 새 정보가 아니라 오염일 확률이 높다 — 펌웨어 콘솔은
+        TX/RX 태스크가 줄 중간에 서로 끼어들어(interleave), 수신 JSON 이 송신 태그 뒤에
+        붙은 한 줄이 반대 방향 이벤트로 분류될 수 있다(2026-07-06 실장비: 완성된 상행
+        체인이 이런 줄 하나에 리셋돼 'SSM 단일 칩·미확정' 시체로 남았다). 한쪽 끝만 있는
+        항목은 잠그지 않는다 — down 오분류를 rx 관측이 up 으로 교정하는 계약은 유지.
+        """
+        has_src = any(n.get("role") == "src" and n.get("port") and not n.get("inferred")
+                      for n in ent["nodes"])
+        has_end = any(n.get("role") in ("dst", "rx") and n.get("port") and not n.get("inferred")
+                      for n in ent["nodes"])
+        return has_src and has_end
 
     def _rebuild_with_skeleton(self, ent: dict, skeleton: list[dict], dst_port: str,
                                port_names: Optional[dict], metrics: dict) -> None:

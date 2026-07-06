@@ -380,6 +380,52 @@ def test_rx_observation_corrects_active_down_misclassification():
     assert [n["role"] for n in corrected["nodes"]] == ["src", "dst"]
 
 
+def test_two_ended_chain_survives_late_opposite_direction_hint():
+    # 2026-07-06 실장비 리셋 사고 회귀: tx+rx 양단이 실포트 관측으로 채워진 체인은 방향이
+    # 기하로 확정된 것 — 같은 키를 실은 후행 반대 힌트 한 줄(콘솔 interleave 오염으로
+    # wifitx 분류된 수신 JSON 등)로 nodes/ok 를 리셋하지 않는다.
+    log = ChainLog(window_s=15)
+    log.observe(
+        ev("tx", "COM12", ts=1.0, unid=5, unique=23,
+           json_obj={"UnID": 5, "Unique": 23}),
+        scope={"COM12": "COM4"}, port_names={"COM12": "SB5"},
+    )
+    log.observe(
+        ev("rx", "COM4", ts=1.1, unid=5, unique=23, src_name="SB1", ms=61,
+           json_obj={"UnID": 5, "Unique": 23, "Rev": True, "Cidx": 1192}),
+        scope={"COM4": "COM4"}, port_names={"COM4": "SSM"},
+    )
+
+    # 오염 줄: '[Proc_WiFiTx] … To. SB1, {수신 JSON}' 병합 → kind wifitx(하행 힌트) + 같은 키.
+    log.observe(
+        ev("wifitx", "COM4", ts=2.0, unid=5, unique=23,
+           json_obj={"UnID": 5, "Unique": 23, "Rev": True, "Cidx": 1192}),
+        scope={"COM4": "COM4"}, port_names={"COM4": "SSM"},
+    )
+
+    entry = log.recent(1)[0]
+    assert entry["dir"] == "up"
+    assert [n["role"] for n in entry["nodes"]] == ["src", "dst"]
+    assert labels(entry) == ["SB5", "SSM"]
+
+
+def test_one_ended_entry_still_accepts_direction_correction():
+    # 가드의 경계: 한쪽 끝만 있는 항목(수신 관측 1개)은 여전히 교정 가능해야 한다 —
+    # down 오분류를 rx 관측이 up 으로 바로잡는 기존 계약(위 테스트)과 동일 원리.
+    log = ChainLog(window_s=15)
+    log.observe(
+        ev("wifirx", "COM12", ts=1.0, unid=5, unique=31, cidx=300,
+           json_obj={"UnID": 5, "REQRSSI": "REQ", "Unique": 31, "Cidx": 300}),
+        scope={"COM12": "COM4"}, port_names={"COM12": "SB5"},
+    )
+    corrected = log.observe(
+        ev("rx", "COM4", ts=1.1, unid=5, unique=31, cidx=300, src_name="SB1",
+           json_obj={"UnID": 5, "Unique": 31, "Rev": True, "Cidx": 300}),
+        scope={"COM4": "COM4"}, port_names={"COM4": "SSM"},
+    )[0]
+    assert corrected["dir"] == "up"
+
+
 def test_downlink_inferred_src_is_public_only_and_handles_unknown_group():
     log = ChainLog(window_s=10)
     entry = log.observe(
