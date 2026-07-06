@@ -672,6 +672,12 @@ def _chain_publishable(chain: dict, has_line=None) -> bool:
     단, 후행 송신 증거로 src 가 추론→관측 승격된 경우는 새 증거이므로 True 로 단조 갱신한다.
     """
     cid = chain.get("id")
+    if not (chain.get("nodes") or []) and not chain.get("route_plan"):
+        # nodes 없는 Cidx ACK 시체는 viewer/get_topology 에서 '발신 미상' 노이즈만 만든다.
+        # CHPLAN intent(route_plan)는 의미가 있으므로 이 차단에서 제외한다.
+        if cid is not None:
+            _chain_gate[cid] = False
+        return False
     cached = _chain_gate.get(cid)
     if cached is True:
         return True

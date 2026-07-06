@@ -494,6 +494,10 @@ class ChainLog:
 
     def _observe_rx(self, ent: dict, ev: dict, resolver, port_names: Optional[dict]) -> None:
         port = ev.get("port")
+        if ent.get("dir") == "down" and port is not None and port == ent.get("group"):
+            # 하행에서 group 포트는 송신측 SSM이다. 같은 SSM 콘솔에 후속 echo/RX가 잡혀도
+            # 목적지로 추가하면 SSM -> ... -> SSM 루프가 생긴다.
+            return
         hints = ev.get("hints") or {}
         metrics = ev.get("metrics") or {}
         skeleton = _parse_passed(hints.get("passed"))

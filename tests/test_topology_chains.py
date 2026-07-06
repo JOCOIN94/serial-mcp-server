@@ -203,6 +203,42 @@ def test_downlink_wifitx_to_wifirx_accumulates_receivers():
     assert second["confidence"] == "observed"
 
 
+def test_downlink_group_port_rx_echo_does_not_append_trailing_dst():
+    # 실측 2026-07-06: SSM 하행 ACK가 REPEAT/SB를 거친 뒤 같은 SSM 포트에 echo로
+    # 다시 잡히면, 체인 로그가 SSM -> REPEAT -> SB5 -> SSM 루프로 보이면 안 된다.
+    log = ChainLog(window_s=10)
+    names = {"COM4": "SSM", "COM9": "REPEAT", "COM13": "SB5"}
+    raw = '{"UnID":5,"Stat":"OK","Asn":22,"Cidx":602}'
+
+    log.observe(
+        ev("wifirx", "COM13", ts=1.0, unique=None, cidx=602,
+           raw_lines=[f"[WiFi_Rx] {raw}"],
+           json_obj={"UnID": 5, "Stat": "OK", "Asn": 22, "Cidx": 602}),
+        scope={"COM13": "COM4"},
+        port_names=names,
+    )
+    log.observe(
+        ev("pass", "COM9", ts=1.1, unique=None, cidx=602,
+           raw_lines=[f"[Data_Pass] {raw}"],
+           json_obj={"UnID": 5, "Stat": "OK", "Asn": 22, "Cidx": 602}),
+        scope={"COM9": "COM4"},
+        port_names=names,
+    )
+    assert log.observe(
+        ev("rx", "COM4", ts=1.2, unique=None, cidx=602,
+           raw_lines=[f'[Proc-WiFiRx] {raw}'],
+           json_obj={"UnID": 5, "Stat": "OK", "Asn": 22, "Cidx": 602}),
+        scope={"COM4": "COM4"},
+        port_names=names,
+    ) == []
+    entry = log.recent(1)[0]
+
+    assert labels(entry) == ["COM4", "REPEAT", "SB5"]
+    assert [n["role"] for n in entry["nodes"]] == ["src", "relay", "rx"]
+    assert entry["nodes"][0]["inferred"] is True
+    assert all(n.get("port") != "COM4" or n.get("role") == "src" for n in entry["nodes"])
+
+
 def test_wifirx_reqrsssi_request_is_downlink_receiver_not_heard():
     log = ChainLog(window_s=10)
 

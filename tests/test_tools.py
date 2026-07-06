@@ -283,10 +283,12 @@ def test_viewer_topology_info_includes_chain_seed(monkeypatch, dual):
     class FakeTopologyEngine:
         def roster_and_recent_hops(self, entries, now=None, n=20, chains_n=0):
             self.chains_n = chains_n
+            chain = {"id": 7, "key": ["u", 5, 9],
+                     "nodes": [{"role": "src", "port": "COM_A", "inferred": False}]}
             return {
                 "groups": [{"id": "group:SSM"}],
                 "unplaced": [],
-            }, [], [{"id": 7, "key": ["u", 5, 9], "nodes": []}]
+            }, [], [chain]
 
     engine = FakeTopologyEngine()
     monkeypatch.setattr(srv, "_topology_engine", engine, raising=False)
@@ -294,7 +296,8 @@ def test_viewer_topology_info_includes_chain_seed(monkeypatch, dual):
     out = srv._viewer_topology_info()
 
     assert out["groups"] == [{"id": "group:SSM"}]
-    assert out["chains"] == [{"id": 7, "key": ["u", 5, 9], "nodes": []}]
+    assert out["chains"] == [{"id": 7, "key": ["u", 5, 9],
+                              "nodes": [{"role": "src", "port": "COM_A", "inferred": False}]}]
     assert engine.chains_n == 200
 
 
@@ -654,6 +657,17 @@ def test_chain_gate_keeps_portless_inferred_src(monkeypatch):
         {"role": "src", "port": None, "inferred": True},
         {"role": "rx", "port": "COM12", "inferred": False},
     ]), has_line=lambda p, ns: False) is True
+
+
+def test_chain_gate_suppresses_empty_ack_noise_but_keeps_route_plan(monkeypatch):
+    # nodes 없는 Cidx ACK 시체는 viewer/get_topology 에서 '발신 미상' 노이즈만 만든다.
+    # CHPLAN intent(route_plan) 행은 의미가 있으므로 별도 UX 결정 전까지 유지한다.
+    monkeypatch.setattr(srv, "_chain_gate", {})
+    empty_ack = _chain(id=31, nodes=[], needle='{"UnID":5,"Stat":"OK","Asn":22}')
+    assert srv._chain_publishable(empty_ack, has_line=lambda p, ns: True) is False
+
+    route_plan = {**empty_ack, "id": 32, "route_plan": {"version": 1, "tokens": ["7C"]}}
+    assert srv._chain_publishable(route_plan, has_line=lambda p, ns: True) is True
 
 
 def test_chain_gate_decision_is_sticky_per_id(monkeypatch):

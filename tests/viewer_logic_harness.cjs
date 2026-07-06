@@ -378,6 +378,13 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   ] }, {}).chips;
   eq(jchips[0].jumpable, false, "chain-chip-jumpable-false-passthrough");
   eq(jchips[1].jumpable, true, "chain-chip-jumpable-default-true");
+  const noLoop = SV.chainRow({ id: 15, key: ["c", 5, 602], nodes: [
+    { name: null, port: "COM4", role: "src", resolved: true, inferred: true },
+    { name: "COM9", port: "COM9", role: "relay", resolved: true },
+    { name: "COM13", port: "COM13", role: "rx", resolved: true },
+  ] }, { COM4: "SSM", COM9: "REPEAT", COM13: "SB5" });
+  eq(noLoop.chips.map(c => c.label).join(">"), "SSM>REPEAT>SB5", "chain-row-no-duplicate-ssm-labels");
+  eq(noLoop.chips.map(c => c.jumpable).join(","), "true,true,true", "chain-row-no-loop-jumpable-default");
   // chainTsLabel — 첫 관측 epoch s → 로컬 HH:MM:SS(포트 로그 거터와 동일 표기)
   ok(/^\d{2}:\d{2}:\d{2}$/.test(SV.chainTsLabel(1700000000)), "chain-ts-label-format");
   eq(SV.chainTsLabel(null), "", "chain-ts-label-null-empty");
