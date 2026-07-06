@@ -845,6 +845,49 @@ def test_downlink_pass_then_listen_does_not_confirm_arrival():
     assert entry["ok"] is None and entry["confidence"] is None
 
 
+def test_downlink_observed_rx_merges_into_inferred_rx_node():
+    # 2026-07-06 실장비 회귀(SSM ▸ SB1 SB1): 제3 포트 청취(heard)가 추론 rx 를 먼저 만들고,
+    # 그 뒤 진짜 목적지 포트의 [WiFi_Rx] 관측이 오면 같은 메시지의 목적지 노드를 새로
+    # append 하지 않고 추론 rx 를 관측본으로 승격해야 한다(rx 노드는 항상 1개).
+    log = ChainLog(window_s=10)
+    resolver = Resolver({"05": {"name": "SB1", "mac": None, "unid": 5}})
+    idents = {"COM9": "10:06:1C:16:97:AC", "COM13": 5}
+    obj = {"UnID": 5, "Stat": "OK", "Asn": 27, "Cidx": 544}
+    log.observe(ev("wifirx", "COM9", ts=1.0, unid=5, unique=None, cidx=544, json_obj=obj),
+                port_idents=idents, resolver=resolver)
+    entry = log.observe(ev("wifirx", "COM13", ts=1.1, unid=5, unique=None, cidx=544,
+                           json_obj=obj),
+                        port_idents=idents, port_names={"COM13": "SB1"}, resolver=resolver)[0]
+
+    rx = [n for n in entry["nodes"] if n.get("role") == "rx"]
+    assert len(rx) == 1
+    assert rx[0]["port"] == "COM13" and rx[0]["inferred"] is False
+    assert rx[0]["name"] == "SB1" and rx[0]["ident_only"] is False
+    assert entry["heard"] == ["COM9"]
+    assert entry["ok"] is True and entry["confidence"] == "observed"
+    assert_public(entry)
+
+
+def test_downlink_observed_rx_merge_replaces_raw_mac_ident_display():
+    # 2026-07-06 실장비 회귀(SSM ▸ …97:AC REPEAT): mac ident 추론 rx(raw mac 표기) 뒤에
+    # 그 장비 포트의 관측이 오면 병합되어 mac 텍스트 노드가 남지 않아야 한다.
+    log = ChainLog(window_s=10)
+    idents = {"COM9": "10:06:1C:16:97:AC", "COM13": 5}
+    obj = {"RTC": [4, 23, 17, 6, 7, 2026], "CHANNEL": "11", "INFO": "REQ",
+           "Mac": "10,06,1C,16,97,AC"}
+    log.observe(ev("wifirx", "COM13", ts=1.0, unid=None, unique=None, cidx=322,
+                   mac="10:06:1C:16:97:AC", json_obj=obj), port_idents=idents)
+    entry = log.observe(ev("wifirx", "COM9", ts=1.1, unid=None, unique=None, cidx=322,
+                           mac="10:06:1C:16:97:AC", json_obj=obj), port_idents=idents)[0]
+
+    rx = [n for n in entry["nodes"] if n.get("role") == "rx"]
+    assert len(rx) == 1
+    assert rx[0]["port"] == "COM9" and rx[0]["inferred"] is False
+    assert rx[0]["ident_only"] is False
+    assert entry["heard"] == ["COM13"]
+    assert entry["ok"] is True and entry["confidence"] == "observed"
+
+
 def test_downlink_inferred_rx_resolves_name_from_token_map():
     # 추론 목적지 ident 가 토큰맵으로 해소되면 이름을 붙인다(여전히 inferred=True — dim 표시).
     log = ChainLog(window_s=10)

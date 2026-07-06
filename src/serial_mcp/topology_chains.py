@@ -577,8 +577,23 @@ class ChainLog:
             return
         existing = self._find_by_port(ent, port)
         if existing is None:
-            ent["nodes"].append(_node(name=_name_for_port(port, port_names), port=port,
-                                      role="rx", resolved=True))
+            inferred_rx = next((n for n in ent["nodes"]
+                                if n.get("role") == "rx" and n.get("inferred")
+                                and not n.get("port")), None)
+            if inferred_rx is not None:
+                # 제3 포트 청취(heard)가 만든 추론 rx 를 관측본으로 승격 — 같은 메시지의
+                # 목적지 노드를 두 개 만들지 않는다(2026-07-06 실장비 회귀: SSM ▸ SB1 SB1,
+                # SSM ▸ mac REPEAT). 여기 도달했다면 port ident 는 항목 ident 와 같거나
+                # 미상이므로(위 mismatch 분기에서 걸러짐) 이 포트가 곧 그 목적지다.
+                inferred_rx["port"] = port
+                if inferred_rx.get("ident_only") or not inferred_rx.get("name"):
+                    inferred_rx["name"] = _name_for_port(port, port_names)
+                inferred_rx["inferred"] = False
+                inferred_rx["resolved"] = True
+                inferred_rx["ident_only"] = False
+            else:
+                ent["nodes"].append(_node(name=_name_for_port(port, port_names), port=port,
+                                          role="rx", resolved=True))
         elif existing.get("role") not in ("rx", "dst"):
             # 같은 포트가 이미 src/relay — 이 수신은 도착이 아니라 중계 경로의 청취다
             # (pass 가 먼저 관측된 역순). 도착 확정 금지, 목적지는 키 ident 로 추론 표시.
