@@ -249,8 +249,10 @@ body {
 /* ===== 좌측 네비게이션 (세션 + 포트 상태) ===== */
 #nav {
   /* 폭은 --navw(스플리터 드래그·localStorage 복원)로 조절 — clamp 가 창 크기 변화에도
-     최소 300px·최대 65vw 를 보장해 별도 resize 리스너 없이 반응형이 된다. */
-  flex: 0 0 clamp(300px, var(--navw, 420px), 65vw); box-sizing: border-box;
+     최소 230px·최대 65vw 를 보장해 별도 resize 리스너 없이 반응형이 된다.
+     230px = 체인로그 경로 블록이 둘째 줄로 내려간 상태에서 2칩 체인(SB▸SSM▸)이
+     최소 칩폭(64px)으로 온전히 보이는 하한. */
+  flex: 0 0 clamp(230px, var(--navw, 420px), 65vw); box-sizing: border-box;
   position: sticky; top: 0; align-self: flex-start; height: 100vh; overflow-y: auto;
   background: var(--bg-raised); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 11px; padding: 10px;
@@ -647,7 +649,9 @@ kbd {
 .tch-follow.on { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
 .tch-gno { font: 700 9px var(--ui); color: var(--muted); border: 1px solid var(--border-2); border-radius: 4px; padding: 0 4px; flex: none; white-space: nowrap; }
 .thd-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.thd-path { display: flex; flex-wrap: nowrap; align-items: center; gap: 3px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+/* basis=min-content: 줄 배정이 '칩을 64px 까지 압축한 폭' 기준이 된다 — 칩이 다 압축돼도
+   마지막 점프 버튼(▸)이 잘리기 직전에야 경로 블록이 통째로 둘째 줄로 내려간다. */
+.thd-path { display: flex; flex-wrap: nowrap; align-items: center; gap: 3px; min-width: 0; flex: 1 1 min-content; overflow: hidden; }
 .thd-chip { font: 600 11px var(--ui); background: var(--bg-raised); border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 6px; min-width: 64px; max-width: 120px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 점프 버튼 — 텍스트 글리프가 아니라 눌리는 버튼으로: 패딩으로 히트 영역 확보 + hover 배경 */
 .thd-jump { flex: none; padding: 1px 6px; border: 0; background: none; color: var(--accent);
@@ -659,7 +663,7 @@ kbd {
 .tch-row:hover { background: var(--bg-hover); }
 .tch-ts { font: 10.5px var(--mono); color: #333b46; font-variant-numeric: tabular-nums; flex: none; white-space: nowrap; }
 .tch-row.ts-new .tch-ts { color: var(--fg-bright); }
-.tch-head { display: flex; align-items: center; gap: 6px; min-width: 0; width: 100%; }
+.tch-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; min-width: 0; width: 100%; }
 .tch-enter { animation: tchEnter .15s ease-out; }
 @keyframes tchEnter {
   from { opacity: 0; transform: translateY(4px); }
@@ -1908,7 +1912,7 @@ window.SVScroll = (function () {
 })();
 
 /* ── 사이드바 폭 조절 스플리터 ──
-   드래그 → --navw 갱신(px). 실제 폭 제한은 CSS clamp(300px..65vw)가 담당하므로 여기선
+   드래그 → --navw 갱신(px). 실제 폭 제한은 CSS clamp(230px..65vw)가 담당하므로 여기선
    클램프하지 않고, 저장은 clamp 반영된 실제 폭(getComputedStyle)으로 한다. 더블클릭 = 초기화. */
 (function () {
   const KEY = "smcp.navw";
