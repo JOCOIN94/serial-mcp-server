@@ -2,7 +2,7 @@
 
 import pytest
 
-from serial_mcp.topology_chains import ChainLog
+from serial_mcp.topology_chains import ChainLog, annotate_chain_groups
 
 
 def ev(kind, port="COM1", ts=1.0, unid=5, unique=9, cidx=None,
@@ -858,3 +858,58 @@ def test_downlink_inferred_rx_resolves_name_from_token_map():
     rx = [n for n in entry["nodes"] if n.get("role") == "rx"]
     assert len(rx) == 1
     assert rx[0]["name"] == "SB1" and rx[0]["resolved"] is True and rx[0]["inferred"] is True
+
+
+# ---- 2026-07-06 사용자 원칙: 체인로그↔그래프 동일 정보(그룹 판정 단일 원천·raw ident 숨김) ----
+
+def test_inferred_ident_nodes_carry_ident_only_flag():
+    # 추론 노드의 raw ident("UnID n"·mac)는 장비명이 아니라 표기 가치가 없다 — ident_only=True 로
+    # 표시해 뷰어가 "?" 칩으로 그린다. 토큰맵으로 장비명이 해소된 경우만 ident_only=False(이름 표기).
+    log = ChainLog(window_s=10)
+    log.observe(ev("wifirx", "COMR", ts=1.0, unid=1, unique=None, cidx=463,
+                   json_obj={"UnID": 1, "Stat": "OK", "Asn": 6, "Cidx": 463}))
+    entry = log.observe(ev("pass", "COMR", ts=1.1, unid=1, unique=None, cidx=463,
+                           json_obj={"UnID": 1, "Stat": "OK", "Asn": 6, "Cidx": 463}))[0]
+    rx = [n for n in entry["nodes"] if n.get("role") == "rx"][0]
+    assert rx["name"] == "UnID 1" and rx["ident_only"] is True
+
+    resolver = Resolver({"01": {"name": "SB1", "mac": None, "unid": 1}})
+    log2 = ChainLog(window_s=10)
+    log2.observe(ev("wifirx", "COMR", ts=1.0, unid=1, unique=None, cidx=463,
+                    json_obj={"UnID": 1, "Stat": "OK", "Asn": 6, "Cidx": 463}), resolver=resolver)
+    entry2 = log2.observe(ev("pass", "COMR", ts=1.1, unid=1, unique=None, cidx=463,
+                             json_obj={"UnID": 1, "Stat": "OK", "Asn": 6, "Cidx": 463}),
+                          resolver=resolver)[0]
+    rx2 = [n for n in entry2["nodes"] if n.get("role") == "rx"][0]
+    assert rx2["name"] == "SB1" and rx2["ident_only"] is False
+
+    # 상행 heard-only 의 mac ident 추론 src 도 raw ident — ident_only=True.
+    m = ChainLog(window_s=10).observe(
+        ev("wifirx", "COM2", ts=1.0, unid=None, unique=44, mac="A0:85:E3:EA:5C:C4"))[0]
+    src = m["nodes"][0]
+    assert src["name"] == "A0:85:E3:EA:5C:C4" and src["ident_only"] is True
+
+
+def test_annotate_chain_groups_matches_roster_judgment():
+    # 체인 group 배지는 로스터(그래프) 그룹 판정과 같은 원천이어야 한다 — 사람(뷰어)과
+    # AI(get_topology)가 같은 것을 봐야 도구 오용·백엔드 오제공을 발견할 수 있다.
+    # 규칙: 노드 실포트가 전부 한 그룹이면 그 그룹(SSM=ssm_port, 미귀속=그룹 id), 아니면 None.
+    roster = {"groups": [
+        {"id": "g1", "ssm_port": "COM4",
+         "nodes": [{"ports": [{"port": "COM4"}]}, {"ports": [{"port": "COM13"}]}]},
+        {"id": "g2", "ssm_port": None, "nodes": [{"ports": [{"port": "COM9"}]}]},
+    ]}
+    chains = [
+        {"id": 1, "group": None, "nodes": [{"port": "COM9"}, {"port": None}]},
+        {"id": 2, "group": None, "nodes": [{"port": "COMX"}]},
+        {"id": 3, "group": "COM4", "nodes": [{"port": "COM13"}]},
+        {"id": 4, "group": None, "nodes": [{"port": "COM9"}, {"port": "COM4"}]},
+        {"id": 5, "group": None, "nodes": [{"port": None}]},
+    ]
+    out = annotate_chain_groups(chains, roster)
+    assert out[0]["group"] == "g2"      # 미귀속 그룹 — 그룹 id 로 부여
+    assert out[1]["group"] is None      # 로스터 밖 포트 — 판정 불가 유지
+    assert out[2]["group"] == "COM4"    # 기존 판정 보존
+    assert out[3]["group"] is None      # 그룹 걸침 — 모호
+    assert out[4]["group"] is None      # 실포트 없음
+    assert chains[0]["group"] is None   # 원본 불변(사본 반환)

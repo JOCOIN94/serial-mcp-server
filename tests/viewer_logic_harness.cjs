@@ -315,6 +315,14 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   const mac = SV.chainRow({ nodes: [{ name: "A0:85:E3:EA:5C:C4", port: null, role: "src", resolved: true }] });
   eq(mac.chips[0].label, "…5C:C4", "chain-row-mac-shortened");
   ok(mac.chips[0].title.indexOf("A0:85:E3:EA:5C:C4") === 0, "chain-row-mac-full-in-title");
+  // ident_only(raw ident: "UnID n"·mac) — 장비명이 아니라 칩은 "?"만, 원값은 툴팁으로.
+  const identOnly = SV.chainRow({ nodes: [{ name: "UnID 1", port: null, role: "rx", resolved: false, inferred: true, ident_only: true }] });
+  eq(identOnly.chips[0].label, "?", "chain-row-ident-only-question");
+  ok(identOnly.chips[0].title.indexOf("UnID 1") >= 0, "chain-row-ident-only-title");
+  eq(identOnly.chips[0].dim, true, "chain-row-ident-only-dim");
+  const identMac = SV.chainRow({ nodes: [{ name: "58:BF:25:A0:02:34", port: null, role: "rx", resolved: true, inferred: true, ident_only: true }] });
+  eq(identMac.chips[0].label, "?", "chain-row-ident-only-mac-question");
+  ok(identMac.chips[0].title.indexOf("58:BF:25:A0:02:34") >= 0, "chain-row-ident-only-mac-title");
 }
 
 /* C-2. portLabelMap/chainRows: flat log list, group number badge, oldest-to-newest. */
@@ -337,6 +345,17 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   eq(rows[1].groupNo, null, "chain-rows-unclassified-null");
   eq(rows[3].groupNo, 2, "chain-rows-group-no-second");
   eq(SV.chainRows(null, null).length, 0, "chain-rows-null-safe");
+  // group 미판정 체인 — 노드 실포트가 전부 한 그룹이면 그 그룹 번호로 파생(그래프와 동일
+  // 판정, 2026-07-06 사용자 원칙). 그룹 걸침·로스터 밖 포트는 "—"(null) 유지.
+  const groups2 = groups.concat([{ id: "g3", ssm_port: null, nodes: [{ label: "REPEAT", ports: [{ port: "COM77" }] }] }]);
+  const rows2 = SV.chainRows([
+    { id: 7, group: null, nodes: [{ port: "COM77" }, { port: null, name: "UnID 1" }] },
+    { id: 8, group: null, nodes: [{ port: "COM77" }, { port: "COM4" }] },
+    { id: 9, group: null, nodes: [{ port: "COM9" }] },
+  ], groups2);
+  eq(rows2[0].groupNo, 3, "chain-rows-derive-standalone-group");
+  eq(rows2[1].groupNo, null, "chain-rows-derive-cross-group-null");
+  eq(rows2[2].groupNo, 2, "chain-rows-derive-ssm-group");
 }
 
 /* C-3. shortPortLabel: macOS 장치 경로 축약(접두사 제거→꼬리 5자), COMx 불변 + chainRow 점프 필드. */

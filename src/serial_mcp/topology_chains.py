@@ -96,7 +96,7 @@ def _name_for_port(port: Optional[str], port_names: Optional[dict]) -> Optional[
 
 
 def _node(name=None, port=None, role="relay", resolved=True, rssi=None, ms=None,
-          inferred=False) -> dict:
+          inferred=False, ident_only=False) -> dict:
     return {
         "name": name,
         "port": port,
@@ -105,11 +105,52 @@ def _node(name=None, port=None, role="relay", resolved=True, rssi=None, ms=None,
         "ms": ms,
         "resolved": bool(resolved),
         "inferred": bool(inferred),
+        # raw ident 표기(mac·"UnID n" — 장비명 아님): 뷰어는 "?" 칩으로 그리고 원값은
+        # 툴팁으로만 보인다(체인로그·그래프 동일 정보 원칙, 2026-07-06 사용자 결정).
+        "ident_only": bool(ident_only),
     }
 
 
 def _node_label(n: dict) -> Optional[str]:
     return n.get("name") or n.get("port")
+
+
+def annotate_chain_groups(chains: list, roster: dict) -> list:
+    """group 미판정(None) 체인에 로스터(그래프) 그룹 판정을 부여한 사본을 돌려준다.
+
+    체인로그와 그래프는 항상 같은 그룹 판정을 보여야 한다 — 사람(뷰어)과 AI(get_topology)가
+    같은 것을 봐야 도구 오용·백엔드 오제공을 발견할 수 있다(2026-07-06 사용자 원칙).
+    규칙(뷰어 chainRows 의 파생 규칙과 동일): 체인 노드의 실포트가 전부 한 로스터 그룹에
+    속하면 그 그룹을 group 으로 채운다 — SSM 그룹은 ssm_port(기존 scope 값과 동형),
+    미귀속 standalone 그룹은 그룹 id("g2" 등). 실포트가 없거나, 로스터 밖 포트가 섞이거나,
+    여러 그룹에 걸치면 None 유지(뷰어 "—"). 이미 판정된 group 은 보존한다.
+    """
+    port_to_ref: dict = {}
+    for g in (roster or {}).get("groups") or []:
+        ref = g.get("ssm_port") or g.get("id")
+        for n in g.get("nodes") or []:
+            for p in n.get("ports") or []:
+                if p.get("port"):
+                    port_to_ref[p["port"]] = ref
+    out = []
+    for chain in chains or []:
+        item = dict(chain)
+        if item.get("group") is None:
+            refs = set()
+            blocked = False
+            for n in item.get("nodes") or []:
+                port = n.get("port")
+                if not port:
+                    continue
+                ref = port_to_ref.get(port)
+                if ref is None:
+                    blocked = True      # 로스터 밖 포트 — 판정 불가(모호를 그룹으로 굳히지 않는다)
+                    break
+                refs.add(ref)
+            if not blocked and len(refs) == 1:
+                item["group"] = next(iter(refs))
+        out.append(item)
+    return out
 
 
 def _parse_passed(passed: Optional[str]) -> list[dict]:
@@ -562,6 +603,7 @@ class ChainLog:
         if ent.get("key", (None,))[0] != "u" or self._src(ent) is not None:
             return
         ident = ent["key"][1]
+        ident_only = True                                # 기본: raw ident(mac/"UnID n") — 뷰어 "?" 표기
         if isinstance(ident, str):                       # mac ident
             name, resolved = ident, True
         else:
@@ -570,10 +612,11 @@ class ChainLog:
             except (TypeError, ValueError):
                 hit = None
             if hit and hit.get("name"):
-                name, resolved = hit["name"], True
+                name, resolved, ident_only = hit["name"], True, False   # 장비명 해소 — 이름 표기
             else:
                 name, resolved = f"UnID {ident}", False
-        ent["nodes"].insert(0, _node(name=name, role="src", resolved=resolved, inferred=True))
+        ent["nodes"].insert(0, _node(name=name, role="src", resolved=resolved, inferred=True,
+                                     ident_only=ident_only))
 
     def _ensure_ident_rx(self, ent: dict, resolver) -> None:
         if any(n.get("role") in ("rx", "dst") for n in ent.get("nodes", [])):
@@ -581,6 +624,7 @@ class ChainLog:
         ident = self._entry_ident(ent)
         if ident is None:
             return
+        ident_only = True                                # 기본: raw ident(mac/"UnID n") — 뷰어 "?" 표기
         if isinstance(ident, str):
             name, resolved = ident, True
         else:
@@ -589,10 +633,11 @@ class ChainLog:
             except (TypeError, ValueError):
                 hit = None
             if hit and hit.get("name"):
-                name, resolved = hit["name"], True
+                name, resolved, ident_only = hit["name"], True, False   # 장비명 해소 — 이름 표기
             else:
                 name, resolved = f"UnID {ident}", False
-        ent["nodes"].append(_node(name=name, role="rx", resolved=resolved, inferred=True))
+        ent["nodes"].append(_node(name=name, role="rx", resolved=resolved, inferred=True,
+                                  ident_only=ident_only))
 
     @staticmethod
     def _demote_unobserved_arrival(ent: dict) -> None:

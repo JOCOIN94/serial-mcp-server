@@ -1384,7 +1384,12 @@ function chainRow(entry, labels) {
     var label = (port && labels && labels[port]) || n.name || port || "?";
     var title = [];
     if (n.name && n.name !== label) title.push(n.name);
-    if (_RE_MAC_LABEL.test(label)) {          // mac ident(BayID=0) — 칩엔 뒤 2옥텟만, 전체는 툴팁
+    if (n.ident_only && !(port && labels && labels[port])) {
+      // raw ident(mac·"UnID n") — 장비명이 아니라 구분 가치가 없다(2026-07-06 사용자 결정):
+      // 칩은 "?" 로만 그리고 원값은 툴팁으로 남긴다(get_topology 의 name 과 같은 정보).
+      title.unshift(label);
+      label = "?";
+    } else if (_RE_MAC_LABEL.test(label)) {   // mac ident(BayID=0) — 칩엔 뒤 2옥텟만, 전체는 툴팁
       title.unshift(label);
       label = "…" + label.slice(-5);
     } else if (port && label === port && shortPortLabel(port) !== port) {
@@ -1431,15 +1436,36 @@ function chainRows(chains, groups) {
   // 단일 로그 리스트(id 오름차순=오래된 위). groupNo 는 로스터 groups 배열 순번(그래프의
   // "그룹 N"과 동일 원천) — 행 맨 앞 뱃지로 소속 그룹을 표기한다. 미귀속은 null.
   var cs = chains || [], gs = groups || [];
-  var portLabels = portLabelMap(gs), groupNo = {};
+  var portLabels = portLabelMap(gs), groupNo = {}, portGroupNo = {};
   for (var i = 0; i < gs.length; i++) {
     var g = gs[i] || {}, key = g.ssm_port || g.id;
     if (key && groupNo[key] == null) groupNo[key] = i + 1;
+    var gnodes = g.nodes || [];
+    for (var n2 = 0; n2 < gnodes.length; n2++) {
+      var gports = (gnodes[n2] && gnodes[n2].ports) || [];
+      for (var p2 = 0; p2 < gports.length; p2++) {
+        if (gports[p2] && gports[p2].port) portGroupNo[gports[p2].port] = i + 1;
+      }
+    }
   }
   var out = [];
   for (var j = 0; j < cs.length; j++) {
     var row = chainRow(cs[j], portLabels);
     row.groupNo = row.group != null && groupNo[row.group] != null ? groupNo[row.group] : null;
+    if (row.groupNo == null) {
+      // group 미판정 — 노드 실포트가 전부 한 로스터 그룹이면 그 그룹 번호로 파생한다.
+      // 그래프와 체인로그는 같은 그룹 판정을 보여야 한다(2026-07-06 사용자 원칙 —
+      // 백엔드 annotate_chain_groups 와 동일 규칙). 걸침·로스터 밖 포트는 "—" 유지.
+      var derived = null, mixed = false;
+      for (var c2 = 0; c2 < row.chips.length; c2++) {
+        var cp = row.chips[c2].port;
+        if (!cp) continue;
+        var gno = portGroupNo[cp];
+        if (gno == null || (derived != null && derived !== gno)) { mixed = true; break; }
+        derived = gno;
+      }
+      if (!mixed && derived != null) row.groupNo = derived;
+    }
     out.push(row);
   }
   out.sort(function (a, b) { return (Number(a.id) || 0) - (Number(b.id) || 0); });

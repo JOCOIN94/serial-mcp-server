@@ -52,6 +52,7 @@ from .ports import (
 )
 from .ring_buffer import LineBuffer
 from .topology import build_roster, classify_device, port_labels
+from .topology_chains import annotate_chain_groups
 from .topology_engine import TopologyEngine
 from .viewer_feed import RawFeed
 from .web_viewer import ViewerServer
@@ -1229,7 +1230,10 @@ def get_topology(chains: int = 20, ctx: Optional[Context] = None) -> dict:
     [무엇을 반환] roster 는 현재 포트 로그와 routing 관측으로 만든 그룹/노드/엣지
     구조이고, recent_hops 는 최근 20개 실제 경로 후보/성공/실패/미확정 요약이다.
     recent_chains 는 같은 메시지 키의 관측을 병합한 최근 체인 로그다. 각 node.label 은
-    port 가 있으면 roster 라벨을 우선해 붙인다. 단 **송신측 콘솔에 증거가 없는 무선
+    port 가 있으면 roster 라벨을 우선해 붙인다. 체인 group 은 로스터 그룹 판정과 단일
+    원천이다(SSM 그룹=ssm_port, 미귀속 standalone=roster 그룹 id, 판정 불가=null) —
+    웹 뷰어의 "그룹 N" 배지와 항상 같은 값이니 뷰어와 다르게 읽었다면 오독이다. 노드의
+    ident_only=true 는 name 이 장비명이 아닌 raw ident(mac·"UnID n")라는 뜻이다(뷰어는 "?"로 표기). 단 **송신측 콘솔에 증거가 없는 무선
     통신은 recent_chains 에 싣지 않는다** — 일부 펌웨어는 특정 TX(예: SSM 의
     CHPLAN/REQRSSI)를 콘솔에 출력하지 않으므로, 수신 로그가 보이는데 체인에 없다고
     버그로 판단하지 마라(콘솔 텍스트로 대조 가능한 통신만 담는 설계).
@@ -1264,6 +1268,9 @@ def get_topology(chains: int = 20, ctx: Optional[Context] = None) -> dict:
         roster, recent_hops, recent_chains = {"groups": [], "unplaced": []}, [], []
 
     recent_chains = [c for c in recent_chains if _chain_publishable(c)]   # 발행 게이트(뷰어와 동일)
+    # 그룹 판정 단일 원천: 뷰어 chainRows 의 파생 규칙과 동일하게 로스터 그룹을 부여한다 —
+    # 사람(뷰어 "그룹 N" 배지)과 AI(이 group 필드)가 같은 판정을 봐야 한다(2026-07-06).
+    recent_chains = annotate_chain_groups(recent_chains, roster)
     recent_chains = _enrich_chain_labels(recent_chains, roster)
     groups = roster.get("groups", []) if isinstance(roster, dict) else []
     return {
