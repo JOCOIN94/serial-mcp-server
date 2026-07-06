@@ -477,3 +477,44 @@ def test_direct_tx_rx_chain_remains_two_nodes_without_pass_events():
 
     assert [n["role"] for n in chain["nodes"]] == ["src", "dst"]
     assert [n["port"] for n in chain["nodes"]] == ["COM14", "COM4"]
+
+
+def test_downlink_chplan_route_tx_promotes_observed_src_pipeline_without_peer_edge():
+    # 합성 — SSM_esp32.ino:6499 printf 형식 유래, 배포 세대 문구 실측 미확인.
+    tx_line = "[Route] CHPLAN to 80,7D,3A,82,5A,AC A=7C B=02"
+    rx_line = '[WiFi_Rx] {"CHPLAN":[2,["7C","02"],4,30,0],"Asn":6,"UnID":1,"Cidx":297}'
+    eng = TopologyEngine()
+
+    eng.observe("COM4", 1.0, tx_line)
+    eng.observe("COM12", 1.1, rx_line)
+
+    chain = next(c for c in eng.recent_chains(10) if c["key"] == ["c", 1, 297])
+    src = next(n for n in chain["nodes"] if n["role"] == "src")
+    assert chain["dir"] == "down"
+    assert src["port"] == "COM4"
+    assert src["inferred"] is False
+    assert chain["needle"] == tx_line
+    assert chain["route_plan"]["tokens"] == ["7C", "02"]
+
+    entries = [
+        {"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM12", "alias": "SB1", "lines": [], "connected": True},
+    ]
+    roster = eng.roster(entries, now=2.0)
+    edges = [edge for group in roster["groups"] for edge in group.get("edges", [])]
+    assert not any(edge.get("from") == "COM4" and edge.get("to") == "COM12" for edge in edges)
+
+
+def test_direct_downlink_without_chplan_keeps_two_nodes_and_no_route_plan():
+    eng = TopologyEngine()
+
+    eng.observe("COM12", 1.0, '[WiFi_Rx] {"UnID":5,"REQRSSI":"REQ","Unique":23,"Cidx":226}')
+
+    chain = next(c for c in eng.recent_chains(10) if c["key"] == ["u", 5, 23])
+
+    assert [n["role"] for n in chain["nodes"]] == ["src", "rx"]
+    assert len(chain["nodes"]) == 2
+    assert chain["nodes"][0]["inferred"] is True
+    assert chain["nodes"][1]["port"] == "COM12"
+    assert chain["ok"] is True
+    assert chain["route_plan"] is None

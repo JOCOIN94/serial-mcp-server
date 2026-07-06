@@ -666,10 +666,21 @@ def _chain_publishable(chain: dict, has_line=None) -> bool:
     관측만으로 송신자를 추정해 그리지 않는다. 포트 미상 src(미연결 장비)는 검사할
     콘솔이 없으므로 '없음'이 아니라 '모름' — 발행 유지. 판정은 체인 id당 1회 고정 —
     이후 버퍼 밀림으로 프로브가 뒤집혀도 이미 보인/숨긴 행의 지위는 바뀌지 않는다.
+    단, 후행 송신 증거로 src 가 추론→관측 승격된 경우는 새 증거이므로 True 로 단조 갱신한다.
     """
     cid = chain.get("id")
-    if cid in _chain_gate:
-        return _chain_gate[cid]
+    cached = _chain_gate.get(cid)
+    if cached is True:
+        return True
+    srcs = [n for n in chain.get("nodes") or [] if n.get("role") == "src"]
+    if srcs and all(not n.get("inferred") for n in srcs):
+        # 추론→관측 승격(routetx 등 후행 송신 증거) — 프로브 무관 통과 + 캐시 갱신(False→True 단조).
+        # 버퍼 밀림에 의한 프로브 플립과 달리 '새 증거'이므로 1회 고정 원칙의 예외다.
+        if cid is not None:
+            _chain_gate[cid] = True
+        return True
+    if cached is not None:
+        return cached
     _decorate_chain_jumpable(chain, has_line or _buffer_has_line)
     ok = True
     for node in chain.get("nodes") or []:

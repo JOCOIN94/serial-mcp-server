@@ -531,3 +531,203 @@ def test_cap_evicts_old_history_and_forget_port_completes_active_entry():
     entry = log.recent(1)[0]
     assert entry["id"] == last["id"]
     assert entry["complete"] is True
+
+
+CHPLAN_V2_RX = '[WiFi_Rx] {"CHPLAN":[2,["7C","02"],4,30,0],"Asn":6,"UnID":1,"Cidx":297}'
+CHPLAN_V2_OBJ = {"CHPLAN": [2, ["7C", "02"], 4, 30, 0], "Asn": 6, "UnID": 1, "Cidx": 297}
+CHPLAN_V1_RX = '[WiFi_Rx] {"CHPLAN":[1,"00","FF",4,120],"Asn":70,"UnID":5,"Cidx":898}'
+CHPLAN_V1_OBJ = {"CHPLAN": [1, "00", "FF", 4, 120], "Asn": 70, "UnID": 5, "Cidx": 898}
+ROUTE_TX_LINE = "[Route] CHPLAN to 80,7D,3A,82,5A,AC A=7C B=02"
+
+
+def route_tx(port="COM4", ts=1.0, line=ROUTE_TX_LINE, target="80:7D:3A:82:5A:AC",
+             tokens=None):
+    # 합성 — SSM_esp32.ino:6499 printf 형식 유래, 배포 세대 문구 실측 미확인.
+    return {
+        "port": port,
+        "ts": ts,
+        "kind": "routetx",
+        "raw_lines": [line],
+        "json": None,
+        "route": None,
+        "route_plan_tx": {"target": target, "tokens": list(tokens or ["7C", "02"])},
+        "ids": {"mac": None, "unid": None, "unique": None, "asn": None, "cidx": None,
+                "rt_tokens": []},
+        "hints": {"src_name": None, "dst_name": None, "device_type": None, "passed": None},
+        "metrics": {"rssi": None, "takentime_ms": None, "avr_takentime_ms": None,
+                    "reprssi": [], "rs": []},
+    }
+
+
+def chplan_wifirx(port="COM12", ts=1.0, unid=1, cidx=297, json_obj=None, raw=None):
+    obj = CHPLAN_V2_OBJ if json_obj is None else json_obj
+    return ev("wifirx", port, ts=ts, unid=unid, unique=None, cidx=cidx,
+              json_obj=obj, raw_lines=[raw or CHPLAN_V2_RX])
+
+
+def test_chplan_v2_route_plan_is_intent_only_and_does_not_add_relay_nodes():
+    log = ChainLog(window_s=10)
+
+    entry = log.observe(chplan_wifirx(), scope={"COM12": "COM4"},
+                        port_names={"COM12": "SB2"})[0]
+
+    assert entry["route_plan"] == {
+        "version": 2,
+        "tokens": ["7C", "02"],
+        "ttl": 4,
+        "expire_s": 30,
+        "pid": 0,
+        "relays": [
+            {"token": "7C", "name": None, "resolved": False},
+            {"token": "02", "name": None, "resolved": False},
+        ],
+    }
+    node_text = " ".join(str(n.get("name") or n.get("port") or "") for n in entry["nodes"])
+    assert "7C" not in node_text
+    assert "02" not in node_text
+
+
+def test_chplan_v1_route_plan_excludes_reserved_tokens_from_relays():
+    log = ChainLog(window_s=10)
+
+    entry = log.observe(
+        chplan_wifirx(port="COM12", ts=1.0, unid=5, cidx=898,
+                      json_obj=CHPLAN_V1_OBJ, raw=CHPLAN_V1_RX),
+        scope={"COM12": "COM4"},
+    )[0]
+
+    assert entry["route_plan"] == {
+        "version": 1,
+        "tokens": ["00", "FF"],
+        "ttl": 4,
+        "expire_s": 120,
+        "pid": None,
+        "relays": [],
+    }
+
+
+def test_chplan_route_plan_relays_resolve_tokens():
+    log = ChainLog(window_s=10)
+    resolver = Resolver({"7C": {"name": "REPEATOR", "mac": "AA", "unid": 124}})
+
+    entry = log.observe(chplan_wifirx(), resolver=resolver)[0]
+
+    assert entry["route_plan"]["relays"][0] == {
+        "token": "7C",
+        "name": "REPEATOR",
+        "resolved": True,
+    }
+
+
+def test_routetx_before_chplan_rx_promotes_observed_src_and_replaces_needle():
+    log = ChainLog(window_s=10)
+
+    assert log.observe(route_tx(ts=1.0), scope={"COM4": "COM4"},
+                       port_names={"COM4": "SSM"}) == []
+    entry = log.observe(chplan_wifirx(ts=1.2), scope={"COM12": "COM4"},
+                        port_names={"COM4": "SSM", "COM12": "SB2"})[0]
+
+    src = next(n for n in entry["nodes"] if n["role"] == "src")
+    assert src["port"] == "COM4"
+    assert src["inferred"] is False
+    assert entry["needle"] == ROUTE_TX_LINE
+
+
+def test_chplan_rx_before_routetx_promotes_observed_src_and_replaces_needle():
+    log = ChainLog(window_s=10)
+
+    first = log.observe(chplan_wifirx(ts=1.0), scope={"COM12": "COM4"},
+                        port_names={"COM12": "SB2"})[0]
+    assert first["needle"] != ROUTE_TX_LINE
+
+    entry = log.observe(route_tx(ts=1.2), scope={"COM4": "COM4"},
+                        port_names={"COM4": "SSM"})[0]
+
+    src = next(n for n in entry["nodes"] if n["role"] == "src")
+    assert src["port"] == "COM4"
+    assert src["inferred"] is False
+    assert entry["needle"] == ROUTE_TX_LINE
+
+
+def test_routetx_skips_ambiguous_same_token_downlink_candidates():
+    log = ChainLog(window_s=10)
+    log.observe(chplan_wifirx(port="COM12", ts=1.0, unid=1, cidx=297),
+                scope={"COM12": "COM4"})
+    log.observe(chplan_wifirx(port="COM13", ts=1.1, unid=2, cidx=298),
+                scope={"COM13": "COM4"})
+
+    assert log.observe(route_tx(ts=1.2), scope={"COM4": "COM4"}) == []
+
+    for entry in log.recent(10):
+        src = next(n for n in entry["nodes"] if n["role"] == "src")
+        assert src["inferred"] is True
+
+
+def test_routetx_group_veto_prevents_cross_group_attach():
+    log = ChainLog(window_s=10)
+    log.observe(chplan_wifirx(ts=1.0), scope={"COM12": "COM9"})
+
+    assert log.observe(route_tx(ts=1.2), scope={"COM4": "COM4"}) == []
+
+    src = next(n for n in log.recent(1)[0]["nodes"] if n["role"] == "src")
+    assert src["inferred"] is True
+
+
+def test_routetx_ident_mismatch_prevents_attach_when_mac_is_known():
+    log = ChainLog(window_s=10)
+    log.observe(
+        ev("wifirx", "COM12", ts=1.0, unid=None, unique=None, cidx=297,
+           mac="30:AE:A4:4C:94:20",
+           json_obj={**CHPLAN_V2_OBJ, "Mac": "30,AE,A4,4C,94,20"},
+           raw_lines=['[WiFi_Rx] {"CHPLAN":[2,["7C","02"],4,30,0],"Asn":6,'
+                      '"Mac":"30,AE,A4,4C,94,20","Cidx":297}']),
+        scope={"COM12": "COM4"},
+    )
+
+    assert log.observe(route_tx(ts=1.2), scope={"COM4": "COM4"}) == []
+
+    src = next(n for n in log.recent(1)[0]["nodes"] if n["role"] == "src")
+    assert src["inferred"] is True
+
+
+def test_downlink_wifirx_overhear_uses_heard_and_inferred_target_rx_when_ident_differs():
+    log = ChainLog(window_s=10)
+
+    heard = log.observe(chplan_wifirx(port="COM13", ts=1.0, unid=1, cidx=297),
+                        port_idents={"COM13": 2})[0]
+
+    assert heard["heard"] == ["COM13"]
+    assert not any(n.get("role") == "rx" and n.get("port") == "COM13"
+                   for n in heard["nodes"])
+    rx = next(n for n in heard["nodes"] if n["role"] == "rx")
+    assert rx["name"] == "UnID 1"
+    assert rx["inferred"] is True
+    assert heard["ok"] is None
+
+    legacy = ChainLog(window_s=10).observe(
+        chplan_wifirx(port="COM13", ts=1.0, unid=1, cidx=297),
+        port_names={"COM13": "SB2"},
+    )[0]
+    assert legacy["heard"] == []
+    assert any(n.get("role") == "rx" and n.get("port") == "COM13"
+               for n in legacy["nodes"])
+    assert legacy["ok"] is True
+
+
+def test_downlink_pass_relay_inserts_before_rx_terminal():
+    log = ChainLog(window_s=10)
+    log.observe(chplan_wifirx(ts=1.0), scope={"COM12": "COM4"},
+                port_names={"COM12": "SB1"})
+
+    # 합성 — 2_bay:218 원문 JSON + A형 태그, REP 하행 중계 시나리오.
+    entry = log.observe(
+        ev("pass", "COMR", ts=1.1, unid=1, unique=None, cidx=297,
+           json_obj=CHPLAN_V2_OBJ,
+           raw_lines=['[Data_Pass] {"CHPLAN":[2,["7C","02"],4,30,0],"Asn":6,'
+                      '"UnID":1,"Cidx":297}']),
+        scope={"COMR": "COM4"},
+        port_names={"COMR": "REP1"},
+    )[0]
+
+    roles = [n["role"] for n in entry["nodes"]]
+    assert roles.index("relay") < roles.index("rx")

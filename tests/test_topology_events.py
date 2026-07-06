@@ -281,3 +281,38 @@ def test_data_pass_variant_tolerance_for_dot_prefix_and_to_clause():
     assert [ev["kind"] for ev in evs] == ["pass", "pass"]
     assert evs[0]["ids"]["cidx"] == 900
     assert evs[1]["ids"]["unique"] == 9
+
+
+def test_route_chplan_to_emits_routetx_immediately():
+    # 합성 — SSM_esp32.ino:6499 printf 형식 유래, 배포 세대 문구 실측 미확인.
+    line = "[Route] CHPLAN to 80,7D,3A,82,5A,AC A=7C B=02"
+    a = EventAssembler("COM4")
+
+    evs = a.feed(1.0, line)
+
+    assert len(evs) == 1
+    assert evs[0]["kind"] == "routetx"
+    assert evs[0]["route_plan_tx"] == {
+        "target": "80:7D:3A:82:5A:AC",
+        "tokens": ["7C", "02"],
+    }
+    assert a.flush() == []
+
+
+def test_route_chplan_to_unknown_generation_tolerates_missing_tokens():
+    # 합성 — 가상 문구, 미지 세대 톨러런스 검증용.
+    evs = _run(["[Route] CHPLAN to Bay_B02 v=2 cnt=2"])
+
+    assert len(evs) == 1
+    assert evs[0]["kind"] == "routetx"
+    assert evs[0]["route_plan_tx"] == {"target": "Bay_B02", "tokens": []}
+
+
+def test_route_chplan_applied_and_event_route_do_not_match_routetx_or_route_link():
+    assert _run(["[Route] CHPLAN applied A=00 B=FF ttl=4 expiry=120s"]) == []
+    assert _run(["[Route] Event route Asn=1 pid=1 stage=0 rescue=0 relays=00 len=171"]) == []
+
+    evs = _run(["[Route] Link A0,85,E3,EA,5C,C4 -> 10,06,1C,16,97,AC rssi=-41"])
+
+    assert len(evs) == 1
+    assert evs[0]["kind"] == "route"

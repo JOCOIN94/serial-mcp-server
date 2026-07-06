@@ -11,6 +11,7 @@ JSON 은 줄 앞 태그를 건너뛰고 '첫 {/[ 부터' 파싱한다(plan §7-2
 이벤트(REPRSSI=링크품질)이고, 실제 경로는 RX 의 Rt/[Passed Device] 다(REPRSSI 아님).
 [BypassJson] 은 relay 가 Rt 를 스탬프한 뒤 남기는 실행 증거라 pass 이벤트로 본다.
 [Data_Pass] 중 같은 줄 JSON 이 없으면 송신 거부(pass_refused)로 누산해 다음 JSON 만 부착한다.
+[Route] CHPLAN to ... 는 하행 CHPLAN 송신 콘솔 증거(routetx)로 한 줄 즉시 이벤트다.
 
 I/O·시리얼 비의존 — 단위 테스트가 쉽다(test_topology_events.py).
 """
@@ -31,6 +32,7 @@ _HEADERS = [
     ("tx",     re.compile(r"\[(?:WiFi_)?Tx(?![a-z])[^\]]*\]|ForceQuit_Tx")),
     ("wifirx", re.compile(r"\[WiFi_Rx\]")),
     ("pass",   re.compile(r"\[Data_Pass\]|\[BypassJson\]")),
+    ("routetx", re.compile(r"\[Route\]\s*CHPLAN to\b")),
     ("route",  re.compile(r"\[Route\]\s*Link\b")),
 ]
 
@@ -42,6 +44,8 @@ _RE_PASSED = re.compile(r"\[Passed Device\]\s*(.+)")         # 실제 통과 경
 # [Route] Link <mac> -> <mac> rssi=<n>  (mac 은 콤마/콜론 16진)
 _RE_ROUTE_LINK = re.compile(
     r"\[Route\]\s*Link\s+([0-9A-Fa-f,:]+)\s*->\s*([0-9A-Fa-f,:]+)\s*rssi\s*=\s*(-?\d+)")
+_RE_ROUTE_CHPLAN_TO = re.compile(r"\[Route\]\s*CHPLAN to\s+(\S+)")
+_RE_ROUTE_CHPLAN_TOKEN = re.compile(r"\b[AB]=([0-9A-Fa-f]{1,2})\b")
 
 # JSON 키 → Event ids 필드.
 _ID_KEYS = (("UnID", "unid"), ("Unique", "unique"), ("Asn", "asn"), ("Cidx", "cidx"), ("Mac", "mac"))
@@ -52,6 +56,15 @@ def _norm_mac(s):
     if not isinstance(s, str):
         return s
     return s.strip().replace(",", ":").upper()
+
+
+def _looks_like_mac(s: str) -> bool:
+    parts = re.split(r"[:,]", s.strip())
+    return len(parts) == 6 and all(re.fullmatch(r"[0-9A-Fa-f]{2}", p or "") for p in parts)
+
+
+def _route_token(tok: str) -> str:
+    return f"{int(tok, 16) & 0xFF:02X}"
 
 
 def _norm_reprssi_row(row: list) -> dict:
@@ -103,6 +116,16 @@ def _new_event(port: str, ts: float, kind: str, text: str) -> dict:
         if m:
             ev["route"] = {"from_mac": _norm_mac(m.group(1)), "to_mac": _norm_mac(m.group(2)),
                            "rssi": int(m.group(3))}
+        return ev
+    if kind == "routetx":
+        m = _RE_ROUTE_CHPLAN_TO.search(text)
+        target = m.group(1) if m else None
+        if isinstance(target, str) and _looks_like_mac(target):
+            target = _norm_mac(target)
+        ev["route_plan_tx"] = {
+            "target": target,
+            "tokens": [_route_token(tok) for tok in _RE_ROUTE_CHPLAN_TOKEN.findall(text)],
+        }
         return ev
     obj = extract_json(text)
     if obj is not None:
@@ -172,7 +195,7 @@ class EventAssembler:
     헤더 사이의 연속 줄(takentime/<<<From/[Passed Device]/[Proc-Raw Packet] 등)은 현재 블록에
     부착된다. 한 이벤트 지연(다음 헤더가 와야 직전 이벤트 방출)이 있으나 윈도 상관에는 무해하다.
 
-    예외: **tx/pass(w/JSON)/wifirx는 헤더 한 줄에 페이로드가 완결**(UnID/Mac·Unique/Cidx/Rt 전부
+    예외: **tx/pass(w/JSON)/wifirx/routetx는 헤더 한 줄에 페이로드가 완결**(UnID/Mac·Unique/Cidx/Rt 전부
     인라인)이라 **즉시 방출**한다. Data_Pass 헤더에 JSON 이 없으면 송신 거부(pass_refused)로
     버퍼링해 다음 줄 JSON 을 한 번만 부착한다. tx 를 버퍼링하면 리프가
     전송 후 침묵할 때 다음 헤더/유휴 flush(2s+스윕 위상)까지 방출이 밀려, correlator 의
@@ -202,7 +225,7 @@ class EventAssembler:
                 else:
                     ev["kind"] = "pass_refused"
                     self._cur = ev     # 송신 거부 — 다음 줄 JSON 을 부착한 뒤 방출
-            elif kind in ("tx", "wifirx"):
+            elif kind in ("tx", "wifirx", "routetx"):
                 out.append(ev)         # 헤더 한 줄에 완결 — 즉시 방출(클래스 docstring 예외)
             else:
                 self._cur = ev

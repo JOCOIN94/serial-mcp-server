@@ -651,3 +651,19 @@ def test_chain_gate_decision_is_sticky_per_id(monkeypatch):
     first = srv._chain_publishable(_chain(id=9), has_line=lambda p, ns: True)
     second = srv._chain_publishable(_chain(id=9), has_line=lambda p, ns: False)   # 같은 id — 캐시 반환
     assert first is True and second is True
+
+
+def test_chain_gate_promotes_cached_false_when_src_becomes_observed(monkeypatch):
+    # F-C7: 프로브 플립은 계속 무시하지만, routetx 같은 후행 송신 증거로 src 가
+    # 추론→관측 승격되면 캐시 False 를 True 로 단조 갱신한다.
+    monkeypatch.setattr(srv, "_chain_gate", {})
+
+    assert srv._chain_publishable(_chain(id=17), has_line=lambda p, ns: False) is False
+    assert srv._chain_publishable(_chain(id=17), has_line=lambda p, ns: True) is False
+
+    observed = _chain(id=17, nodes=[
+        {"role": "src", "port": "COM4", "inferred": False},
+        {"role": "rx", "port": "COM12", "inferred": False},
+    ])
+    assert srv._chain_publishable(observed, has_line=lambda p, ns: False) is True
+    assert srv._chain_publishable(_chain(id=17), has_line=lambda p, ns: False) is True

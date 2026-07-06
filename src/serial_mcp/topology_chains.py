@@ -4,6 +4,7 @@ ChainLog 는 포트쌍 링크(PeerLinks)나 성공 판정(Correlator)을 다시 
 같은 메시지 키로 관측된 tx/pass/rx/wifirx/wifitx 이벤트를 하나의 직렬화 가능한 로그 항목으로
 병합한다. 서버 도착시각은 윈도 만료 판단에 쓰고, 공개 항목에는 첫 관측 시각(ts)만 싣는다 —
 뷰어의 로그 점프가 Unique(1..99 롤링) 충돌 없이 같은 시점 라인을 찾는 시각 앵커다.
+CHPLAN route_plan 은 intent 전용 필드이고, nodes 는 관측/추론 전달 노드만 싣는다(D1).
 """
 
 from __future__ import annotations
@@ -26,6 +27,12 @@ def _norm_token(tok) -> Optional[str]:
         return f"{int(str(tok), 16) & 0xFF:02X}"
     except (TypeError, ValueError):
         return None
+
+
+def _norm_mac(value):
+    if not isinstance(value, str):
+        return value
+    return value.strip().replace(",", ":").upper()
 
 
 def _event_key(ev: dict) -> tuple[Optional[tuple], Optional[str]]:
@@ -124,6 +131,57 @@ def _resolve_token(resolver, token) -> Optional[dict]:
     return None
 
 
+def _int_field(value) -> Optional[int]:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _parse_chplan(value, resolver) -> Optional[dict]:
+    if not isinstance(value, list) or len(value) < 2:
+        return None
+
+    if isinstance(value[1], list):
+        layout_version = 2
+        raw_tokens = value[1]
+        ttl = _int_field(value[2]) if len(value) > 2 else None
+        expire_s = _int_field(value[3]) if len(value) > 3 else None
+        pid = _int_field(value[4]) if len(value) > 4 else None
+    else:
+        layout_version = 1
+        raw_tokens = [value[1]]
+        if len(value) > 2:
+            raw_tokens.append(value[2])
+        ttl = _int_field(value[3]) if len(value) > 3 else None
+        expire_s = _int_field(value[4]) if len(value) > 4 else None
+        pid = None
+
+    tokens = []
+    for raw in raw_tokens:
+        tok = _norm_token(raw)
+        tokens.append(tok if tok is not None else str(raw))
+
+    relays = []
+    for tok in tokens:
+        if tok in _RESERVED_TOKENS:
+            continue
+        hit = _resolve_token(resolver, tok)
+        relays.append({
+            "token": tok,
+            "name": hit.get("name") if hit else None,
+            "resolved": bool(hit),
+        })
+
+    return {
+        "version": _int_field(value[0]) or layout_version,
+        "tokens": tokens,
+        "ttl": ttl,
+        "expire_s": expire_s,
+        "pid": pid,
+        "relays": relays,
+    }
+
+
 def _skeleton_from_tokens(tokens, resolver) -> list[dict]:
     out = []
     for raw in tokens or []:
@@ -153,12 +211,15 @@ class ChainLog:
         self._next_id = 1
         self._active: "OrderedDict[tuple, dict]" = OrderedDict()
         self._entries: deque = deque()
+        self._route_tx: deque = deque(maxlen=32)
 
     def observe(self, ev: dict, scope: Optional[dict] = None,
                 resolver=None, port_names: Optional[dict] = None,
                 port_idents: Optional[dict] = None) -> list:
         """Event 1개를 반영하고 변경된 공개 항목 사본을 반환한다."""
         kind = (ev or {}).get("kind")
+        if kind == "routetx":
+            return self._observe_route_tx(ev, resolver, port_names)
         if kind not in _KINDS:
             return []
         key, fallback_dir = _event_key(ev)
@@ -194,6 +255,13 @@ class ChainLog:
             ent["_needle"] = _jump_needle(ev)
 
         before = self._public(ent)
+        obj = ev.get("json")
+        if ent.get("route_plan") is None and isinstance(obj, dict) and "CHPLAN" in obj:
+            rp = _parse_chplan(obj.get("CHPLAN"), resolver)
+            if rp is not None:
+                ent["route_plan"] = rp
+                self._attach_buffered_route_tx(ent, resolver, port_names)
+
         if kind == "tx":
             self._observe_tx(ent, ev, port_names)
         elif kind == "rx":
@@ -273,6 +341,7 @@ class ChainLog:
             "ok": None,
             "confidence": None,
             "rtt_ms": None,
+            "route_plan": None,
             "complete": False,
             "_seen": set(),
             "_needle": None,
@@ -290,6 +359,97 @@ class ChainLog:
         port = ev.get("port")
         rssi = (ev.get("metrics") or {}).get("rssi")
         self._ensure_src(ent, port, _name_for_port(port, port_names), rssi)
+
+    def _observe_route_tx(self, ev: dict, resolver, port_names: Optional[dict]) -> list:
+        ts = ev.get("ts") or 0.0
+        changed = self._expire(ts)
+        info = ev.get("route_plan_tx") or {}
+        tokens = [(_norm_token(tok) or str(tok)) for tok in info.get("tokens") or []]
+        port = ev.get("port")
+        if not port or not tokens:
+            return changed
+        raw = ((ev.get("raw_lines") or [""])[0] or "").strip()
+        tx = {
+            "port": port,
+            "ts": ts,
+            "target": info.get("target"),
+            "tokens": tokens,
+            "raw": raw,
+        }
+        self._route_tx.append(tx)
+        ent = self._attach_route_tx_to_one_entry(tx, resolver, port_names)
+        if ent is not None:
+            self._remove_route_tx(tx)
+            changed.append(self._public(ent))
+        return changed
+
+    def _attach_route_tx_to_one_entry(self, tx: dict, resolver, port_names: Optional[dict]) -> Optional[dict]:
+        candidates = [
+            ent for ent in self._active.values()
+            if self._route_tx_matches(ent, tx, resolver)
+        ]
+        if len(candidates) != 1:
+            return None
+        self._attach_route_tx(candidates[0], tx, port_names)
+        return candidates[0]
+
+    def _attach_buffered_route_tx(self, ent: dict, resolver, port_names: Optional[dict]) -> bool:
+        candidates = [
+            tx for tx in list(self._route_tx)
+            if self._route_tx_matches(ent, tx, resolver)
+        ]
+        if len(candidates) != 1:
+            return False
+        tx = candidates[0]
+        self._attach_route_tx(ent, tx, port_names)
+        self._remove_route_tx(tx)
+        return True
+
+    def _route_tx_matches(self, ent: dict, tx: dict, resolver) -> bool:
+        if ent.get("dir") != "down" or ent.get("complete"):
+            return False
+        if (tx.get("port"), "routetx") in ent.get("_seen", set()):
+            return False
+        rp = ent.get("route_plan")
+        if not rp or not rp.get("tokens") or rp.get("tokens") != tx.get("tokens"):
+            return False
+        if abs((ent.get("_last_ts") or 0.0) - (tx.get("ts") or 0.0)) > self._window:
+            return False
+        group = ent.get("group")
+        if group is not None and group != tx.get("port"):
+            return False
+        return self._route_tx_ident_matches(ent, tx, resolver)
+
+    def _route_tx_ident_matches(self, ent: dict, tx: dict, resolver) -> bool:
+        ident = self._entry_ident(ent)
+        target = tx.get("target")
+        if ident is None or target is None:
+            return True
+        if isinstance(ident, str):
+            return _norm_mac(ident) == _norm_mac(target)
+        if isinstance(ident, int) and not isinstance(ident, bool):
+            hit = _resolve_token(resolver, f"{ident & 0xFF:02X}")
+            mac = hit.get("mac") if hit else None
+            if mac:
+                return _norm_mac(mac) == _norm_mac(target)
+        return True
+
+    def _attach_route_tx(self, ent: dict, tx: dict, port_names: Optional[dict]) -> None:
+        src = self._ensure_src(ent, tx.get("port"), _name_for_port(tx.get("port"), port_names), None)
+        src["inferred"] = False
+        src["resolved"] = True
+        if ent.get("group") is None:
+            ent["group"] = tx.get("port")
+        # CHPLAN 수신 JSON needle 은 SSM 송신 콘솔에 실재하지 않는다. routetx 관측 시
+        # 송신측에 실제 존재하는 원문 라인으로 needle 계약을 복구하는 명시 예외다.
+        ent["_needle"] = tx.get("raw")
+        ent["_seen"].add((tx.get("port"), "routetx"))
+
+    def _remove_route_tx(self, tx: dict) -> None:
+        try:
+            self._route_tx.remove(tx)
+        except ValueError:
+            pass
 
     def _observe_rx(self, ent: dict, ev: dict, resolver, port_names: Optional[dict]) -> None:
         port = ev.get("port")
@@ -353,6 +513,13 @@ class ChainLog:
                 # "발신 미상" 대신 ident 를 해소해 추론 src 로 표시한다(포트는 _attach_src_port 몫).
                 self._ensure_ident_src(ent, resolver)
             return
+        ent_ident = self._entry_ident(ent)
+        port_ident = (port_idents or {}).get(port)
+        if ent_ident is not None and port_ident is not None and not self._same_ident(ent_ident, port_ident):
+            if port not in ent["heard"]:
+                ent["heard"].append(port)
+            self._ensure_ident_rx(ent, resolver)
+            return
         if self._find_by_port(ent, port) is None:
             ent["nodes"].append(_node(name=_name_for_port(port, port_names), port=port,
                                       role="rx", resolved=True))
@@ -387,6 +554,31 @@ class ChainLog:
             else:
                 name, resolved = f"UnID {ident}", False
         ent["nodes"].insert(0, _node(name=name, role="src", resolved=resolved, inferred=True))
+
+    def _ensure_ident_rx(self, ent: dict, resolver) -> None:
+        if any(n.get("role") in ("rx", "dst") for n in ent.get("nodes", [])):
+            return
+        ident = self._entry_ident(ent)
+        if ident is None:
+            return
+        if isinstance(ident, str):
+            name, resolved = ident, True
+        else:
+            try:
+                hit = _resolve_token(resolver, f"{int(ident) & 0xFF:02X}")
+            except (TypeError, ValueError):
+                hit = None
+            if hit and hit.get("name"):
+                name, resolved = hit["name"], True
+            else:
+                name, resolved = f"UnID {ident}", False
+        ent["nodes"].append(_node(name=name, role="rx", resolved=resolved, inferred=True))
+
+    @staticmethod
+    def _same_ident(a, b) -> bool:
+        if isinstance(a, str) or isinstance(b, str):
+            return _norm_mac(a) == _norm_mac(b)
+        return a == b
 
     def _attach_src_port(self, ent: dict, port_idents: Optional[dict]) -> None:
         """상행 키 ident 가 어느 로컬 포트 장비인지 알면(membership) 포트 없는 src 에 부착.
@@ -561,7 +753,7 @@ class ChainLog:
     @staticmethod
     def _insert_before_dst(ent: dict, node: dict) -> None:
         for i, existing in enumerate(ent["nodes"]):
-            if existing.get("role") == "dst":
+            if existing.get("role") in ("dst", "rx"):
                 ent["nodes"].insert(i, node)
                 return
         ent["nodes"].append(node)
@@ -626,6 +818,7 @@ class ChainLog:
             "ok": ent.get("ok"),
             "confidence": ent.get("confidence"),
             "rtt_ms": ent.get("rtt_ms"),
+            "route_plan": ent.get("route_plan"),
             "complete": bool(ent.get("complete")),
             "ts": ts,                     # 첫 관측 시각(epoch s) — 뷰어 점프의 시각 앵커
             "needle": ent.get("_needle"),  # "c" 체인 송신측 점프 폴백(§D2) — "u" 는 None
