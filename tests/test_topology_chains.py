@@ -409,6 +409,34 @@ def test_two_ended_chain_survives_late_opposite_direction_hint():
     assert labels(entry) == ["SB5", "SSM"]
 
 
+def test_relay_chain_with_portless_src_survives_late_opposite_hint():
+    # 엣지 장비가 콘솔 미연결인 3노드 relay 체인(실배치 기본형) — src 는 포트 없는
+    # 스켈레톤 노드지만 relay+dst 실포트 관측 2개가 이미 방향을 증명한다.
+    # 오염 줄(wifitx 분류·같은 키)로 리셋되면 안 된다.
+    log = ChainLog(window_s=15)
+    log.observe(
+        ev("pass", "COMR", ts=1.0, unid=1, unique=5, cidx=996, rt_tokens=["7C"],
+           json_obj={"UnID": 1, "Unique": 5, "Rev": True, "Cidx": 996, "Rt": ["7C"]}),
+        port_names={"COMR": "REP"},
+    )
+    log.observe(
+        ev("rx", "COMS", ts=1.1, unid=1, unique=5, cidx=996, rt_tokens=["7C"],
+           json_obj={"UnID": 1, "Unique": 5, "Rev": True, "Cidx": 996}),
+        port_names={"COMS": "SSM"},
+    )
+    before = log.recent(1)[0]
+    assert [n["role"] for n in before["nodes"]] == ["src", "relay", "dst"]
+
+    log.observe(
+        ev("wifitx", "COMS", ts=2.0, unid=1, unique=5, cidx=996,
+           json_obj={"UnID": 1, "Unique": 5, "Rev": True, "Cidx": 996}),
+        port_names={"COMS": "SSM"},
+    )
+    entry = log.recent(1)[0]
+    assert entry["dir"] == "up"
+    assert [n["role"] for n in entry["nodes"]] == ["src", "relay", "dst"]
+
+
 def test_one_ended_entry_still_accepts_direction_correction():
     # 가드의 경계: 한쪽 끝만 있는 항목(수신 관측 1개)은 여전히 교정 가능해야 한다 —
     # down 오분류를 rx 관측이 up 으로 바로잡는 기존 계약(위 테스트)과 동일 원리.
