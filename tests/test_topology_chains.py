@@ -805,3 +805,56 @@ def test_downlink_pass_relay_inserts_before_rx_terminal():
 
     roles = [n["role"] for n in entry["nodes"]]
     assert roles.index("relay") < roles.index("rx")
+
+
+# ---- 2026-07-06 실장비 회귀: 같은 포트 청취+중계 이중 노드(? → REPEAT → REPEAT) ----
+
+def test_downlink_listen_then_pass_merges_same_port_and_defers_arrival():
+    # 하행에서 같은 포트가 [WiFi_Rx] 청취(rx)와 [Data_Pass] 중계(relay)로 두 번 그려졌다
+    # (? → REPEAT → REPEAT). 청취-후-중계는 한 노드(relay)로 병합하고, 목적지는 키 ident 로
+    # 추론 rx 를 붙이며, 도착은 미확정(ok=None, 주황)이어야 한다 — 중계 청취는 도착 증거가 아니다.
+    log = ChainLog(window_s=10)
+    log.observe(ev("wifirx", "COMR", ts=1.0, unid=1, unique=None, cidx=463,
+                   json_obj={"UnID": 1, "Stat": "OK", "Asn": 6, "Cidx": 463}))
+    entry = log.observe(ev("pass", "COMR", ts=1.1, unid=1, unique=None, cidx=463,
+                           json_obj={"UnID": 1, "Stat": "OK", "Asn": 6, "Cidx": 463}))[0]
+
+    com_r = [n for n in entry["nodes"] if n.get("port") == "COMR"]
+    assert len(com_r) == 1 and com_r[0]["role"] == "relay"
+    rx = [n for n in entry["nodes"] if n.get("role") == "rx"]
+    assert len(rx) == 1
+    assert rx[0]["inferred"] is True and rx[0]["port"] is None
+    assert rx[0]["name"] == "UnID 1" and rx[0]["resolved"] is False
+    assert [n["role"] for n in entry["nodes"]] == ["src", "relay", "rx"]
+    assert entry["ok"] is None and entry["confidence"] is None
+    assert_public(entry)
+
+
+def test_downlink_pass_then_listen_does_not_confirm_arrival():
+    # 역순(중계가 먼저, 청취가 나중) — 같은 포트 relay 를 재사용하고 도착 확정을 만들지 않는다.
+    log = ChainLog(window_s=10)
+    log.observe(ev("pass", "COMR", ts=1.0, unid=1, unique=None, cidx=463,
+                   json_obj={"UnID": 1, "Stat": "OK", "Asn": 6, "Cidx": 463}))
+    entry = log.observe(ev("wifirx", "COMR", ts=1.1, unid=1, unique=None, cidx=463,
+                           json_obj={"UnID": 1, "Stat": "OK", "Asn": 6, "Cidx": 463}))[0]
+
+    com_r = [n for n in entry["nodes"] if n.get("port") == "COMR"]
+    assert len(com_r) == 1 and com_r[0]["role"] == "relay"
+    rx = [n for n in entry["nodes"] if n.get("role") == "rx"]
+    assert len(rx) == 1 and rx[0]["inferred"] is True
+    assert entry["ok"] is None and entry["confidence"] is None
+
+
+def test_downlink_inferred_rx_resolves_name_from_token_map():
+    # 추론 목적지 ident 가 토큰맵으로 해소되면 이름을 붙인다(여전히 inferred=True — dim 표시).
+    log = ChainLog(window_s=10)
+    resolver = Resolver({"01": {"name": "SB1", "mac": None, "unid": 1}})
+    log.observe(ev("wifirx", "COMR", ts=1.0, unid=1, unique=None, cidx=463,
+                   json_obj={"UnID": 1, "Stat": "OK", "Asn": 6, "Cidx": 463}), resolver=resolver)
+    entry = log.observe(ev("pass", "COMR", ts=1.1, unid=1, unique=None, cidx=463,
+                           json_obj={"UnID": 1, "Stat": "OK", "Asn": 6, "Cidx": 463}),
+                        resolver=resolver)[0]
+
+    rx = [n for n in entry["nodes"] if n.get("role") == "rx"]
+    assert len(rx) == 1
+    assert rx[0]["name"] == "SB1" and rx[0]["resolved"] is True and rx[0]["inferred"] is True

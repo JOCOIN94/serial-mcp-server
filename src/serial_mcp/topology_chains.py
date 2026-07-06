@@ -481,6 +481,15 @@ class ChainLog:
         node = self._match_relay(ent, name)
         if node is None and skeleton:
             node = self._match_skeleton_slot(ent, skeleton, name)
+        converted = False
+        if node is None:
+            # 청취-후-중계: 같은 포트가 [WiFi_Rx] 로 먼저 rx 에 잡힌 경우(하행 중계 콘솔의
+            # 표준 출력 순서) — 새 relay 를 만들면 같은 장비가 REPEAT→REPEAT 로 중복된다
+            # (2026-07-06 실장비 회귀). rx 노드를 relay 로 승격해 한 노드로 병합한다.
+            cand = self._find_by_port(ent, port)
+            if cand is not None and cand.get("role") == "rx" and not cand.get("inferred"):
+                node = cand
+                converted = True
         if node is None:
             node = _node(name=name, port=port, role="relay", resolved=True)
             self._insert_before_dst(ent, node)
@@ -490,6 +499,11 @@ class ChainLog:
                 node["name"] = name
             if node.get("role") != "src":
                 node["role"] = "relay"
+        if converted:
+            # 중계했다면 이 포트는 목적지가 아니다 — 진짜 목적지는 키 ident 로 추론 표시하고,
+            # rx 관측에 얹혔던 도착 확정(ok)을 회수한다(중계 청취≠도착 — 미확정 주황).
+            self._ensure_ident_rx(ent, resolver)
+            self._demote_unobserved_arrival(ent)
         if not skeleton and len([n for n in ent["nodes"] if n.get("role") == "relay"]) >= 2:
             ent["ordered"] = False
 
@@ -520,9 +534,15 @@ class ChainLog:
                 ent["heard"].append(port)
             self._ensure_ident_rx(ent, resolver)
             return
-        if self._find_by_port(ent, port) is None:
+        existing = self._find_by_port(ent, port)
+        if existing is None:
             ent["nodes"].append(_node(name=_name_for_port(port, port_names), port=port,
                                       role="rx", resolved=True))
+        elif existing.get("role") not in ("rx", "dst"):
+            # 같은 포트가 이미 src/relay — 이 수신은 도착이 아니라 중계 경로의 청취다
+            # (pass 가 먼저 관측된 역순). 도착 확정 금지, 목적지는 키 ident 로 추론 표시.
+            self._ensure_ident_rx(ent, resolver)
+            return
         ent["ok"] = True
         ent["confidence"] = "observed"
 
@@ -573,6 +593,20 @@ class ChainLog:
             else:
                 name, resolved = f"UnID {ident}", False
         ent["nodes"].append(_node(name=name, role="rx", resolved=resolved, inferred=True))
+
+    @staticmethod
+    def _demote_unobserved_arrival(ent: dict) -> None:
+        """실관측 rx/dst 노드가 안 남았으면 도착 확정을 회수한다.
+
+        하행 [WiFi_Rx] 청취가 rx 로 잡히며 ok=True 를 세웠다가 그 포트가 중계(relay)로
+        판명되면, 도착 증거는 사라진 것이다 — 추론(inferred) rx 는 증거가 아니므로
+        ok/confidence 를 미확정(None, 뷰어 주황)으로 되돌린다.
+        """
+        if any(n.get("role") in ("rx", "dst") and not n.get("inferred") for n in ent["nodes"]):
+            return
+        if ent.get("ok") is True:
+            ent["ok"] = None
+            ent["confidence"] = None
 
     @staticmethod
     def _same_ident(a, b) -> bool:
