@@ -248,7 +248,9 @@ body {
 
 /* ===== 좌측 네비게이션 (세션 + 포트 상태) ===== */
 #nav {
-  flex: 0 0 420px; box-sizing: border-box;
+  /* 폭은 --navw(스플리터 드래그·localStorage 복원)로 조절 — clamp 가 창 크기 변화에도
+     최소 300px·최대 65vw 를 보장해 별도 resize 리스너 없이 반응형이 된다. */
+  flex: 0 0 clamp(300px, var(--navw, 420px), 65vw); box-sizing: border-box;
   position: sticky; top: 0; align-self: flex-start; height: 100vh; overflow-y: auto;
   background: var(--bg-raised); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 11px; padding: 10px;
@@ -256,6 +258,15 @@ body {
 }
 #content { flex: 1 1 auto; min-width: 0; height: 100vh; overflow: hidden;
            display: flex; flex-direction: column; }
+
+/* 사이드바 폭 조절 스플리터 — #nav 오른쪽 경계선을 straddle 하는 잡기 영역(음수 마진으로
+   레이아웃 폭 기여 0). 드래그 중에는 flex-basis 트랜지션을 꺼서 즉각 따라오게 한다. */
+#navsplit { flex: none; width: 7px; margin: 0 -3px 0 -4px; cursor: col-resize;
+            position: relative; z-index: 20; background: transparent; }
+#navsplit:hover { background: var(--accent-bg); }
+body.nav-resizing { cursor: col-resize; user-select: none; }
+body.nav-resizing #nav { transition: none; }
+body.nav-resizing #navsplit { background: var(--accent-bg); }
 
 /* ============================ HEADER ============================ */
 header {
@@ -554,6 +565,7 @@ kbd {
   body { flex-direction: column; }
   #nav { flex: 0 0 auto; height: auto; position: static; max-height: 42vh;
          border-right: 0; border-bottom: 1px solid var(--border); }
+  #navsplit { display: none; }   /* 세로 스택에선 좌우 폭 조절이 무의미 */
 }
 
 /* ============================ 포트 상태 보드 ============================ */
@@ -635,13 +647,13 @@ kbd {
 .tch-follow.on { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
 .tch-gno { font: 700 9px var(--ui); color: var(--muted); border: 1px solid var(--border-2); border-radius: 4px; padding: 0 4px; flex: none; white-space: nowrap; }
 .thd-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.thd-status { margin-left: auto; font: 700 10px var(--ui); white-space: nowrap; }
-.thd-ok { color: #3fb950; } .thd-fail { color: #f0786f; } .thd-pending { color: #e3b341; }
 .thd-path { display: flex; flex-wrap: nowrap; align-items: center; gap: 3px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
 .thd-chip { font: 600 11px var(--ui); background: var(--bg-raised); border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 6px; min-width: 64px; max-width: 120px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.thd-jump { flex: none; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; line-height: 1; cursor: pointer; }
-.thd-jump.miss { color: var(--muted); cursor: default; }
-.thd-arrow { color: var(--muted); font-size: 10px; }
+/* 점프 버튼 — 텍스트 글리프가 아니라 눌리는 버튼으로: 패딩으로 히트 영역 확보 + hover 배경 */
+.thd-jump { flex: none; padding: 1px 6px; border: 0; background: none; color: var(--accent);
+            font: 700 14px/1.2 var(--ui); border-radius: 5px; cursor: pointer; }
+.thd-jump:hover { background: var(--accent-bg); }
+.thd-jump.miss { color: var(--muted); cursor: default; background: none; }
 .thd-meta { font: 500 10px var(--ui); color: var(--muted); }
 .tch-row { border-left: 2px solid var(--border-2); margin-top: 5px; padding: 3px 0 4px 7px; display: flex; min-width: 0; border-radius: 4px; }
 .tch-row:hover { background: var(--bg-hover); }
@@ -714,6 +726,7 @@ body.rhythm-relaxed { --row-pad: 6px; --lh: 1.9; }
   <section class="portboard" id="portboard"></section>
   <section class="topohops" id="topohops"></section>
 </aside>
+<div id="navsplit" title="드래그 — 사이드바 폭 조절 · 더블클릭 — 기본 폭 복원"></div>
 
 <div id="content">
   <header>
@@ -1823,8 +1836,7 @@ window.SVScroll = (function () {
     const dot = el("span", "thd-dot"); dot.style.background = row.color;
     head.appendChild(dot);
     const path = el("div", "thd-path");
-    row.chips.forEach((chip, i) => {
-      if (i) path.appendChild(txt("span", "→", "thd-arrow"));
+    row.chips.forEach(chip => {
       const c = txt("span", chip.label, "thd-chip" + (chip.dim ? " dim" : ""));
       if (chip.title) c.title = chip.title;
       path.appendChild(c);
@@ -1843,8 +1855,7 @@ window.SVScroll = (function () {
     });
     if (!row.ordered) path.appendChild(txt("span", "순서 불확실", "thd-meta"));
     head.appendChild(path);
-    const statusLabel = { ok: "성공", fail: "실패", pending: "미확정" }[row.status] || row.status;
-    head.appendChild(txt("span", statusLabel, "thd-status thd-" + row.status));
+    // 상태 텍스트("성공" 등)는 상태점(thd-dot 색)과 중복이라 표기하지 않는다(2026-07-06 사용자 결정).
     item.appendChild(head);
     return item;
   }
@@ -1894,6 +1905,45 @@ window.SVScroll = (function () {
   };
 
   window.resetPortBoardSig = function () { lastSig = ""; };
+})();
+
+/* ── 사이드바 폭 조절 스플리터 ──
+   드래그 → --navw 갱신(px). 실제 폭 제한은 CSS clamp(300px..65vw)가 담당하므로 여기선
+   클램프하지 않고, 저장은 clamp 반영된 실제 폭(getComputedStyle)으로 한다. 더블클릭 = 초기화. */
+(function () {
+  const KEY = "smcp.navw";
+  const nav = document.getElementById("nav");
+  const grip = document.getElementById("navsplit");
+  if (!nav || !grip) return;
+  try {
+    const saved = parseInt(localStorage.getItem(KEY), 10);
+    if (saved > 0) document.documentElement.style.setProperty("--navw", saved + "px");
+  } catch (e) { /* localStorage 불가 환경 — 기본 폭 유지 */ }
+  let dragging = false;
+  grip.addEventListener("pointerdown", ev => {
+    dragging = true;
+    grip.setPointerCapture(ev.pointerId);
+    document.body.classList.add("nav-resizing");
+    ev.preventDefault();
+  });
+  grip.addEventListener("pointermove", ev => {
+    if (!dragging) return;
+    // nav 는 body 왼쪽 끝에서 시작하므로 clientX = 원하는 사이드바 폭.
+    document.documentElement.style.setProperty("--navw", Math.round(ev.clientX) + "px");
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove("nav-resizing");
+    const w = Math.round(nav.getBoundingClientRect().width);
+    try { if (w > 0) localStorage.setItem(KEY, String(w)); } catch (e) { /* 저장 실패 무시 */ }
+  };
+  grip.addEventListener("pointerup", end);
+  grip.addEventListener("pointercancel", end);
+  grip.addEventListener("dblclick", () => {
+    document.documentElement.style.removeProperty("--navw");
+    try { localStorage.removeItem(KEY); } catch (e) { /* 무시 */ }
+  });
 })();
 
 /* app.js — serial-mcp 로그 뷰어 클라이언트.
