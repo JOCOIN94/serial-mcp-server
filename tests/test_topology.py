@@ -478,6 +478,31 @@ def test_roster_membership_edge_has_handled_via_and_beats_duplicate_peer_edge():
     assert edges[0]["rssi"] == -42 and edges[0]["via"] == "handled"
 
 
+def test_roster_peer_edge_prefers_handled_regardless_of_order():
+    # 2026-07-06 실장비(SB5↔REP 점선): 같은 무방향 포트쌍이 양방향 peer 링크로 온다 —
+    # REP 의 [Data_Pass](handled, COM12→COM9)와 SB 의 [WiFi_Rx](heard, COM9→COM12).
+    # heard 가 먼저 삽입돼도 handled 로 승격하고 fresh 를 OR 해야 한다(REP 이 실제 중계 중이면
+    # 실선·신선). 예전엔 삽입 순서에 져서 heard·stale 로 남아 점선으로 그려졌다.
+    entries = [
+        {"port": "COM4", "alias": "SSM", "lines": [], "connected": True},
+        {"port": "COM9", "alias": "REPEAT1", "lines": [], "connected": True},
+        {"port": "COM12", "alias": "SB1-ESP", "lines": [], "connected": True},
+    ]
+    membership = {"COM4": {
+        1: {"device_type": "4", "local_port": "COM12", "last_ts": 1.0},
+        5: {"device_type": "5", "local_port": "COM9", "last_ts": 1.0},
+    }}
+    peer_links = [
+        {"from": "COM9", "to": "COM12", "via": "heard", "fresh": False},     # 먼저: 하행 overhear
+        {"from": "COM12", "to": "COM9", "via": "handled", "fresh": True},    # 나중: 상행 중계(Data_Pass)
+    ]
+    edges = build_roster(entries, membership=membership, peer_links=peer_links, now=2.0)["groups"][0]["edges"]
+
+    sb_rep = next(e for e in edges if {e["from"], e["to"]} == {"COM9", "COM12"})
+    assert sb_rep["via"] == "handled"
+    assert sb_rep["fresh"] is True
+
+
 def test_roster_standalone_group_includes_peer_edge():
     entries = [
         {"port": "COM12", "alias": "REPEAT1", "lines": [], "connected": True},

@@ -514,8 +514,14 @@ def _merge_group_edges(membership_edges: list, peer_links: Optional[list], group
             order.append(key)
             return
         if prefer_existing:
-            if cur.get("via") is None and edge.get("via") is not None:
+            # peer 링크는 무방향 한 쌍이 양방향으로 온다(REP [Data_Pass]=handled,
+            # SB [WiFi_Rx]=heard). 삽입 순서와 무관하게 handled 로 승격하고 fresh 를 OR 한다
+            # — 안 그러면 heard·stale 가 먼저 들어와 실제 중계 링크가 점선으로 남는다
+            # (2026-07-06 SB↔REP). 단 RSSI 보유 멤버십 edge 의 handled 는 절대 강등 안 함.
+            if edge.get("via") == "handled" or (cur.get("via") is None and edge.get("via") is not None):
                 cur["via"] = edge.get("via")
+            if edge.get("fresh"):
+                cur["fresh"] = True
             return
         if cur.get("rssi") is None and edge.get("rssi") is not None:
             cur["rssi"] = edge.get("rssi")

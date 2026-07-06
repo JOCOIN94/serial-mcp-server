@@ -2472,8 +2472,12 @@ function connectTopologyStream() {
       scheduleChainRender();
       return;
     }
-    if (obj && obj.src_port && obj.rx_port && window.flashTopologyEdges)
-      window.flashTopologyEdges([[obj.src_port, obj.rx_port]]);
+    // 원시 홉의 (src_port→rx_port) 직결 플래시는 쓰지 않는다 — correlator 는 (UnID,Unique)
+    // 키로 소스 TX↔SSM RX 만 맞춰 릴레이를 모른 채 '직결'로 귀속하므로, REP 경유 메시지도
+    // SB→SSM 직결 엣지를 번쩍여 체인로그(Rt 토큰 기반 실경로 SB→REP→SSM)와 어긋난다
+    // (2026-07-06 사용자 지적). 플래시는 체인 이벤트(chainEdgePairs, 위)만 따른다 — 체인은
+    // 콘솔 증거로 실경로를 그리고 직결 경로도 2노드 체인으로 커버한다. 홉 이벤트는 링크선
+    // 갱신 트리거로만 남긴다(rx-only 는 src_port=None 이라 어차피 플래시 대상 아님).
     scheduleTopologyRefresh();                          // 홉 관측 → 링크선도 즉시 갱신(멤버십 실시간)
   };
 }
