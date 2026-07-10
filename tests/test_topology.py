@@ -4,10 +4,13 @@
 채취한 실제 로그 줄이다(scratchpad/topology-capture-2026-06-26.md).
 """
 
+import pytest
+
 from serial_mcp.topology import (
     build_roster,
     classify_device,
     classify_lines,
+    identity_needs_lines,
     identify_port,
     parse_alias,
     port_labels,
@@ -61,6 +64,21 @@ def test_parse_alias_unknown_or_empty():
     assert parse_alias("COM14") == (None, None, None)
     assert parse_alias("") == (None, None, None)
     assert parse_alias(None) == (None, None, None)
+
+
+@pytest.mark.parametrize(("alias", "expected"), [
+    ("SSM", False),
+    ("REPEAT2", False),
+    ("SB1-ESP", False),
+    ("SB1", False),
+    ("SB-STM", False),       # STM 번호는 로그가 아니라 CardPairing이 담당
+    ("SB-ESP", True),        # ESP 번호(UnID)를 자기 INFO 로그에서 보강
+    ("SB", True),
+    ("COM14", True),         # 미인식 별칭은 로그 자동발견 필요
+    (None, True),
+])
+def test_identity_needs_lines_only_for_incomplete_alias(alias, expected):
+    assert identity_needs_lines(alias) is expected
 
 
 # ---- 로그 내용 자동발견 ----

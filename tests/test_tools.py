@@ -301,6 +301,43 @@ def test_viewer_topology_info_includes_chain_seed(monkeypatch, dual):
     assert engine.chains_n == 200
 
 
+def test_topology_entries_skip_recent_logs_for_complete_aliases(monkeypatch):
+    class NoReadBuffer:
+        def get_recent(self, _n):
+            raise AssertionError("완전한 별칭 포트는 최근 로그를 다시 만들면 안 된다")
+
+    a = make_monitor("COM_A", name="SSM")
+    b = make_monitor("COM_B", name="SB5-ESP")
+    a.buffer = NoReadBuffer()
+    b.buffer = NoReadBuffer()
+    monkeypatch.setattr(srv, "_monitors", {"COM_A": a, "COM_B": b})
+
+    entries = srv._topology_entries()
+    assert [e["lines"] for e in entries] == [[], []]
+
+
+def test_topology_entries_keep_recent_logs_for_incomplete_or_unknown_alias(monkeypatch):
+    calls = []
+
+    class SpyBuffer:
+        def __init__(self, text):
+            self.text = text
+
+        def get_recent(self, n):
+            calls.append((self.text, n))
+            return [self.text]
+
+    a = make_monitor("COM_A", name="SB-ESP")
+    b = make_monitor("COM_B", name=None)
+    a.buffer = SpyBuffer("sb-info")
+    b.buffer = SpyBuffer("unknown-info")
+    monkeypatch.setattr(srv, "_monitors", {"COM_A": a, "COM_B": b})
+
+    entries = srv._topology_entries()
+    assert [e["lines"] for e in entries] == [["sb-info"], ["unknown-info"]]
+    assert calls == [("sb-info", 300), ("unknown-info", 300)]
+
+
 # ---- get_recent_logs / query_serial_logs / get_log_buffer_info ----
 
 def test_query_routes_by_port(dual):

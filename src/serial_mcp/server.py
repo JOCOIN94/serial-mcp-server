@@ -51,7 +51,7 @@ from .ports import (
     parse_port_list,
 )
 from .ring_buffer import LineBuffer
-from .topology import build_roster, classify_device, port_labels
+from .topology import build_roster, classify_device, identity_needs_lines, port_labels
 from .topology_chains import annotate_chain_groups
 from .topology_engine import TopologyEngine
 from .viewer_feed import RawFeed
@@ -745,6 +745,11 @@ def _topology_bootstrap_tick() -> None:
         port_key = mon.port.upper()
         reader = mon.reader
         connected = bool(reader is not None and getattr(reader, "connected", False))
+        # 이 세 조건은 장비 타입과 무관하게 송신 불가가 확정된다. 최근 300줄 렌더·분류를
+        # 먼저 하면 bootstrap 완료 뒤에도 sweep마다 같은 로그를 재가공하게 된다.
+        if (not connected or port_key in _topology_bootstrapped
+                or (now - _topology_owner_ts) < _TOPOLOGY_BOOT_WINDOW_S):
+            continue
         d = classify_device(mon.buffer.get_recent(300), alias=mon.name)
         if not _bootstrap_due(now, _topology_owner_ts, _TOPOLOGY_BOOT_WINDOW_S,
                               _topology_bootstrapped, port_key, d["type"] == "SSM", connected):
@@ -1658,7 +1663,7 @@ def _topology_entries() -> list:
         entries.append({
             "port": m.port,
             "alias": m.name,
-            "lines": m.buffer.get_recent(300),
+            "lines": m.buffer.get_recent(300) if identity_needs_lines(m.name) else [],
             "connected": bool(r and r.connected),
         })
     return entries

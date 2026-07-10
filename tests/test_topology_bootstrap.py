@@ -119,3 +119,18 @@ def test_tick_no_send_when_disconnected(monkeypatch):
     mon = _spy_mon(port="COM4", connected=False)
     _run_tick(monkeypatch, [mon], dtype="SSM", now=100.0)
     assert mon.reader.writes == []                                         # 미연결 송신 금지
+
+
+def test_tick_skips_log_classification_for_latched_or_disconnected_ports(monkeypatch):
+    class NoReadBuffer:
+        def get_recent(self, _n=300):
+            raise AssertionError("송신 불가가 이미 확정된 포트는 로그를 분류하면 안 된다")
+
+    latched = _spy_mon(port="COM4", connected=True)
+    disconnected = _spy_mon(port="COM9", connected=False)
+    latched.buffer = NoReadBuffer()
+    disconnected.buffer = NoReadBuffer()
+
+    _run_tick(monkeypatch, [latched, disconnected], dtype="SSM", now=100.0, sent={"COM4"})
+    assert latched.reader.writes == []
+    assert disconnected.reader.writes == []

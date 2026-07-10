@@ -113,6 +113,19 @@ def parse_alias(alias: Optional[str]) -> tuple[Optional[str], Optional[int], Opt
     return (typ, num, mcu)
 
 
+def identity_needs_lines(alias: Optional[str]) -> bool:
+    """별칭만으로 identify_port 결과가 완결되는지 판정한다.
+
+    미인식/무명 포트는 로그 자동발견이 필요하다. SB-ESP처럼 타입은 알지만 번호가 없는
+    ESP 베이는 자기 INFO의 UnID로 번호를 보강하므로 로그가 필요하다. STM 번호는 로그가
+    아니라 CardPairing이 담당하고, 그 밖의 장비는 번호가 없어도 정체가 완결된다.
+    """
+    typ, num, mcu = parse_alias(alias)
+    if typ is None:
+        return True
+    return typ == "SB" and num is None and mcu != "STM"
+
+
 def classify_lines(lines) -> tuple[Optional[str], Optional[str]]:
     """수신 로그로 (type, mcu) 추정. 신뢰 없으면 (None, None).
 
