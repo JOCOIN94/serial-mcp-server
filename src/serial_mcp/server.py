@@ -18,17 +18,15 @@ from __future__ import annotations
 import asyncio
 import atexit
 import json
-import math
 import os
 import re
 import socket
-import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
-from typing import Callable, Mapping, Optional
+from typing import Mapping, Optional
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -46,11 +44,11 @@ from .ports import (
     first_autoname_match,
     label,
     name_for,
-    parse_autoname,
-    parse_names,
-    parse_port_list,
 )
+from .config import _env_int, _load_config
+from .diagnostics import log as _log
 from .ring_buffer import LineBuffer
+from .serial_reader import SerialReader
 from .topology import build_roster, classify_device, identity_needs_lines, port_labels
 from .topology_chains import annotate_chain_groups
 from .topology_engine import TopologyEngine
@@ -58,251 +56,6 @@ from .viewer_feed import RawFeed
 from .web_viewer import ViewerServer
 
 
-def _log(msg: str) -> None:
-    """진단 로그 — 반드시 stderr 로만(절대 stdout 금지)."""
-    print(f"[serial-mcp] {msg}", file=sys.stderr, flush=True)
-
-
-class SerialReader:
-    """백그라운드에서 시리얼 포트를 줄 단위로 읽어 LineBuffer 에 적재.
-
-    포트가 점유됐거나 열 수 없으면 죽지 않고 last_error 에 남긴 뒤 주기적으로
-    재시도한다(블랙박스 루프 중 장비가 늦게 붙거나 잠시 빠져도 복구).
-    """
-
-    def __init__(
-        self,
-        port: str,
-        baud: int,
-        buffer: LineBuffer,
-        tee_path: Optional[str] = None,
-        reconnect_interval: float = 3.0,
-        feed: Optional[RawFeed] = None,
-        on_line: Optional[Callable[[datetime, str], None]] = None,
-        on_open: Optional[Callable[[], None]] = None,
-        char_delay: float = 0.0,
-    ) -> None:
-        self.port = port
-        self.baud = baud
-        self.buffer = buffer
-        self.tee_path = tee_path
-        self.reconnect_interval = reconnect_interval
-        self.feed = feed   # 웹 뷰어 생중계 허브(없으면 발행 생략)
-        self.on_line = on_line   # 서버측 라인 후킹(보드 자동 식별 등, 없으면 생략)
-        self.on_open = on_open   # 재오픈 후킹(카드페어링 무효화 등, 없으면 생략)
-        self.char_delay = char_delay   # 전송 문자 간 지연(초) — 폴링 수신 펌웨어의 바이트 유실 대응
-
-        self._thread = threading.Thread(target=self._run, name="serial-reader", daemon=True)
-        self._stop = threading.Event()
-        self._wake = threading.Event()
-        # 첫 open 시도가 결판(성공/실패)나면 set — get_serial_status 의 바운드 대기가
-        # 이걸 기다려 lazy 기동 직후의 self-trigger race(전 포트 일시 false)를 막는다.
-        self._first_open_done = threading.Event()
-        self._ser: Optional[serial.Serial] = None
-        self._ser_lock = threading.Lock()
-        self._tee = None
-        self._tee_lock = threading.Lock()
-
-        # 상태(도구가 조회) — 단순 대입만 하므로 별도 Lock 불필요
-        self.connected = False
-        self.last_error: Optional[str] = None
-        self.opened_at: Optional[datetime] = None
-
-    def start(self) -> None:
-        if self.tee_path:
-            try:
-                self._tee = open(self.tee_path, "a", encoding="utf-8", buffering=1)
-            except OSError as e:
-                self.last_error = f"tee 파일 열기 실패: {e}"
-                _log(self.last_error)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        self._wake.set()
-        with self._ser_lock:
-            if self._ser is not None:
-                try:
-                    self._ser.close()
-                except Exception:
-                    pass
-        if self._tee is not None:
-            try:
-                self._tee.close()
-            except Exception:
-                pass
-
-    def _open(self) -> bool:
-        try:
-            ser = serial.Serial(self.port, self.baud, timeout=1, write_timeout=2)
-            with self._ser_lock:
-                self._ser = ser
-                self.connected = True
-                self.opened_at = datetime.now()
-                self.last_error = None
-            _log(f"열림: {self.port} @ {self.baud}")
-            if self.on_open is not None:
-                try:
-                    self.on_open()   # 재오픈 후킹(비차단·예외삼킴) — 이전 연결의 스테일 상태 정리
-                except Exception as e:  # noqa: BLE001 - 후킹 실패가 리더/재연결을 막으면 안 됨
-                    _log(f"on_open 훅 오류({self.port}): {e!r}")
-            return True
-        except serial.SerialException as e:
-            self.connected = False
-            self.last_error = f"포트 열기 실패({self.port}): {e}"
-            _log(self.last_error)
-            return False
-        except Exception as e:  # noqa: BLE001 - 어떤 예외든 죽지 않고 상태만 남긴다
-            self.connected = False
-            self.last_error = f"포트 열기 예외({self.port}): {e!r}"
-            _log(self.last_error)
-            return False
-        finally:
-            # 첫 시도가 성공이든 실패든 '결판났음'을 신호한다(status 바운드 대기를 깨움).
-            # 멱등 — 재연결 루프의 후속 _open 호출도 무해. 죽은 포트는 즉시 실패→즉시 set.
-            self._first_open_done.set()
-
-    def _wait_retry(self) -> None:
-        self._wake.wait(self.reconnect_interval)
-        self._wake.clear()
-
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            if self._ser is None or not self.connected:
-                if not self._open():
-                    self._wait_retry()  # 중단 신호에 즉시 반응
-                    continue
-            ser = self._ser
-            try:
-                raw = ser.readline()
-            except Exception as e:  # noqa: BLE001 - 연결 끊김 등 모든 읽기 오류 복구
-                self.connected = False
-                self.last_error = f"읽기 중 오류: {e}"
-                _log(self.last_error)
-                with self._ser_lock:
-                    try:
-                        if self._ser is not None:
-                            self._ser.close()
-                    except Exception:
-                        pass
-                    self._ser = None
-                continue
-
-            if not raw:
-                continue  # timeout — 수신 데이터 없음
-            self._ingest(raw, datetime.now())
-
-    def force_disconnect(self, reason: str) -> None:
-        """외부 감시자가 핸들을 강제 해제한다 — 좀비 핸들 대응(SPEC §3).
-
-        일부 어댑터/드라이버(시리얼넘버 없는 PL2303 클론 등)는 장치가 죽어도
-        읽기 예외 없이 타임아웃만 반복해, 리더 루프가 탈락을 영원히 감지하지
-        못한다(2026-06-12 실측: 40분간 connected 인 채 수신 0). 핸들을 즉시
-        닫아 OS 재열거 충돌을 막고, 재연결은 기존 리더 루프가 맡는다.
-        """
-        with self._ser_lock:
-            ser, self._ser = self._ser, None
-            self.connected = False
-            self.last_error = reason
-        if ser is not None:
-            try:
-                ser.close()
-            except Exception:
-                pass
-        _log(f"강제 해제: {self.port} — {reason}")
-
-    def _serial_failure(self, prefix: str, exc: Exception) -> serial.SerialException:
-        """쓰기/리셋 오류를 재연결 루프가 복구할 수 있는 상태로 변환."""
-        self.connected = False
-        self.last_error = f"{prefix}: {exc}"
-        _log(self.last_error)
-        try:
-            if self._ser is not None:
-                self._ser.close()
-        except Exception:
-            pass
-        self._ser = None
-        if isinstance(exc, serial.SerialException):
-            return exc
-        return serial.SerialException(str(exc))
-
-    def write(self, data: bytes, audit: Optional[str] = None) -> int:
-        """페이로드를 포트에 기록한다. 성공하면 audit 텍스트를 TX 감사 기록으로 남긴다.
-
-        char_delay(초)가 0보다 크면 1바이트씩 사이에 지연을 두고 기록한다 — 폴링
-        수신 펌웨어(SB-STM32 등)가 기계 속도 연속 바이트를 흘리는 문자 유실 대응.
-        보드를 가리지 않고 공통 적용한다(즉답형 펌웨어에도 부작용 없음).
-        """
-        with self._ser_lock:
-            ser = self._ser
-            if ser is None or not self.connected:
-                raise serial.SerialException(f"포트가 연결되어 있지 않음: {self.port}")
-            try:
-                if self.char_delay > 0 and len(data) > 1:
-                    n = 0
-                    for i in range(len(data)):
-                        n += ser.write(data[i:i + 1])
-                        if i < len(data) - 1:
-                            time.sleep(self.char_delay)
-                else:
-                    n = ser.write(data)
-            except Exception as e:  # noqa: BLE001 - pyserial/드라이버 예외를 동일 계약으로 변환
-                raise self._serial_failure("쓰기 실패", e) from e
-        if audit is not None:
-            self._audit_tx(audit, datetime.now())
-        return n
-
-    def pulse_reset(self, pulse_s: float = 0.1) -> None:
-        """DTR/RTS 펄스로 보드를 일반 부팅 리셋한다(CH343 등 자동리셋 회로용)."""
-        with self._ser_lock:
-            ser = self._ser
-            if ser is None or not self.connected:
-                raise serial.SerialException(f"포트가 연결되어 있지 않음: {self.port}")
-            try:
-                ser.dtr = False
-                ser.rts = True
-                time.sleep(pulse_s)
-                ser.rts = False
-            except Exception as e:  # noqa: BLE001 - 배선/드라이버 오류도 도구 레이어가 처리하게 한다
-                raise self._serial_failure("리셋 실패", e) from e
-        self._audit_tx("[RST] DTR/RTS 하드웨어 리셋 펄스", datetime.now())
-
-    def _audit_tx(self, text: str, ts: datetime) -> None:
-        """송신 감사 기록을 버퍼·웹 피드·tee에 남긴다."""
-        self.buffer.add(text, ts)
-        if self.feed is not None:
-            self.feed.publish(ts, text)
-        if self._tee is not None:
-            try:
-                stamp = ts.strftime("%Y-%m-%d %H:%M:%S.") + f"{ts.microsecond // 1000:03d}"
-                with self._tee_lock:
-                    self._tee.write(f"[{stamp}] {text}\n")
-            except Exception as e:  # noqa: BLE001
-                _log(f"tee 기록 실패: {e}")
-
-    def _ingest(self, raw: bytes, ts: datetime) -> None:
-        """수신 바이트 한 줄을 디코드·정리해 버퍼에 적재하고, tee가 열렸으면 함께 기록.
-
-        무한 I/O 루프(_run)에서 분리한 '한 줄 처리' 단위 — 실제 시리얼 없이 단위
-        테스트할 수 있다. 디코드(utf-8/replace)·개행 제거·tee 타임스탬프 형식을
-        여기에 고정한다(SPEC §3).
-        """
-        text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-        self.buffer.add(text, ts)
-        if self.feed is not None:
-            self.feed.publish(ts, text)   # 수신 원본 생중계(빈 줄 포함 — tee와 동일 충실도)
-        if self.on_line is not None:
-            try:
-                self.on_line(ts, text)
-            except Exception as e:  # noqa: BLE001 - 훅 오류가 리더 스레드를 죽이면 안 됨
-                _log(f"on_line 훅 오류({self.port}): {e!r}")
-        if self._tee is not None:
-            try:
-                stamp = ts.strftime("%Y-%m-%d %H:%M:%S.") + f"{ts.microsecond // 1000:03d}"
-                with self._tee_lock:
-                    self._tee.write(f"[{stamp}] {text}\n")
-            except Exception as e:  # noqa: BLE001
-                _log(f"tee 기록 실패: {e}")
 
 
 # ---- 전역 상태 (main 에서 초기화) ----
@@ -1593,18 +1346,6 @@ async def reset_board(port: str = "", wait_ms: int = 2000, ctx: Optional[Context
     }
 
 
-def _env_int(env: Mapping[str, str], name: str, default: int) -> int:
-    """정수 환경변수 파싱 — 미설정/빈값/오류 시 기본값. env 주입형(테스트 용이)."""
-    v = env.get(name)
-    if v is None or v.strip() == "":
-        return default
-    try:
-        return int(v)
-    except ValueError:
-        _log(f"환경변수 {name}={v!r} 정수 변환 실패 → 기본값 {default} 사용")
-        return default
-
-
 def _viewer_ports_info() -> list[dict]:
     """웹 뷰어 /api/ports — 셀렉터 구성용 [{port, label}] 목록."""
     return [{"port": m.port, "label": m.label} for m in _monitors.values()]
@@ -1699,159 +1440,6 @@ def _viewer_release_port(port: str) -> dict:
     return {"status": "ok", "released": True}
 
 
-def _parse_dedup(env: Mapping[str, str]) -> int:
-    """SERIAL_DEDUP 파싱 — 룩백 윈도. 기본 5, 0/false=끔, 1/true=직전 줄만(구버전)."""
-    raw = env.get("SERIAL_DEDUP", "").strip().lower()
-    if raw == "":
-        return 5
-    if raw in ("0", "false", "no", "off"):
-        return 0
-    if raw in ("1", "true", "yes", "on"):
-        return 1
-    try:
-        n = int(raw)
-        if n >= 0:
-            return n
-    except ValueError:
-        pass
-    _log(f"환경변수 SERIAL_DEDUP={raw!r} 해석 실패 → 기본 룩백 5 사용")
-    return 5
-
-
-def _parse_maxlen(env: Mapping[str, str]) -> int:
-    """SERIAL_BUFFER_LINES 파싱 — 0 이하면 기본 2000(deque(maxlen<0)은 기동 실패)."""
-    n = _env_int(env, "SERIAL_BUFFER_LINES", 2000)
-    if n <= 0:
-        _log(f"환경변수 SERIAL_BUFFER_LINES={n} 은 1 이상이어야 함 → 기본 2000 사용")
-        return 2000
-    return n
-
-
-def _parse_web(env: Mapping[str, str]) -> tuple[int, bool]:
-    """SERIAL_WEB 파싱 — 기본 8743(켜짐). 0/false/no/off → 8743 잠금만, UI 미서빙.
-
-    1~65535 밖이면 기본값으로 — 범위 밖 포트는 socket.bind에서 OverflowError로
-    서버 기동 자체를 죽일 수 있다(뷰어 실패는 본체에 영향 없어야 한다는 불변식).
-    """
-    raw = env.get("SERIAL_WEB", "").strip()
-    if raw == "":
-        return 8743, True
-    if raw.lower() in ("0", "false", "no", "off"):
-        return 8743, False
-    try:
-        n = int(raw)
-        if 1 <= n <= 65535:
-            return n, True
-    except ValueError:
-        pass
-    _log(f"환경변수 SERIAL_WEB={raw!r} 해석 실패(1~65535 필요) → 기본 포트 8743 사용")
-    return 8743, True
-
-
-def _parse_hotplug(env: Mapping[str, str]) -> Optional[float]:
-    """SERIAL_HOTPLUG 파싱 — 핫플러그 스캔 간격(초). 기본 5(켜짐).
-
-    0(0.0 포함)/false/no/off → 끔(None), 유한 양수(소수 허용) → 간격. 자동 스캔
-    모드에서만 의미가 있다(SERIAL_PORT 고정 목록 모드는 스캔 스레드를 띄우지 않음).
-    """
-    raw = env.get("SERIAL_HOTPLUG", "").strip().lower()
-    if raw == "":
-        return 5.0
-    if raw in ("false", "no", "off"):
-        return None
-    try:
-        n = float(raw)
-        if n == 0:
-            return None   # "0"·"0.0" 모두 끔 — 표기 차이로 켜짐/꺼짐이 갈리면 안 됨
-        if n > 0 and math.isfinite(n):
-            return n      # inf 는 사실상 무음 비활성이라 해석 실패로 취급
-    except ValueError:
-        pass
-    _log(f"환경변수 SERIAL_HOTPLUG={raw!r} 해석 실패(양수 초 필요) → 기본 5초 사용")
-    return 5.0
-
-
-def _parse_char_delay(env: Mapping[str, str]) -> float:
-    """SERIAL_CHAR_DELAY 파싱 — 전송 문자 간 지연(ms). 기본 10(켜짐), 반환은 초.
-
-    폴링 수신 펌웨어(SB-STM32 등)가 기계 속도 연속 바이트를 흘리는 문자 유실 대응
-    (실측 근거 2026-06-12: 'HELP' 송신 → 보드 수신 'HLP'). 0/false/no/off → 끔(0.0),
-    유한 양수(소수 허용, 상한 100ms) → 지연. 해석 실패는 기본값.
-    """
-    raw = env.get("SERIAL_CHAR_DELAY", "").strip().lower()
-    if raw == "":
-        return 0.010
-    if raw in ("false", "no", "off"):
-        return 0.0
-    try:
-        n = float(raw)
-        if n == 0:
-            return 0.0   # "0"·"0.0" 모두 끔 — 표기 차이로 켜짐/꺼짐이 갈리면 안 됨
-        if n > 0 and math.isfinite(n):
-            return min(n, 100.0) / 1000.0   # 과도한 값이 이벤트 루프를 오래 막지 않게 상한
-    except ValueError:
-        pass
-    _log(f"환경변수 SERIAL_CHAR_DELAY={raw!r} 해석 실패 → 기본 10ms 사용")
-    return 0.010
-
-
-def _parse_flag(env: Mapping[str, str], name: str, default: bool = True) -> bool:
-    """불리언 환경변수 파싱 — 미설정/빈값은 기본값, 해석 실패도 _log 후 기본값."""
-    raw = env.get(name, "").strip().lower()
-    if raw == "":
-        return default
-    if raw in ("0", "false", "no", "off"):
-        return False
-    if raw in ("1", "true", "yes", "on"):
-        return True
-    _log(f"환경변수 {name}={raw!r} 해석 실패 → 기본값 {default} 사용")
-    return default
-
-
-def _parse_confirm_mode(env: Mapping[str, str], name: str) -> str:
-    """SERIAL_WRITE_CONFIRM 3-state 파싱 → "all" | "r3" | "off".
-
-    off/false/0/no → "off"(확인 생략·클라이언트 게이트 위임),
-    r3/risky/risk  → "r3"(R3 파괴 명령만 확인),
-    그 외(true/1/on/yes/미설정/해석불가) → "all"(모든 쓰기 확인 — 안전 기본).
-    """
-    raw = env.get(name, "").strip().lower()
-    if raw in ("0", "false", "no", "off"):
-        return "off"
-    if raw in ("r3", "risky", "risk"):
-        return "r3"
-    if raw not in ("", "1", "true", "yes", "on"):
-        _log(f"환경변수 {name}={raw!r} 해석 실패 → 기본값 'all' 사용")
-    return "all"
-
-
-def _load_config(env: Mapping[str, str]) -> dict:
-    """환경변수 매핑에서 서버 설정을 파싱해 dict로 반환(부작용 없음, 순수 함수).
-
-    main()이 이 결과로 LineBuffer/SerialReader를 구성한다. I/O·스레드 시작과
-    분리돼 있어 환경변수 계약(SPEC §3/§4)을 단독 테스트할 수 있다.
-    """
-    web_port, web_ui = _parse_web(env)
-    return {
-        "ports": parse_port_list(env.get("SERIAL_PORT", "")),   # [] = USB 자동 스캔
-        "names": parse_names(env.get("SERIAL_NAMES", "")),
-        "autoname": parse_autoname(env.get("SERIAL_AUTONAME", "")),
-        "baud": _env_int(env, "SERIAL_BAUD", 115200),
-        "tee": env.get("SERIAL_TEE", "").strip() or None,
-        "exclude": env.get("SERIAL_EXCLUDE", "").strip() or None,
-        "include": env.get("SERIAL_INCLUDE", "").strip() or None,
-        "maxlen": _parse_maxlen(env),
-        "dedup": _parse_dedup(env),
-        "web": web_port,
-        "web_ui": web_ui,
-        "hotplug": _parse_hotplug(env),
-        "write": _parse_flag(env, "SERIAL_WRITE"),
-        "write_confirm": _parse_confirm_mode(env, "SERIAL_WRITE_CONFIRM"),
-        "char_delay": _parse_char_delay(env),
-        # 토폴로지 bootstrap INFO 자동 송신 — 실HW e2e 전까지 기본 OFF(서버-내부 시리얼 송신은
-        # 신중히 opt-in). 켜면 첫 SSM 식별·부팅 window 종료 후 SSM 포트에 INFO 1회(안전 read).
-        "topology_bootstrap": _parse_flag(env, "SERIAL_TOPOLOGY_BOOTSTRAP", default=False),
-    }
 
 
 def _tee_path_for(base: Optional[str], tag: str) -> Optional[str]:

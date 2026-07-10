@@ -14,19 +14,14 @@
 from __future__ import annotations
 
 import json
-import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
+from .diagnostics import log as _log
 from .ring_buffer import _fmt_ts
 from .viewer_feed import RawFeed
-
-
-def _log(msg: str) -> None:
-    """진단 로그 — stderr 전용(server.py의 _log와 동일 형식, 순환 import 회피용 사본)."""
-    print(f"[serial-mcp] {msg}", file=sys.stderr, flush=True)
 
 
 class _ViewerHTTPServer(ThreadingHTTPServer):
