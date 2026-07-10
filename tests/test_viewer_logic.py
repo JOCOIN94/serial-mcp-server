@@ -1,6 +1,6 @@
 """웹 뷰어 순수 렌더 로직(SViewer) 동작 테스트.
 
-web_viewer.py 인라인 페이지의 VIEWER-PURE 블록(DOM 비의존 순수 함수)을 추출해
+viewer.html의 VIEWER-PURE 블록(DOM 비의존 순수 함수)을 추출해
 node 로 실제 실행·검증한다. 샘플 암기가 아니라 '일반 패턴'(ANSI/JSON/kv/분류/반복/
 noise/네트워크 토큰 등)을 검증한다 — 새 펌웨어·태그·키가 와도 안전하도록.
 
@@ -14,14 +14,14 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-WEB = ROOT / "src" / "serial_mcp" / "web_viewer.py"
+WEB = ROOT / "src" / "serial_mcp" / "viewer.html"
 HARNESS = Path(__file__).with_name("viewer_logic_harness.cjs")
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node 미설치 — JS 순수 로직 검증 skip")
 
 
 def _extract_pure_block() -> str:
-    """web_viewer.py 의 VIEWER-PURE-START ~ END 사이 순수 JS(IIFE)를 추출한다."""
+    """viewer.html의 VIEWER-PURE-START ~ END 사이 순수 JS(IIFE)를 추출한다."""
     src = WEB.read_text(encoding="utf-8")
     m1 = src.index("VIEWER-PURE-START")
     code_start = src.index("*/", m1) + 2          # START 주석을 닫는 */ 이후

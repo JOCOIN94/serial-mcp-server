@@ -1,5 +1,5 @@
 /* 웹 뷰어 순수 로직(SViewer) 동작 검증 하니스.
-   test_viewer_logic.py 가 web_viewer.py 의 VIEWER-PURE 블록을 임시 .cjs 로 추출해
+   test_viewer_logic.py가 viewer.html의 VIEWER-PURE 블록을 임시 .cjs로 추출해
    `node viewer_logic_harness.cjs <module.cjs>` 로 실행한다. 특정 샘플이 아니라
    '일반 패턴'을 검증한다 — 새 펌웨어·태그·키가 와도 깨지지 않게. */
 "use strict";

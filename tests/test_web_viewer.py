@@ -5,9 +5,11 @@ import socket
 import urllib.error
 import urllib.request
 from datetime import datetime
+from importlib import resources
 
 import pytest
 
+import serial_mcp.web_viewer as web_viewer
 from serial_mcp.viewer_feed import RawFeed
 from serial_mcp.web_viewer import ViewerServer
 
@@ -60,6 +62,26 @@ def test_root_serves_html(viewer):
     assert "serial-mcp" in body
     assert "portboard" in body       # 좌측 포트 보드(board.js 렌더 타깃)
     assert "tabStream" in body       # 스트림/버퍼 탭 셸
+
+
+def test_viewer_html_is_a_packaged_resource():
+    asset = resources.files("serial_mcp").joinpath("viewer.html")
+    assert asset.is_file()
+    assert "VIEWER-PURE-START" in asset.read_text(encoding="utf-8")
+
+
+def test_missing_viewer_asset_returns_500_without_stopping_api(monkeypatch, viewer):
+    v, _, _ = viewer
+
+    def missing():
+        raise FileNotFoundError("viewer.html")
+
+    monkeypatch.setattr(web_viewer, "_viewer_html_bytes", missing)
+
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(v.url + "/", timeout=5)
+    assert exc.value.code == 500
+    assert _get_json(v.url + "/api/status")["session"] == "codex"
 
 
 def test_api_ports_lists_monitors(viewer):
