@@ -36,7 +36,7 @@ class _ViewerHTTPServer(ThreadingHTTPServer):
 
     ports_info: Callable[[], list]
     feed_for: Callable[[str], Optional[RawFeed]]
-    buffer_info: Callable[[str], dict]
+    buffer_info: Callable[..., dict]
     status_info: Callable[[], dict]
     topology_info: Callable[[], dict]
     topology_feed: Optional[RawFeed]
@@ -52,7 +52,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - http.server 규약
         parsed = urlparse(self.path)
         path = parsed.path
-        port = (parse_qs(parsed.query).get("port") or [""])[0]
+        query = parse_qs(parsed.query)
+        port = (query.get("port") or [""])[0]
         if path == "/":
             body = _HTML.encode("utf-8")
             self.send_response(200)
@@ -65,7 +66,15 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/ports":
             self._send_json({"ports": self.server.ports_info()})
         elif path == "/api/buffer":
-            self._send_json(self.server.buffer_info(port))
+            raw_since = (query.get("since") or [None])[0]
+            if raw_since is None:
+                self._send_json(self.server.buffer_info(port))
+            else:
+                try:
+                    since = int(raw_since)
+                except (TypeError, ValueError):
+                    since = -1     # 다른 생애/잘못된 revision → 백엔드가 reset 전체 스냅샷
+                self._send_json(self.server.buffer_info(port, since))
         elif path == "/api/status":
             self._send_json(self.server.status_info())
         elif path == "/api/topology":
@@ -139,7 +148,7 @@ class ViewerServer:
         self,
         ports_info: Callable[[], list],
         feed_for: Callable[[str], Optional[RawFeed]],
-        buffer_info: Callable[[str], dict],
+        buffer_info: Callable[..., dict],
         status_info: Callable[[], dict],
         topology_info: Optional[Callable[[], dict]] = None,
         topology_feed: Optional[RawFeed] = None,
@@ -1480,6 +1489,26 @@ function chainRows(chains, groups) {
   return out;
 }
 
+/* 서버 revision delta를 현재 버퍼 모델에 병합한다. DOM 비의존 — 누락/축출/재시작 복구 테스트용. */
+function mergeBufferEntries(current, delta) {
+  var incoming = (delta && delta.entries) || [];
+  if (delta && delta.reset) {
+    return incoming.slice().sort(function (a, b) { return Number(a.seq) - Number(b.seq); });
+  }
+  var oldest = delta && delta.oldest_seq != null ? Number(delta.oldest_seq) : -Infinity;
+  var bySeq = {};
+  for (var i = 0; i < (current || []).length; i++) {
+    var old = current[i];
+    if (old && Number(old.seq) >= oldest) bySeq[old.seq] = old;
+  }
+  for (var j = 0; j < incoming.length; j++) {
+    var changed = incoming[j];
+    if (changed && changed.seq != null) bySeq[changed.seq] = changed;
+  }
+  return Object.keys(bySeq).map(function (key) { return bySeq[key]; })
+    .sort(function (a, b) { return Number(a.seq) - Number(b.seq); });
+}
+
 /* ---- export (browser global + node require 양쪽) ---- */
 var SViewer = {
   escapeHtml: escapeHtml, cleanCtrl: cleanCtrl, stripAnsi: stripAnsi,
@@ -1492,6 +1521,7 @@ var SViewer = {
   hopWaypoints: hopWaypoints, hopColor: hopColor, hopDetail: hopDetail,
   portLabelMap: portLabelMap, chainRow: chainRow, chainRows: chainRows,
   chainTsLabel: chainTsLabel,
+  mergeBufferEntries: mergeBufferEntries,
   shortPortLabel: shortPortLabel
 };
 if (typeof module !== "undefined" && module.exports) module.exports = SViewer;
@@ -2116,12 +2146,14 @@ function appendEntry(box, entry, ctx, opts) {
     // gap divider
     if (view.gap > 0 && ctx.prevMs != null && ms != null && ms - ctx.prevMs >= view.gap * 1000) {
       const g = gapDivider((ms - ctx.prevMs) / 1000);
+      if (opts && opts.bufferSeq != null) g.dataset.bufferSeq = String(opts.bufferSeq);
       if (state.matcher) g.style.display = "none";
       box.appendChild(g); ctx.prevSig = null; ctx.prevNode = null;
     }
     // section divider (boot 전환; score 기반, 단일 문자열 아님)
     if (view.semantic && built.cls.primary === "boot" && built.cls.confidence >= 0.5 && ctx.prevNode) {
       const sd = sectionDivider(model.visible);
+      if (opts && opts.bufferSeq != null) sd.dataset.bufferSeq = String(opts.bufferSeq);
       if (state.matcher) sd.style.display = "none";
       box.appendChild(sd); ctx.prevSig = null; ctx.prevNode = null;
     }
@@ -2138,6 +2170,7 @@ function appendEntry(box, entry, ctx, opts) {
     const secKey = (model.firstTs || "").slice(0, 8);
     if (secKey && secKey !== ctx.prevSec) { built.node.classList.add("ts-new"); ctx.prevSec = secKey; }
   }
+  if (opts && opts.bufferSeq != null) built.node.dataset.bufferSeq = String(opts.bufferSeq);
   box.appendChild(built.node);
   applyVisibility(built.node);
   ctx.prevSig = built.sig; ctx.prevNode = model.blank ? ctx.prevNode : built.node;
@@ -2291,8 +2324,8 @@ function connectStream(port) {
   if (es) es.close();
   state.port = port;
   state.streamItems = [];
-  $("stream").innerHTML = ""; $("buffer").innerHTML = "";
-  _bufSig = "";                                    // 버퍼 비움 — 다음 폴링에서 강제 재렌더
+  $("stream").innerHTML = "";
+  resetBufferView();                                  // 포트 전환 — 다음 조회는 전체 revision 동기화
   state.streamLines = 0; state.newCount = 0;
   streamCtx = {};
   $("newpill").classList.remove("show");
@@ -2335,50 +2368,129 @@ function renderStreamAll() {
 }
 function updateStreamCount() { $("cStream").textContent = state.streamLines + "/" + MAX_STREAM; }
 
-/* ============================ 버퍼 (폴링) ============================ */
-let _bufSig = "";                                  // 직전 렌더 시그니처 — 무변경 폴링의 재렌더(깜빡임) 방지
+/* ============================ 버퍼 (revision 증분 폴링) ============================ */
+let _bufRevision = null;
+let _bufEntries = [];
+let _bufRows = {};
+let _bufCtx = {};
+
+function bufferEntryView(e) {
+  return { ts: e.first_ts, text: e.text, count: e.count,
+           firstTs: e.first_ts, lastTs: e.last_ts };
+}
+function appendBufferEntry(box, e) {
+  const node = appendEntry(box, bufferEntryView(e), _bufCtx,
+    { noFold: true, noEnter: true, bufferSeq: e.seq });
+  if (node) {
+    node.dataset.raw = e.text;
+    node.dataset.ts = e.first_ts || "";
+    _bufRows[String(e.seq)] = node;
+  }
+  return node;
+}
+function renderBufferAll(entries) {
+  const box = $("buffer");
+  box.replaceChildren();
+  _bufRows = {};
+  _bufCtx = {};
+  for (const e of entries || []) appendBufferEntry(box, e);
+}
+function resetBufferView() {
+  _bufRevision = null;
+  _bufEntries = [];
+  _bufRows = {};
+  _bufCtx = {};
+  const box = $("buffer");
+  if (box) box.replaceChildren();
+}
+function replaceBufferRow(e) {
+  const old = _bufRows[String(e.seq)];
+  if (!old || !old.parentNode) return false;
+  const built = buildLineNode(bufferEntryView(e));
+  const node = built.node;
+  node.dataset.bufferSeq = String(e.seq);
+  node.dataset.raw = e.text;
+  node.dataset.ts = e.first_ts || "";
+  if (old.classList.contains("ts-new")) node.classList.add("ts-new");
+  applyVisibility(node);
+  old.parentNode.replaceChild(node, old);
+  if (_bufCtx.prevNode === old) _bufCtx.prevNode = node;
+  _bufRows[String(e.seq)] = node;
+  return true;
+}
+function removeBufferSeq(box, seq) {
+  const key = String(seq);
+  for (const node of box.querySelectorAll('[data-buffer-seq="' + key + '"]')) node.remove();
+  delete _bufRows[key];
+}
+function applyBufferDeltaDom(d) {
+  const box = $("buffer");
+  const previous = _bufEntries;
+  const next = SV.mergeBufferEntries(previous, d || {});
+  if (_bufRevision == null || (d && d.reset)) {
+    _bufEntries = next;
+    _bufRevision = d && d.revision != null ? d.revision : null;
+    renderBufferAll(next);
+    return true;
+  }
+
+  const keep = new Set(next.map(e => String(e.seq)));
+  let changed = false;
+  for (const old of previous) {
+    if (!keep.has(String(old.seq))) { removeBufferSeq(box, old.seq); changed = true; }
+  }
+  if (changed && next.length) {
+    // 새 첫 행 앞 divider는 축출된 이전 행과의 간격이므로 함께 제거한다.
+    const first = String(next[0].seq);
+    for (const gap of box.querySelectorAll('.gap[data-buffer-seq="' + first + '"]')) gap.remove();
+  }
+  const incoming = ((d && d.entries) || []).slice()
+    .sort((a, b) => Number(a.seq) - Number(b.seq));
+  for (const e of incoming) {
+    if (!replaceBufferRow(e)) appendBufferEntry(box, e);
+    changed = true;
+  }
+  _bufEntries = next;
+  _bufRevision = d && d.revision != null ? d.revision : _bufRevision;
+  return changed;
+}
+function captureBufferAnchor(box) {
+  if (state.follow) return null;
+  const boxTop = box.getBoundingClientRect().top;
+  for (const r of box.querySelectorAll("[data-raw]")) {
+    const rb = r.getBoundingClientRect();
+    if (rb.bottom > boxTop) return { ts: r.dataset.ts, raw: r.dataset.raw, off: rb.top - boxTop };
+  }
+  return null;
+}
+function restoreBufferAnchor(box, anchor, oldScrollTop) {
+  box.scrollTop = oldScrollTop;
+  if (!anchor) return;
+  for (const r of box.querySelectorAll("[data-raw]")) {
+    if (r.dataset.ts === anchor.ts && r.dataset.raw === anchor.raw) {
+      box.scrollTop += (r.getBoundingClientRect().top - box.getBoundingClientRect().top) - anchor.off;
+      return;
+    }
+  }
+}
 async function refreshBuffer() {
   if (state.tab !== "buffer" || state.paused || !state.port) return;
+  let url = "/api/buffer?port=" + encodeURIComponent(state.port);
+  if (_bufRevision != null) url += "&since=" + encodeURIComponent(_bufRevision);
   let d;
-  try { d = await (await fetch("/api/buffer?port=" + encodeURIComponent(state.port))).json(); }
+  try { d = await (await fetch(url)).json(); }
   catch (e) { return; }
-  const entries = d.entries || [];
-  $("cBuffer").textContent = entries.length + "/" + (d.capacity != null ? d.capacity : "?");
-  const last = entries.length ? entries[entries.length - 1] : null;
-  let total = 0;
-  for (const e of entries) total += e.count || 1;
-  const sig = state.port + "|" + entries.length + "|" + (last ? last.last_ts + "|" + last.count : "") + "|" + total;
-  if (sig === _bufSig) return;                     // 내용 동일 — DOM 재구성 skip
-  _bufSig = sig;
   const box = $("buffer");
   const st = box.scrollTop;
-  // follow off 복원은 픽셀이 아니라 '보던 줄' 앵커로 — 포화 버퍼(2000/2000)는 매 폴링
-  // 위가 잘려 내용 전체가 위로 밀리므로, 같은 픽셀을 복원하면 다른 줄이 보인다.
-  let anchor = null;
-  if (!state.follow) {
-    const boxTop = box.getBoundingClientRect().top;
-    for (const r of box.querySelectorAll("[data-raw]")) {
-      const rb = r.getBoundingClientRect();
-      if (rb.bottom > boxTop) { anchor = { ts: r.dataset.ts, raw: r.dataset.raw, off: rb.top - boxTop }; break; }
-    }
+  const anchor = captureBufferAnchor(box);
+  if (!applyBufferDeltaDom(d)) {
+    $("cBuffer").textContent = _bufEntries.length + "/" + (d.capacity != null ? d.capacity : "?");
+    return;
   }
-  box.innerHTML = "";
-  const ctx = {};
-  for (const e of entries) {
-    const node = appendEntry(box, { ts: e.first_ts, text: e.text, count: e.count, firstTs: e.first_ts, lastTs: e.last_ts }, ctx, { noFold: true, noEnter: true });   // 폴링 전체 재렌더 — enter 애니메이션 금지
-    if (node) { node.dataset.raw = e.text; node.dataset.ts = e.first_ts || ""; }   // 체인 칩 점프의 원문·시각 매칭용
-  }
+  $("cBuffer").textContent = _bufEntries.length + "/" + (d.capacity != null ? d.capacity : "?");
   scheduleRecount();
   if (state.follow && state.tab === "buffer") { scrollLogBottom("buffer"); return; }
-  box.scrollTop = st;                              // 근사 복원(앵커 미발견 시의 최선)
-  if (anchor) {
-    for (const r of box.querySelectorAll("[data-raw]")) {
-      if (r.dataset.ts === anchor.ts && r.dataset.raw === anchor.raw) {
-        box.scrollTop += (r.getBoundingClientRect().top - box.getBoundingClientRect().top) - anchor.off;
-        break;                                     // 보던 줄을 같은 화면 위치에 고정(밀림 상쇄)
-      }
-    }
-  }
+  restoreBufferAnchor(box, anchor, st);
 }
 setInterval(refreshBuffer, 2000);
 
@@ -2585,7 +2697,7 @@ $("follow").onclick = () => setFollow(!state.follow);
 $("clear").onclick = () => {
   $(state.tab).innerHTML = "";
   if (state.tab === "stream") { state.streamItems = []; streamCtx = {}; state.streamLines = 0; updateStreamCount(); }
-  else _bufSig = "";                               // 버퍼 비움 — 다음 폴링에서 강제 재렌더
+  else resetBufferView();                           // 버퍼 화면만 비움 — 다음 폴링에서 전체 재동기화
   recount();
 };
 
@@ -2694,7 +2806,10 @@ function applyViewClasses() {
   b.classList.toggle("focus", state.focus);
 }
 // 렌더에 영향을 주는 설정이 바뀌면 보관 원본에서 다시 그린다.
-function rerenderAll() { renderStreamAll(); if (state.tab === "buffer") refreshBuffer(); }
+function rerenderAll() {
+  renderStreamAll();
+  if (state.tab === "buffer") { renderBufferAll(_bufEntries); scheduleRecount(); }
+}
 
 /* localStorage 로드(기존 키 보존 + 신규 키 기본값 fallback = migration) */
 function lsGet(key, def) { const v = localStorage.getItem(key); return v === null ? def : v; }

@@ -1611,20 +1611,21 @@ def _viewer_feed_for(port: str) -> Optional[RawFeed]:
     return m.feed if m else None
 
 
-def _viewer_buffer_info(port: str) -> dict:
+def _viewer_buffer_info(port: str, since: Optional[int] = None) -> dict:
     """웹 뷰어 /api/buffer?port= — 해당 포트의 구조화 스냅샷 + 카운터."""
     m = _monitors.get((port or "").strip().upper())
     if m is None:
         return {"status": "error", "entries": [], "capacity": 0}
     info = m.buffer.info()
+    delta = m.buffer.snapshot_delta(since=since)
     return {
         "status": "ok",
         "port": m.port,
-        "entries": m.buffer.snapshot(),
         "capacity": info["capacity"],
         "total_received": info["total_received"],
         "total_stored": info["total_stored"],
         "dedup": info["dedup"],
+        **delta,
     }
 
 

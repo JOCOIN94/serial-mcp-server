@@ -409,6 +409,87 @@ def test_snapshot_chronological_order():
     assert [e["text"] for e in buf.snapshot()] == ["first", "second"]
 
 
+# ---- snapshot_delta (웹 뷰어 증분 동기화) ----
+
+def test_snapshot_delta_full_then_unchanged_uses_stable_seq_revision():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    buf.add("first", BASE)
+    buf.add("second", datetime(2026, 6, 9, 14, 0, 1, 0))
+
+    full = buf.snapshot_delta()
+    assert full == {
+        "revision": 2,
+        "reset": True,
+        "oldest_seq": 1,
+        "entries": [
+            {"seq": 1, "revision": 1, "text": "first",
+             "first_ts": "14:00:00.000", "last_ts": "14:00:00.000", "count": 1},
+            {"seq": 2, "revision": 2, "text": "second",
+             "first_ts": "14:00:01.000", "last_ts": "14:00:01.000", "count": 1},
+        ],
+    }
+    assert buf.snapshot_delta(since=2) == {
+        "revision": 2, "reset": False, "oldest_seq": 1, "entries": [],
+    }
+
+
+def test_snapshot_delta_dedup_returns_same_seq_as_changed_entry():
+    buf = LineBuffer(maxlen=10, dedup=5)
+    buf.add("A", BASE)
+    buf.add("B", BASE)
+    assert buf.add("A", datetime(2026, 6, 9, 14, 0, 2, 0)) is False
+
+    delta = buf.snapshot_delta(since=2)
+    assert delta["revision"] == 3
+    assert delta["reset"] is False
+    assert delta["oldest_seq"] == 1
+    assert delta["entries"] == [
+        {"seq": 1, "revision": 3, "text": "A",
+         "first_ts": "14:00:00.000", "last_ts": "14:00:02.000", "count": 2},
+    ]
+
+
+def test_snapshot_delta_eviction_reports_new_oldest_and_only_changes():
+    buf = LineBuffer(maxlen=2, dedup=False)
+    buf.add("A", BASE)
+    buf.add("B", BASE)
+    buf.add("C", BASE)  # seq=1 축출
+
+    delta = buf.snapshot_delta(since=2)
+    assert delta["reset"] is False
+    assert delta["oldest_seq"] == 2
+    assert [e["seq"] for e in delta["entries"]] == [3]
+    assert delta["entries"][0]["text"] == "C"
+
+
+def test_snapshot_delta_clear_and_restart_force_reset_without_data_loss():
+    buf = LineBuffer(maxlen=10, dedup=False)
+    buf.add("old", BASE)
+    assert buf.clear() == 1
+    cleared = buf.snapshot_delta(since=1)
+    assert cleared == {
+        "revision": 2, "reset": True, "oldest_seq": 2, "entries": [],
+    }
+
+    buf.add("new", BASE)
+    recovered = buf.snapshot_delta(since=1)
+    assert recovered["reset"] is True
+    assert [e["text"] for e in recovered["entries"]] == ["new"]
+
+    restarted = LineBuffer(maxlen=10, dedup=False).snapshot_delta(since=recovered["revision"])
+    assert restarted == {
+        "revision": 0, "reset": True, "oldest_seq": 1, "entries": [],
+    }
+
+
+def test_snapshot_delta_filtered_lines_do_not_advance_content_revision():
+    buf = LineBuffer(maxlen=10, dedup=False, include="KEEP")
+    assert buf.add("DROP", BASE) is False
+    assert buf.snapshot_delta() == {
+        "revision": 0, "reset": True, "oldest_seq": 1, "entries": [],
+    }
+
+
 # ---- contains_all (체인 점프 가능성 프로브 — 부분문자열 AND, 정규식 아님) ----
 
 def test_contains_all_requires_every_needle_on_one_line():

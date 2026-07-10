@@ -405,5 +405,43 @@ ok(SV.findPayload("[".repeat(100)) === null, "rg-payload-many-openers-null");
   ok(longPort.chips[0].title.indexOf("/dev/tty.SLAB_USBtoUART") === 0, "chain-row-long-port-full-in-title");
 }
 
+/* B-1. mergeBufferEntries: 전체 재전송 없이 revision delta를 현재 모델에 병합한다. */
+{
+  const current = [
+    { seq: 10, revision: 10, text: "A", count: 1 },
+    { seq: 11, revision: 11, text: "B", count: 1 },
+  ];
+  const unchanged = SV.mergeBufferEntries(current, {
+    revision: 11, reset: false, oldest_seq: 10, entries: [],
+  });
+  eq(unchanged.map(e => e.text).join(","), "A,B", "buffer-delta-unchanged-keeps-data");
+
+  const appended = SV.mergeBufferEntries(unchanged, {
+    revision: 12, reset: false, oldest_seq: 10,
+    entries: [{ seq: 12, revision: 12, text: "C", count: 1 }],
+  });
+  eq(appended.map(e => e.seq).join(","), "10,11,12", "buffer-delta-appends-one");
+
+  const dedup = SV.mergeBufferEntries(appended, {
+    revision: 13, reset: false, oldest_seq: 10,
+    entries: [{ seq: 11, revision: 13, text: "B", count: 2 }],
+  });
+  eq(dedup.length, 3, "buffer-delta-dedup-does-not-duplicate");
+  eq(dedup[1].count, 2, "buffer-delta-dedup-replaces-row");
+
+  const evicted = SV.mergeBufferEntries(dedup, {
+    revision: 14, reset: false, oldest_seq: 11,
+    entries: [{ seq: 13, revision: 14, text: "D", count: 1 }],
+  });
+  eq(evicted.map(e => e.seq).join(","), "11,12,13", "buffer-delta-evicts-before-oldest");
+
+  const reset = SV.mergeBufferEntries(evicted, {
+    revision: 1, reset: true, oldest_seq: 1,
+    entries: [{ seq: 1, revision: 1, text: "fresh", count: 1 }],
+  });
+  eq(reset.length, 1, "buffer-delta-reset-replaces-all");
+  eq(reset[0].text, "fresh", "buffer-delta-reset-keeps-server-snapshot");
+}
+
 if (fails.length) { console.error("FAILURES (" + fails.length + "):\n" + fails.map(f => " - " + f).join("\n")); process.exit(1); }
 console.log("all viewer-logic assertions passed");

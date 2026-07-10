@@ -55,3 +55,15 @@ def test_pure_block_is_dom_free_and_single():
     # 순수 블록 안에서는 document / addEventListener 등을 쓰지 않는다(테스트 가능성 보장).
     for forbidden in ("document.", "addEventListener", "localStorage", "EventSource"):
         assert forbidden not in code, f"순수 블록에 DOM 의존 {forbidden!r} 가 있으면 안 됨"
+
+
+def test_buffer_delta_dom_path_updates_rows_without_full_rebuild():
+    """정상 revision delta는 전체 buffer DOM을 비우지 않고 행 단위로 갱신해야 한다."""
+    src = WEB.read_text(encoding="utf-8")
+    start = src.index("function applyBufferDeltaDom")
+    end = src.index("async function refreshBuffer", start)
+    block = src[start:end]
+    assert "innerHTML" not in block and "replaceChildren" not in block
+    assert "replaceBufferRow" in block
+    assert "appendBufferEntry" in block
+    assert "data-buffer-seq" in src

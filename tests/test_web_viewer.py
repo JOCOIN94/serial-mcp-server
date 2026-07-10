@@ -102,6 +102,26 @@ def test_api_buffer_routes_by_port(viewer):
     assert _get_json(v.url + "/api/buffer?port=COM_B")["port"] == "COM_B"
 
 
+def test_api_buffer_since_forwards_integer_revision():
+    calls = []
+    v = ViewerServer(
+        ports_info=lambda: [],
+        feed_for=lambda p: None,
+        buffer_info=lambda p, since=None: calls.append((p, since)) or {
+            "status": "ok", "port": p, "revision": since, "entries": [],
+        },
+        status_info=lambda: {"ports": []},
+        port=0,
+    )
+    v.start()
+    try:
+        d = _get_json(v.url + "/api/buffer?port=COM_A&since=17")
+    finally:
+        v.stop()
+    assert d["revision"] == 17
+    assert calls == [("COM_A", 17)]
+
+
 def test_api_release_routes_to_backend_callback(viewer):
     v, _, release_calls = viewer
     d = _get_json(v.url + "/api/release?port=COM_A")

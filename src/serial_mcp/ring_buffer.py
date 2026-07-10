@@ -35,6 +35,8 @@ class LogEntry:
     first_ts: datetime   # 이 묶음의 최초 수신 시각
     last_ts: datetime    # 이 묶음의 최종 수신 시각
     count: int = 1       # 접힌 반복 횟수
+    seq: int = 0         # 뷰어 증분 동기화용 안정 ID(버퍼 생애 동안 단조 증가)
+    revision: int = 0    # 이 항목이 마지막으로 바뀐 content revision
 
     def render(self) -> str:
         """조회용 문자열. 접힌 묶음은 '(N회 반복, HH:MM:SS~HH:MM:SS)'를 덧붙인다."""
@@ -67,6 +69,11 @@ class LineBuffer:
         # 진단용 통계
         self.total_received = 0   # 수집 필터 통과 전, 들어온 라인 총수
         self.total_stored = 0     # 신규 항목으로 저장된 수(접힘/필터 제외)
+        # 뷰어 증분 동기화 상태. 필터로 버린 줄은 공개 버퍼 내용이 안 바뀌므로 revision을
+        # 올리지 않는다. clear는 빈 버퍼도 하나의 명시적 내용 변경으로 취급한다.
+        self._revision = 0
+        self._next_seq = 1
+        self._clear_revision = 0
 
     def add(self, text: str, ts: Optional[datetime] = None) -> bool:
         """라인 한 줄을 '수집 필터 → 근접 중복 접기(룩백)' 순으로 처리해 버퍼에 반영.
@@ -91,11 +98,21 @@ class LineBuffer:
             if self._dedup_window:
                 for e in islice(reversed(self._buf), self._dedup_window):
                     if e.text == text:
+                        self._revision += 1
                         e.count += 1
                         e.last_ts = ts
+                        e.revision = self._revision
                         return False
             # 3) 신규 항목(가득 차면 deque가 가장 오래된 것을 자동으로 밀어냄)
-            self._buf.append(LogEntry(text=text, first_ts=ts, last_ts=ts))
+            self._revision += 1
+            self._buf.append(LogEntry(
+                text=text,
+                first_ts=ts,
+                last_ts=ts,
+                seq=self._next_seq,
+                revision=self._revision,
+            ))
+            self._next_seq += 1
             self.total_stored += 1
             return True
 
@@ -202,6 +219,8 @@ class LineBuffer:
         with self._lock:
             n = len(self._buf)
             self._buf.clear()
+            self._revision += 1
+            self._clear_revision = self._revision
             return n
 
     def entries_since(self, ts: datetime, max_lines: int = 200) -> list[str]:
@@ -234,3 +253,44 @@ class LineBuffer:
             }
             for e in items
         ]
+
+    def snapshot_delta(self, since: Optional[int] = None) -> dict:
+        """웹 뷰어용 revision 증분 스냅샷.
+
+        since가 없거나 현재 버퍼 생애와 맞지 않으면 reset=True 전체 스냅샷을 반환한다.
+        정상 후속 호출은 since 이후 생성·dedup 갱신된 현재 항목만 반환한다. deque에서 이미
+        축출된 항목은 oldest_seq로 클라이언트가 제거하며, clear 뒤의 구독자는 전체 재동기화한다.
+        기존 snapshot()의 공개 shape는 바꾸지 않는다.
+        """
+        with self._lock:
+            revision = self._revision
+            invalid = (
+                since is None
+                or since < 0
+                or since > revision
+                or since < self._clear_revision
+            )
+            items = list(self._buf) if invalid else [e for e in self._buf if e.revision > since]
+            # Lock 밖에서 포맷하되, dedup 스레드가 count/last_ts/revision을 바꾸기 전에
+            # 공개 필드를 한 revision 시점의 불변 tuple로 캡처한다.
+            captured = [
+                (e.seq, e.revision, e.text, e.first_ts, e.last_ts, e.count)
+                for e in items
+            ]
+            oldest_seq = self._buf[0].seq if self._buf else self._next_seq
+        return {
+            "revision": revision,
+            "reset": invalid,
+            "oldest_seq": oldest_seq,
+            "entries": [
+                {
+                    "seq": seq,
+                    "revision": item_revision,
+                    "text": text,
+                    "first_ts": _fmt_ts(first_ts),
+                    "last_ts": _fmt_ts(last_ts),
+                    "count": count,
+                }
+                for seq, item_revision, text, first_ts, last_ts, count in captured
+            ],
+        }
