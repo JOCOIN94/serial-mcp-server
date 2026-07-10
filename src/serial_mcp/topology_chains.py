@@ -567,9 +567,11 @@ class ChainLog:
 
     def _observe_rx(self, ent: dict, ev: dict, resolver, port_names: Optional[dict]) -> None:
         port = ev.get("port")
-        if ent.get("dir") == "down" and port is not None and port == ent.get("group"):
-            # 하행에서 group 포트는 송신측 SSM이다. 같은 SSM 콘솔에 후속 echo/RX가 잡혀도
-            # 목적지로 추가하면 SSM -> ... -> SSM 루프가 생긴다.
+        if ent.get("dir") == "down":
+            # [Proc-WiFiRx] 는 SSM측 rx 이벤트다. 하행으로 확정된 체인에서 이 이벤트는
+            # 목적지 leaf가 아니라 송신측 self-echo/다른 SSM의 청취다. cold-start에는
+            # group이 아직 None일 수 있으므로 group 포트 일치에 의존하면
+            # SSM -> ... -> SSM 루프가 남는다. 방향 교정은 observe()가 이 호출 전에 끝낸다.
             return
         hints = ev.get("hints") or {}
         metrics = ev.get("metrics") or {}
@@ -618,6 +620,11 @@ class ChainLog:
             if node.get("role") != "src":
                 node["role"] = "relay"
         if converted:
+            # 기존 rx 자리를 그대로 두면 목적지가 먼저 관측된 cold-start에서
+            # SSM -> SB5 -> REPEAT처럼 relay가 terminal 뒤에 남는다. 같은 노드를
+            # 제거한 뒤 공통 삽입 규칙으로 재배치해 src -> relay -> rx 순서를 복구한다.
+            ent["nodes"].remove(node)
+            self._insert_before_dst(ent, node)
             # 중계했다면 이 포트는 목적지가 아니다 — 진짜 목적지는 키 ident 로 추론 표시하고,
             # rx 관측에 얹혔던 도착 확정(ok)을 회수한다(중계 청취≠도착 — 미확정 주황).
             self._ensure_ident_rx(ent, resolver)

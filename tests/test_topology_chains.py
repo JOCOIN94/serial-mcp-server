@@ -881,6 +881,51 @@ def test_downlink_listen_then_pass_merges_same_port_and_defers_arrival():
     assert_public(entry)
 
 
+def test_downlink_cold_start_converted_relay_moves_before_observed_rx():
+    # cold-start 에서 port_idents 가 아직 비어 있으면 목적지 SB와 중계 REPEAT가 모두
+    # 일단 rx 로 붙을 수 있다. 뒤늦은 Data_Pass가 REPEAT를 relay로 승격할 때 기존
+    # 배열 위치를 유지하면 SSM -> SB5 -> REPEAT로 역전되므로 terminal 앞으로 옮긴다.
+    log = ChainLog(window_s=10)
+    names = {"COM4": "SSM", "COM9": "REPEAT", "COM13": "SB5"}
+    obj = {"UnID": 5, "Stat": "OK", "Asn": 40, "Cidx": 1508}
+    scope = {"COM4": "COM4", "COM9": "COM4", "COM13": "COM4"}
+
+    log.observe(ev("wifirx", "COM13", ts=1.0, unid=5, unique=None, cidx=1508,
+                   json_obj=obj), scope=scope, port_names=names, port_idents={})
+    log.observe(ev("wifirx", "COM9", ts=1.1, unid=5, unique=None, cidx=1508,
+                   json_obj=obj), scope=scope, port_names=names, port_idents={})
+    entry = log.observe(ev("pass", "COM9", ts=1.2, unid=5, unique=None, cidx=1508,
+                           json_obj=obj), scope=scope, port_names=names, port_idents={})[0]
+
+    assert labels(entry) == ["COM4", "REPEAT", "SB5"]
+    assert [n["role"] for n in entry["nodes"]] == ["src", "relay", "rx"]
+    assert entry["ok"] is True and entry["confidence"] == "observed"
+
+
+def test_downlink_unknown_group_rx_echo_does_not_append_trailing_dst():
+    # owner 재획득 직후 scope/group 이 아직 비어 있어도, 두 leaf 포트 관측으로 down 방향이
+    # 잠긴 뒤 들어온 SSM [Proc-WiFiRx] echo를 목적지로 붙이면 안 된다.
+    log = ChainLog(window_s=10)
+    names = {"COM4": "SSM", "COM9": "REPEAT", "COM13": "SB5"}
+    obj = {"UnID": 5, "Stat": "OK", "Asn": 40, "Cidx": 1508}
+
+    log.observe(ev("wifirx", "COM13", ts=1.0, unid=5, unique=None, cidx=1508,
+                   json_obj=obj), scope={}, port_names=names, port_idents={})
+    log.observe(ev("wifirx", "COM9", ts=1.1, unid=5, unique=None, cidx=1508,
+                   json_obj=obj), scope={}, port_names=names, port_idents={})
+    log.observe(ev("pass", "COM9", ts=1.2, unid=5, unique=None, cidx=1508,
+                   json_obj=obj), scope={}, port_names=names, port_idents={})
+
+    assert log.observe(
+        ev("rx", "COM4", ts=1.3, unid=5, unique=None, cidx=1508,
+           json_obj=obj), scope={}, port_names=names, port_idents={},
+    ) == []
+    entry = log.recent(1)[0]
+
+    assert [n["role"] for n in entry["nodes"]] == ["src", "relay", "rx"]
+    assert all(n.get("port") != "COM4" or n.get("role") == "src" for n in entry["nodes"])
+
+
 def test_downlink_pass_then_listen_does_not_confirm_arrival():
     # 역순(중계가 먼저, 청취가 나중) — 같은 포트 relay 를 재사용하고 도착 확정을 만들지 않는다.
     log = ChainLog(window_s=10)
