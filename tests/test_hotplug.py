@@ -76,7 +76,7 @@ def test_make_monitor_resolves_name_by_serial_number(stub_reader):
 
 
 def test_make_monitor_hooks_autoname_only_when_unnamed(stub_reader, monkeypatch):
-    monkeypatch.setattr(srv, "_autoname_rules", srv.compile_autoname([("SB1", r"STM32")]))
+    monkeypatch.setattr(srv._runtime, "autoname_rules", srv.compile_autoname([("SB1", r"STM32")]))
     named = srv._make_monitor("COM7", None, {}, {**BASE_CFG, "names": {"COM7": "SSM"}})
     unnamed = srv._make_monitor("COM8", None, {}, BASE_CFG)
     # on_line 은 둘 다 설정됨(토폴로지 관측 상시). 차이는 autoname 호출 여부다.
@@ -101,15 +101,15 @@ def bt(device):
 def scan_env(monkeypatch, stub_reader):
     """기존 모니터 1개(COM_A) + 설정 주입. comports 는 테스트별로 덮는다."""
     existing = srv._make_monitor("COM_A", None, {}, BASE_CFG)
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": existing})
-    monkeypatch.setattr(srv, "_config", dict(BASE_CFG))
-    monkeypatch.setattr(srv, "_hotplug_pending", set())
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": existing})
+    monkeypatch.setattr(srv._runtime, "config", dict(BASE_CFG))
+    monkeypatch.setattr(srv._runtime, "hotplug_pending", set())
     return existing
 
 
 def seen_last_scan(monkeypatch, *ports):
     """직전 스캔에서 이미 목격된 상태를 주입 — 정착 유예(연속 2회)를 통과시킨다."""
-    monkeypatch.setattr(srv, "_hotplug_pending", {p.upper() for p in ports})
+    monkeypatch.setattr(srv._runtime, "hotplug_pending", {p.upper() for p in ports})
 
 
 def test_scan_adds_new_usb_port_and_starts_reader(monkeypatch, scan_env):
@@ -118,8 +118,8 @@ def test_scan_adds_new_usb_port_and_starts_reader(monkeypatch, scan_env):
                         lambda: [usb("COM_A"), usb("COM_B")])
     added = srv._hotplug_scan_once()
     assert added == ["COM_B"]
-    assert "COM_B" in srv._monitors
-    assert srv._monitors["COM_B"].reader.started is True
+    assert "COM_B" in srv._runtime.monitors
+    assert srv._runtime.monitors["COM_B"].reader.started is True
 
 
 def test_scan_add_requires_two_consecutive_scans(monkeypatch, scan_env):
@@ -127,9 +127,9 @@ def test_scan_add_requires_two_consecutive_scans(monkeypatch, scan_env):
     monkeypatch.setattr(srv.list_ports, "comports",
                         lambda: [usb("COM_A"), usb("COM_B")])
     assert srv._hotplug_scan_once() == []            # 1회차: 보류
-    assert "COM_B" not in srv._monitors
+    assert "COM_B" not in srv._runtime.monitors
     assert srv._hotplug_scan_once() == ["COM_B"]     # 2회차: 추가
-    assert srv._monitors["COM_B"].reader.started is True
+    assert srv._runtime.monitors["COM_B"].reader.started is True
 
 
 def test_scan_pending_cleared_when_port_vanishes(monkeypatch, scan_env):
@@ -141,13 +141,13 @@ def test_scan_pending_cleared_when_port_vanishes(monkeypatch, scan_env):
     assert srv._hotplug_scan_once() == []            # 사라짐 → 보류 해제
     ports["now"] = [usb("COM_A"), usb("COM_B")]
     assert srv._hotplug_scan_once() == []            # 재등장 1회차 — 아직 보류
-    assert "COM_B" not in srv._monitors
+    assert "COM_B" not in srv._runtime.monitors
 
 
 def test_scan_ignores_known_ports_case_insensitive(monkeypatch, scan_env):
     monkeypatch.setattr(srv.list_ports, "comports", lambda: [usb("com_a")])
     assert srv._hotplug_scan_once() == []
-    assert len(srv._monitors) == 1
+    assert len(srv._runtime.monitors) == 1
 
 
 def test_scan_ignores_non_usb_ports(monkeypatch, scan_env):
@@ -157,41 +157,41 @@ def test_scan_ignores_non_usb_ports(monkeypatch, scan_env):
 
 
 def test_scan_applies_serial_names_to_new_port(monkeypatch, scan_env):
-    srv._config["names"] = {"SN777": "SB2"}
+    srv._runtime.config["names"] = {"SN777": "SB2"}
     seen_last_scan(monkeypatch, "COM_C")
     monkeypatch.setattr(srv.list_ports, "comports",
                         lambda: [usb("COM_A"), usb("COM_C", sn="SN777")])
     srv._hotplug_scan_once()
-    assert srv._monitors["COM_C"].name == "SB2"
+    assert srv._runtime.monitors["COM_C"].name == "SB2"
 
 
 def test_scan_replaces_dict_copy_on_write(monkeypatch, scan_env):
     """리더 스레드가 순회 중인 옛 dict 객체는 불변 — 전역 참조만 교체돼야 한다."""
-    before = srv._monitors
+    before = srv._runtime.monitors
     seen_last_scan(monkeypatch, "COM_B")
     monkeypatch.setattr(srv.list_ports, "comports",
                         lambda: [usb("COM_A"), usb("COM_B")])
     srv._hotplug_scan_once()
     assert "COM_B" not in before                 # 옛 객체는 변형 금지
-    assert srv._monitors is not before           # 새 dict 로 교체
-    assert srv._monitors["COM_A"] is scan_env    # 기존 모니터는 동일 객체 유지(버퍼 보존)
+    assert srv._runtime.monitors is not before           # 새 dict 로 교체
+    assert srv._runtime.monitors["COM_A"] is scan_env    # 기존 모니터는 동일 객체 유지(버퍼 보존)
 
 
 def test_scan_noop_when_nothing_new(monkeypatch, scan_env):
-    before = srv._monitors
+    before = srv._runtime.monitors
     monkeypatch.setattr(srv.list_ports, "comports", lambda: [usb("COM_A")])
     assert srv._hotplug_scan_once() == []
-    assert srv._monitors is before               # 변화 없으면 dict 교체도 없음
+    assert srv._runtime.monitors is before               # 변화 없으면 dict 교체도 없음
 
 
 def test_scan_hooks_autoname_on_new_unnamed_port(monkeypatch, scan_env):
     """핫플러그로 추가된 무명 포트도 기동 경로와 동일하게 autoname 훅을 단다."""
-    monkeypatch.setattr(srv, "_autoname_rules", srv.compile_autoname([("SB1", r"STM32")]))
+    monkeypatch.setattr(srv._runtime, "autoname_rules", srv.compile_autoname([("SB1", r"STM32")]))
     seen_last_scan(monkeypatch, "COM_B")
     monkeypatch.setattr(srv.list_ports, "comports",
                         lambda: [usb("COM_A"), usb("COM_B")])
     srv._hotplug_scan_once()
-    assert srv._monitors["COM_B"].reader.on_line is not None
+    assert srv._runtime.monitors["COM_B"].reader.on_line is not None
 
 
 # ---- 좀비 핸들 해제 (열거 교차 확인 — 2026-06-12 실측 대응) ----
@@ -235,7 +235,7 @@ def test_scan_allow_add_false_watches_but_never_adds(monkeypatch, scan_env):
     monkeypatch.setattr(srv.list_ports, "comports", lambda: [usb("COM_B")])
     assert srv._hotplug_scan_once(allow_add=False) == []
     assert srv._hotplug_scan_once(allow_add=False) == []
-    assert "COM_B" not in srv._monitors               # 2회 연속 목격에도 미추가
+    assert "COM_B" not in srv._runtime.monitors               # 2회 연속 목격에도 미추가
     assert len(scan_env.reader.force_disconnect_calls) == 1   # COM_A 부재 2회 → 해제
 
 

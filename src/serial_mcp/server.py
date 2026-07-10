@@ -58,32 +58,8 @@ from .web_viewer import ViewerServer
 
 
 
-# ---- 전역 상태 (main 에서 초기화) ----
+# ---- 서버 조립점 ----
 mcp = FastMCP("serial-mcp")
-# key = 포트명 대문자. ⚠️ 불변식: 핫플러그 스레드 기동 후엔 in-place 변경 금지 —
-# 갱신은 _hotplug_scan_once 의 copy-on-write(새 dict 원자 교체)만(단일 작성자 가정.
-# 작성자를 추가하려면 — 예: 수동 재스캔 도구 — 교체 구간에 락이 필요해진다).
-# 리더 스레드(_autoname_check)·도구가 순회 중인 옛 dict 는 불변이라야 안전하다.
-_monitors: dict[str, "PortMonitor"] = {}
-_config: dict = {}
-_viewer: Optional[ViewerServer] = None
-_lock_socket: Optional[socket.socket] = None
-_owner_active = False
-_owner_lock = threading.RLock()
-_autoname_rules: list = []   # SERIAL_AUTONAME 컴파일 결과 [(이름, re.Pattern)]
-_autoname_lock = threading.Lock()   # 검사-부여 원자화(동시 리셋 시 중복 이름 방지)
-_hotplug_stop = threading.Event()   # 핫플러그 스캔 루프 종료 신호(테스트·향후 정리용)
-_hotplug_thread: Optional[threading.Thread] = None
-_session_label: Optional[str] = None
-_session_lock = threading.Lock()
-
-# ---- 토폴로지 엔진 (Phase B) ----
-_topology_engine: Optional[TopologyEngine] = None
-_topology_feed = RawFeed()                    # /api/topology/stream 홉 SSE feed
-_topology_stop = threading.Event()            # sweep 타이머 종료 신호
-_topology_thread: Optional[threading.Thread] = None
-_topology_owner_ts: float = 0.0               # owner 획득 monotonic(부팅 window 기준점)
-_topology_bootstrapped: set[str] = set()      # bootstrap INFO 송신 완료한 SSM 포트(1회 래치)
 _TOPOLOGY_SWEEP_S = 2.0                        # sweep 간격(만료 pending·유휴 블록 flush)
 _TOPOLOGY_BOOT_WINDOW_S = 8.0                  # owner 획득 후 이 시간까진 bootstrap 금지(부팅 보호)
 # get_topology 응답에 항상 동봉하는 AI-대면 경고. 홉에는 시각이 없다(의도적) — 서버 도착시각은
@@ -137,9 +113,150 @@ class PortMonitor:
         return label(self.port, self.name)
 
 
+class ServerRuntime:
+    """한 MCP 서버 세션의 가변 리소스와 수명주기를 단독 소유한다.
+
+    ``monitors``는 핫플러그 스레드 기동 후 in-place로 바꾸지 않고 새 dict로
+    원자 교체한다. 리더 스레드와 도구가 순회 중인 이전 dict가 불변이어야 한다.
+    """
+
+    def __init__(self) -> None:
+        self.monitors: dict[str, PortMonitor] = {}
+        self.config: dict = {}
+        self.viewer: Optional[ViewerServer] = None
+        self.lock_socket: Optional[socket.socket] = None
+        self.owner_active = False
+        self.owner_lock = threading.RLock()
+        self.autoname_rules: list = []
+        self.autoname_lock = threading.Lock()
+        self.hotplug_stop = threading.Event()
+        self.hotplug_thread: Optional[threading.Thread] = None
+        self.hotplug_pending: set[str] = set()
+        self.session_label: Optional[str] = None
+        self.session_lock = threading.Lock()
+        self.topology_engine: Optional[TopologyEngine] = None
+        self.topology_feed = RawFeed()
+        self.topology_stop = threading.Event()
+        self.topology_thread: Optional[threading.Thread] = None
+        self.topology_owner_ts = 0.0
+        self.topology_bootstrapped: set[str] = set()
+        self.chain_gate: dict = {}
+
+    def capture_session(self, name: Optional[str]) -> None:
+        """첫 유효 클라이언트 이름만 세션 라벨로 고정한다."""
+        if name is None or self.session_label is not None:
+            return
+        with self.session_lock:
+            if self.session_label is None:
+                self.session_label = name
+
+    def acquire_owner_locked(self) -> Optional[dict]:
+        """뷰어/잠금부터 잡고 전체 owner 리소스를 계약 순서로 시작한다."""
+        if self.owner_active or self.monitors:
+            return None
+
+        cfg = self.config or _load_config(os.environ)
+        port = _owner_port()
+        web_ui = bool(cfg.get("web_ui", True))
+
+        try:
+            self.topology_feed = RawFeed()
+            if web_ui:
+                viewer = ViewerServer(
+                    ports_info=_viewer_ports_info,
+                    feed_for=_viewer_feed_for,
+                    buffer_info=_viewer_buffer_info,
+                    status_info=_viewer_status_info,
+                    topology_info=_viewer_topology_info,
+                    topology_feed=self.topology_feed,
+                    release_port=_viewer_release_port,
+                    port=port,
+                )
+                if not viewer.start():
+                    return _owner_busy_result()
+                self.viewer = viewer
+                _log(f"웹 뷰어: {self.viewer.url}")
+            else:
+                try:
+                    self.lock_socket = _bind_lock_socket(port)
+                except (OSError, OverflowError) as e:
+                    _log(f"소유권 잠금 포트 {port} 바인딩 실패: {e}")
+                    return _owner_busy_result()
+                self.viewer = None
+                _log(f"소유권 잠금: {_owner_url(port)} bind 성공(UI 미서빙)")
+
+            self.owner_active = True
+            # 리더 on_line이 즉시 호출될 수 있으므로 엔진이 모니터보다 먼저 존재해야 한다.
+            self.topology_engine = TopologyEngine(
+                epoch_of=lambda mono: mono + (time.time() - time.monotonic()))
+            self.chain_gate.clear()
+            self.topology_owner_ts = time.monotonic()
+            self.topology_bootstrapped = set()
+            _start_monitors_locked(cfg)
+            _start_hotplug_locked(cfg)
+            _start_topology_locked(cfg)
+            _log(f"소유권 획득 (포트 {len(self.monitors)}개, dedup={cfg['dedup']}, "
+                 f"buffer={cfg['maxlen']}, tee={cfg['tee'] or '없음'})")
+            return None
+        except Exception:
+            self.release_owner_locked("소유권 획득 실패 정리")
+            raise
+
+    def release_owner_locked(self, reason: str) -> None:
+        """COM 핸들 → 뷰어/잠금 순서로 반납한다. 반복 호출해도 무해하다."""
+        had_owner = (
+            self.owner_active or bool(self.monitors)
+            or self.viewer is not None or self.lock_socket is not None
+        )
+
+        hotplug_thread = self.hotplug_thread
+        self.hotplug_stop.set()
+        if hotplug_thread is not None and hotplug_thread is not threading.current_thread():
+            try:
+                hotplug_thread.join(timeout=1.0)
+            except RuntimeError:
+                pass
+
+        topology_thread = self.topology_thread
+        self.topology_stop.set()
+        if topology_thread is not None and topology_thread is not threading.current_thread():
+            try:
+                topology_thread.join(timeout=1.0)
+            except RuntimeError:
+                pass
+        self.topology_thread = None
+        self.topology_engine = None
+
+        for mon in list(self.monitors.values()):
+            reader = mon.reader
+            if reader is not None:
+                stop = getattr(reader, "stop", None)
+                if callable(stop):
+                    stop()
+        self.monitors = {}
+
+        viewer, self.viewer = self.viewer, None
+        lock_socket, self.lock_socket = self.lock_socket, None
+        self.owner_active = False
+        self.hotplug_thread = None
+
+        if viewer is not None:
+            viewer.stop()
+        if lock_socket is not None:
+            try:
+                lock_socket.close()
+            except OSError:
+                pass
+        if had_owner:
+            _log(f"소유권 반납: {reason}")
+
+
+_runtime = ServerRuntime()
+
+
 def _viewer_url() -> Optional[str]:
     """웹 뷰어 URL — 비활성/기동 실패 시 None."""
-    return _viewer.url if _viewer is not None else None
+    return _runtime.viewer.url if _runtime.viewer is not None else None
 
 
 def _get_nested(obj, path: tuple[str, ...]):
@@ -177,19 +294,11 @@ def _client_name_from_ctx(ctx: Optional[Context]) -> Optional[str]:
 
 def _capture_session(ctx: Optional[Context]) -> None:
     """첫 MCP 도구 호출에서 세션 라벨을 1회 캡처해 HTTP 상태에 노출한다."""
-    global _session_label
-    if _session_label is not None:
-        return
-    name = _client_name_from_ctx(ctx)
-    if name is None:
-        return
-    with _session_lock:
-        if _session_label is None:
-            _session_label = name
+    _runtime.capture_session(_client_name_from_ctx(ctx))
 
 
 def _owner_port() -> int:
-    raw = _config.get("web", 8743)
+    raw = _runtime.config.get("web", 8743)
     return int(raw) if raw is not None else 8743
 
 
@@ -252,8 +361,6 @@ def _bind_lock_socket(port: int) -> socket.socket:
 
 def _start_monitors_locked(cfg: dict) -> None:
     """현재 프로세스가 owner가 된 뒤에만 포트 모니터를 생성·시작한다."""
-    global _monitors
-
     com = list(list_ports.comports())
     specs = cfg["ports"]
     if not specs:
@@ -268,19 +375,17 @@ def _start_monitors_locked(cfg: dict) -> None:
             _log(f"중복 포트 무시: {port}")
             continue
         monitors[key] = _make_monitor(port, baud_override, sn_map, cfg)
-    _monitors = monitors
-    for mon in _monitors.values():
+    _runtime.monitors = monitors
+    for mon in _runtime.monitors.values():
         if mon.reader is not None:
             mon.reader.start()
             _log(f"모니터 시작: {mon.label} @ {mon.reader.baud}")
 
 
 def _start_hotplug_locked(cfg: dict) -> None:
-    global _hotplug_stop, _hotplug_thread
-
     watch_on = cfg["hotplug"] is not None
     allow_add = not cfg["ports"]
-    if not _monitors:
+    if not _runtime.monitors:
         if watch_on and allow_add:
             _log("경고: 모니터링할 포트 없음 — USB 장비를 연결하면 핫플러그 스캔이 자동 추가한다.")
         else:
@@ -290,14 +395,14 @@ def _start_hotplug_locked(cfg: dict) -> None:
         _log("포트 감시 꺼짐 (SERIAL_HOTPLUG=0)")
         return
 
-    _hotplug_stop = threading.Event()
-    _hotplug_thread = threading.Thread(
+    _runtime.hotplug_stop = threading.Event()
+    _runtime.hotplug_thread = threading.Thread(
         target=_hotplug_loop,
-        args=(cfg["hotplug"], _hotplug_stop, allow_add),
+        args=(cfg["hotplug"], _runtime.hotplug_stop, allow_add),
         name="hotplug-scan",
         daemon=True,
     )
-    _hotplug_thread.start()
+    _runtime.hotplug_thread.start()
     if allow_add:
         _log(f"포트 감시 켜짐 ({cfg['hotplug']:g}초 간격 — 새 포트 추가 + 좀비 핸들 해제)")
     else:
@@ -312,7 +417,7 @@ def _topology_observe(port: str, text: str) -> None:
     경로를 막지 않게 모든 예외를 삼킨다(AGENTS.md 관측 비차단·뷰어 실패 코어 무영향).
     윈도 클럭은 서버 도착 단조시각(time.monotonic) — 펌웨어 RTC 아님(plan §6).
     """
-    eng = _topology_engine
+    eng = _runtime.topology_engine
     if eng is None:
         return
     try:
@@ -328,7 +433,7 @@ def _topology_forget_port(port: str) -> None:
     엔진이 없으면 no-op. 초기 오픈 땐 페어링이 비어 무해. 토폴로지(보조) 실패가 리더/재연결을 막지
     않게 예외를 삼킨다.
     """
-    eng = _topology_engine
+    eng = _runtime.topology_engine
     if eng is None:
         return
     try:
@@ -344,7 +449,7 @@ def _publish_topology_hops(hops) -> None:
     try:
         ts = datetime.now()
         for hop in hops:
-            _topology_feed.publish(ts, hop)
+            _runtime.topology_feed.publish(ts, hop)
     except Exception as e:  # noqa: BLE001 - 뷰어 보조기능 실패가 관측 경로를 막으면 안 됨
         _log(f"topology stream publish 오류: {e!r}")
 
@@ -402,16 +507,13 @@ def _decorate_chain_jumpable(chain: dict, has_line) -> dict:
 
 def _buffer_has_line(port: str, needles: list) -> bool:
     """포트 링버퍼에 니들 AND 매칭 라인이 있는지 — 미모니터 포트는 False(점프 불가)."""
-    mon = _monitors.get(port)
+    mon = _runtime.monitors.get(port)
     if mon is None:
         return False
     try:
         return mon.buffer.contains_all(needles)
     except Exception:  # noqa: BLE001 - 프로브 실패는 '모름'이 아니라 비활성으로 안전측
         return False
-
-
-_chain_gate: dict = {}   # chain id → 발행 허용 여부(첫 판정 고정) — 엔진 재생성 시 clear
 
 
 def _chain_publishable(chain: dict, has_line=None) -> bool:
@@ -429,9 +531,9 @@ def _chain_publishable(chain: dict, has_line=None) -> bool:
         # nodes 없는 Cidx ACK 시체는 viewer/get_topology 에서 '발신 미상' 노이즈만 만든다.
         # CHPLAN intent(route_plan)는 의미가 있으므로 이 차단에서 제외한다.
         if cid is not None:
-            _chain_gate[cid] = False
+            _runtime.chain_gate[cid] = False
         return False
-    cached = _chain_gate.get(cid)
+    cached = _runtime.chain_gate.get(cid)
     if cached is True:
         return True
     srcs = [n for n in chain.get("nodes") or [] if n.get("role") == "src"]
@@ -439,7 +541,7 @@ def _chain_publishable(chain: dict, has_line=None) -> bool:
         # 추론→관측 승격(routetx 등 후행 송신 증거) — 프로브 무관 통과 + 캐시 갱신(False→True 단조).
         # 버퍼 밀림에 의한 프로브 플립과 달리 '새 증거'이므로 1회 고정 원칙의 예외다.
         if cid is not None:
-            _chain_gate[cid] = True
+            _runtime.chain_gate[cid] = True
         return True
     if cached is not None:
         return cached
@@ -450,10 +552,10 @@ def _chain_publishable(chain: dict, has_line=None) -> bool:
             ok = False
             break
     if cid is not None:
-        _chain_gate[cid] = ok
-        if len(_chain_gate) > 2000:                # id 는 단조 증가 — 오래된 판정 정리
-            for k in sorted(_chain_gate)[:1000]:
-                _chain_gate.pop(k, None)
+        _runtime.chain_gate[cid] = ok
+        if len(_runtime.chain_gate) > 2000:                # id 는 단조 증가 — 오래된 판정 정리
+            for k in sorted(_runtime.chain_gate)[:1000]:
+                _runtime.chain_gate.pop(k, None)
     return ok
 
 
@@ -466,7 +568,7 @@ def _publish_topology_chains(updates) -> None:
         for entry in updates:
             if not _chain_publishable(entry):      # 송신 콘솔 증거 없는 체인 — 발행 금지
                 continue
-            _topology_feed.publish(ts, {"chain": entry})
+            _runtime.topology_feed.publish(ts, {"chain": entry})
     except Exception as e:  # noqa: BLE001 - 뷰어 보조기능 실패가 관측 경로를 막으면 안 됨
         _log(f"topology chain stream publish 오류: {e!r}")
 
@@ -488,28 +590,28 @@ def _topology_bootstrap_tick() -> None:
     INFO 는 SSM 의 simplevInfoBuffer(장비 테이블)를 dump 하는 안전 read(SPEC §9/§10) — 파괴
     명령 아님. 서버 발신이라 _confirm_write 게이트 비경유(ctx 없음). SERIAL_WRITE=off 면 송신 안 함.
     비-SSM 포트엔 절대 송신하지 않는다(부팅 중 명령셋 오작동 위험, AGENTS.md). 포트별 1회 래치
-    (_topology_bootstrapped)라 SSM 이 여럿이면 각각 1회 보낸다(부팅 window 는 owner 획득 기준 —
+    (_runtime.topology_bootstrapped)라 SSM 이 여럿이면 각각 1회 보낸다(부팅 window 는 owner 획득 기준 —
     SSM 분류 자체가 라이브 앱 시그니처를 요구해 부팅완료 게이트로 작동, plan §9 미래 강화 메모).
     """
-    if not _config.get("write", True):
+    if not _runtime.config.get("write", True):
         return
     now = time.monotonic()
-    for mon in list(_monitors.values()):
+    for mon in list(_runtime.monitors.values()):
         port_key = mon.port.upper()
         reader = mon.reader
         connected = bool(reader is not None and getattr(reader, "connected", False))
         # 이 세 조건은 장비 타입과 무관하게 송신 불가가 확정된다. 최근 300줄 렌더·분류를
         # 먼저 하면 bootstrap 완료 뒤에도 sweep마다 같은 로그를 재가공하게 된다.
-        if (not connected or port_key in _topology_bootstrapped
-                or (now - _topology_owner_ts) < _TOPOLOGY_BOOT_WINDOW_S):
+        if (not connected or port_key in _runtime.topology_bootstrapped
+                or (now - _runtime.topology_owner_ts) < _TOPOLOGY_BOOT_WINDOW_S):
             continue
         d = classify_device(mon.buffer.get_recent(300), alias=mon.name)
-        if not _bootstrap_due(now, _topology_owner_ts, _TOPOLOGY_BOOT_WINDOW_S,
-                              _topology_bootstrapped, port_key, d["type"] == "SSM", connected):
+        if not _bootstrap_due(now, _runtime.topology_owner_ts, _TOPOLOGY_BOOT_WINDOW_S,
+                              _runtime.topology_bootstrapped, port_key, d["type"] == "SSM", connected):
             continue
         try:
             reader.write(b"INFO\r\n", audit="[TOPOLOGY] bootstrap INFO 요청(서버 발신 1회)")
-            _topology_bootstrapped.add(port_key)
+            _runtime.topology_bootstrapped.add(port_key)
             _log(f"topology bootstrap: {mon.label} 에 INFO 송신(서버 발신 1회)")
         except Exception as e:  # noqa: BLE001 - 송신 실패가 sweep 루프를 죽이면 안 됨
             _log(f"topology bootstrap 송신 실패({mon.port}): {e!r}")
@@ -523,7 +625,7 @@ def _topology_loop(interval: float, stop: threading.Event, bootstrap_enabled: bo
     """
     while not stop.wait(interval):
         try:
-            eng = _topology_engine
+            eng = _runtime.topology_engine
             if eng is not None:
                 _publish_topology_hops(eng.sweep(time.monotonic()))
                 _publish_topology_chains(eng.drain_chain_updates())
@@ -535,81 +637,27 @@ def _topology_loop(interval: float, stop: threading.Event, bootstrap_enabled: bo
 
 def _start_topology_locked(cfg: dict) -> None:
     """owner 획득 후 토폴로지 sweep 타이머 스레드를 기동한다(엔진은 _acquire 가 이미 생성)."""
-    global _topology_stop, _topology_thread
-    _topology_stop = threading.Event()
-    _topology_thread = threading.Thread(
+    _runtime.topology_stop = threading.Event()
+    _runtime.topology_thread = threading.Thread(
         target=_topology_loop,
-        args=(_TOPOLOGY_SWEEP_S, _topology_stop, bool(cfg.get("topology_bootstrap", False))),
+        args=(_TOPOLOGY_SWEEP_S, _runtime.topology_stop, bool(cfg.get("topology_bootstrap", False))),
         name="topology-sweep",
         daemon=True,
     )
-    _topology_thread.start()
+    _runtime.topology_thread.start()
     mode = "bootstrap 켜짐" if cfg.get("topology_bootstrap") else "bootstrap 꺼짐(기본)"
     _log(f"토폴로지 엔진 시작 (sweep {_TOPOLOGY_SWEEP_S:g}초, {mode})")
 
 
 def _acquire_owner_locked() -> Optional[dict]:
-    """8743/SERIAL_WEB bind를 시도해 성공 시 whole-session owner 리소스를 시작한다."""
-    global _viewer, _lock_socket, _owner_active
-    global _topology_engine, _topology_feed, _topology_owner_ts, _topology_bootstrapped
-
-    if _owner_active or _monitors:
-        return None
-
-    cfg = _config or _load_config(os.environ)
-    port = _owner_port()
-    web_ui = bool(cfg.get("web_ui", True))
-
-    try:
-        _topology_feed = RawFeed()
-        if web_ui:
-            viewer = ViewerServer(
-                ports_info=_viewer_ports_info,
-                feed_for=_viewer_feed_for,
-                buffer_info=_viewer_buffer_info,
-                status_info=_viewer_status_info,
-                topology_info=_viewer_topology_info,
-                topology_feed=_topology_feed,
-                release_port=_viewer_release_port,
-                port=port,
-            )
-            if not viewer.start():
-                return _owner_busy_result()
-            _viewer = viewer
-            _log(f"웹 뷰어: {_viewer.url}")
-        else:
-            try:
-                _lock_socket = _bind_lock_socket(port)
-            except (OSError, OverflowError) as e:
-                _log(f"소유권 잠금 포트 {port} 바인딩 실패: {e}")
-                return _owner_busy_result()
-            _viewer = None
-            _log(f"소유권 잠금: {_owner_url(port)} bind 성공(UI 미서빙)")
-        _owner_active = True
-        # 토폴로지 엔진은 모니터 기동 전에 생성한다(리더 on_line 이 관측 입력하므로).
-        # epoch_of: 엔진 내부 윈도 클럭은 단조시각이지만, 공개 체인 ts 는 뷰어가 버퍼
-        # wall-clock(HH:MM:SS)과 비교하는 epoch s 계약이라 발행 시점 오프셋으로 변환한다
-        # (변환 시점 계산이라 NTP 보정도 자동 추종).
-        _topology_engine = TopologyEngine(
-            epoch_of=lambda mono: mono + (time.time() - time.monotonic()))
-        _chain_gate.clear()                        # 체인 id 는 엔진 생애 기준 — 판정 캐시 리셋
-        _topology_owner_ts = time.monotonic()
-        _topology_bootstrapped = set()
-        _start_monitors_locked(cfg)
-        _start_hotplug_locked(cfg)
-        _start_topology_locked(cfg)
-        _log(f"소유권 획득 (포트 {len(_monitors)}개, dedup={cfg['dedup']}, "
-             f"buffer={cfg['maxlen']}, tee={cfg['tee'] or '없음'})")
-        return None
-    except Exception:
-        _release_owner_locked("소유권 획득 실패 정리")
-        raise
+    """기존 모듈 경계를 유지하며 단일 런타임에 owner 획득을 위임한다."""
+    return _runtime.acquire_owner_locked()
 
 
 def _ensure_owner(ctx: Optional[Context] = None, *, for_status: bool = False) -> Optional[dict]:
     _capture_session(ctx)
-    with _owner_lock:
-        if _owner_active or _monitors:
+    with _runtime.owner_lock:
+        if _runtime.owner_active or _runtime.monitors:
             return None
         err = _acquire_owner_locked()
         if err is None:
@@ -621,55 +669,12 @@ def _ensure_owner(ctx: Optional[Context] = None, *, for_status: bool = False) ->
 
 
 def _release_owner_locked(reason: str) -> None:
-    """COM 핸들 → 뷰어/8743 순서로 whole-session 소유권을 반납한다."""
-    global _monitors, _viewer, _lock_socket, _owner_active, _hotplug_thread
-    global _topology_thread, _topology_engine
-
-    had_owner = _owner_active or bool(_monitors) or _viewer is not None or _lock_socket is not None
-    hotplug_thread = _hotplug_thread
-    _hotplug_stop.set()
-    if hotplug_thread is not None and hotplug_thread is not threading.current_thread():
-        try:
-            hotplug_thread.join(timeout=1.0)
-        except RuntimeError:
-            pass
-
-    topology_thread = _topology_thread
-    _topology_stop.set()
-    if topology_thread is not None and topology_thread is not threading.current_thread():
-        try:
-            topology_thread.join(timeout=1.0)
-        except RuntimeError:
-            pass
-    _topology_thread = None
-    _topology_engine = None
-
-    for mon in list(_monitors.values()):
-        reader = mon.reader
-        if reader is not None:
-            stop = getattr(reader, "stop", None)
-            if callable(stop):
-                stop()
-    _monitors = {}
-
-    viewer, _viewer = _viewer, None
-    lock_socket, _lock_socket = _lock_socket, None
-    _owner_active = False
-    _hotplug_thread = None
-
-    if viewer is not None:
-        viewer.stop()
-    if lock_socket is not None:
-        try:
-            lock_socket.close()
-        except OSError:
-            pass
-    if had_owner:
-        _log(f"소유권 반납: {reason}")
+    """기존 모듈 경계를 유지하며 단일 런타임에 owner 반납을 위임한다."""
+    _runtime.release_owner_locked(reason)
 
 
 def _release_owner(reason: str) -> None:
-    with _owner_lock:
+    with _runtime.owner_lock:
         _release_owner_locked(reason)
 
 
@@ -694,15 +699,15 @@ def _autoname_check(mon: PortMonitor, text: str) -> None:
     명시 별칭(SERIAL_NAMES)이 항상 우선이고, 이미 다른 포트가 가진 이름은
     부여하지 않는다(오인 방지). 확정 후엔 더 이상 검사하지 않는다(mon.name 세팅).
     """
-    if mon.name is not None or not _autoname_rules:
+    if mon.name is not None or not _runtime.autoname_rules:
         return
-    name = first_autoname_match(text, _autoname_rules)
+    name = first_autoname_match(text, _runtime.autoname_rules)
     if name is None:
         return
-    with _autoname_lock:   # 리더 스레드 N개의 동시 첫-매칭(동시 리셋) TOCTOU 방지
+    with _runtime.autoname_lock:   # 리더 스레드 N개의 동시 첫-매칭(동시 리셋) TOCTOU 방지
         if mon.name is not None:
             return
-        if any(m.name == name for m in _monitors.values()):
+        if any(m.name == name for m in _runtime.monitors.values()):
             return   # 같은 이름이 이미 존재 — 중복 부여 금지
         mon.name = name
     _log(f"자동 식별: {mon.port} → {name} (SERIAL_AUTONAME 패턴 매칭)")
@@ -714,7 +719,7 @@ def _resolve_port(port: str) -> tuple[Optional[PortMonitor], Optional[dict]]:
     반환: (monitor, None) 또는 (None, 에러 dict — 도구가 그대로 반환).
     미지정: 포트 1개면 그 포트(단일 장비 호환), 복수면 목록과 함께 지정 요구.
     """
-    if not _monitors:
+    if not _runtime.monitors:
         return None, {
             "status": "error",
             "message": "모니터링 중인 포트 없음 — USB 연결 또는 SERIAL_PORT 를 확인하라.",
@@ -722,22 +727,22 @@ def _resolve_port(port: str) -> tuple[Optional[PortMonitor], Optional[dict]]:
         }
     key = (port or "").strip().upper()
     if not key:
-        if len(_monitors) == 1:
-            mon = next(iter(_monitors.values()))
+        if len(_runtime.monitors) == 1:
+            mon = next(iter(_runtime.monitors.values()))
             return mon, None
         return None, {
             "status": "error",
             "message": "포트가 여러 개다 — port 인자로 지정하라(별칭/포트명 모두 가능).",
-            "ports": [m.label for m in _monitors.values()],
+            "ports": [m.label for m in _runtime.monitors.values()],
         }
-    for m in _monitors.values():
+    for m in _runtime.monitors.values():
         # 라벨 형태("SSM (COM4)")도 허용 — 에러 응답의 ports 목록을 그대로 되돌려도 해석
         if m.port.upper() == key or (m.name and m.name.upper() == key) or m.label.upper() == key:
             return m, None
     return None, {
         "status": "error",
         "message": f"포트 '{port}' 를 모르겠다 — ports 목록에서 골라 다시 호출하라.",
-        "ports": [m.label for m in _monitors.values()],
+        "ports": [m.label for m in _runtime.monitors.values()],
     }
 
 
@@ -788,12 +793,12 @@ async def _confirm_write(
 ) -> Optional[dict]:
     """매 호출 사용자 승인 게이트. 통과하면 None, 차단하면 도구 반환 dict.
 
-    승인 범위는 _config["write_confirm"](SERIAL_WRITE_CONFIRM) 3-state로 정한다:
+    승인 범위는 _runtime.config["write_confirm"](SERIAL_WRITE_CONFIRM) 3-state로 정한다:
       - "all"(기본): 모든 쓰기에 elicitation 승인.
       - "r3": R3(파괴) 명령만 승인 — is_risky=False면 elicitation 생략·통과.
       - "off": 승인 생략 후 클라이언트 권한 게이트에 위임.
     """
-    mode = _config.get("write_confirm", "all")
+    mode = _runtime.config.get("write_confirm", "all")
     if mode == "off":
         return None
     if mode == "r3" and not is_risky:
@@ -838,7 +843,7 @@ def list_serial_ports(ctx: Optional[Context] = None) -> dict:
     [루프 단계] 사전 점검 — 보통 한 번만.
     """
     _capture_session(ctx)
-    monitored = {m.port.upper(): m for m in _monitors.values()}
+    monitored = {m.port.upper(): m for m in _runtime.monitors.values()}
     ports = []
     for p in list_ports.comports():
         mon = monitored.get(p.device.upper())
@@ -857,11 +862,11 @@ def list_serial_ports(ctx: Optional[Context] = None) -> dict:
         )
     result = {
         "status": "ok",
-        "message": f"{len(ports)}개 포트 발견, {len(_monitors)}개 모니터링 중",
-        "monitored_ports": [m.label for m in _monitors.values()],
+        "message": f"{len(ports)}개 포트 발견, {len(_runtime.monitors)}개 모니터링 중",
+        "monitored_ports": [m.label for m in _runtime.monitors.values()],
         "ports": ports,
     }
-    if not _monitors and any(p["vid"] is not None for p in ports):
+    if not _runtime.monitors and any(p["vid"] is not None for p in ports):
         # owner 미획득 + USB 포트 존재 → 모니터링이 아직 안 시작된 것일 뿐.
         # AI가 'list 의 0개'를 보고 사람에게 포트 선택을 묻는 오작동을 막는 런타임 안내.
         result["hint"] = (
@@ -891,7 +896,7 @@ def _await_first_open(budget_s: float) -> None:
     if budget_s <= 0:
         return
     deadline = time.monotonic() + budget_s
-    for m in list(_monitors.values()):
+    for m in list(_runtime.monitors.values()):
         ev = getattr(m.reader, "_first_open_done", None)
         if ev is None:
             continue
@@ -965,7 +970,7 @@ def get_serial_status(port: str = "", ctx: Optional[Context] = None) -> dict:
         d["message"] = _status_message(d)
         d["viewer_url"] = _viewer_url()
         return d
-    if not _monitors:
+    if not _runtime.monitors:
         return {
             "status": "error",
             "message": "모니터링 중인 포트 없음 — USB 연결 또는 SERIAL_PORT 를 확인하라.",
@@ -973,7 +978,7 @@ def get_serial_status(port: str = "", ctx: Optional[Context] = None) -> dict:
             "ports": [],
             "viewer_url": _viewer_url(),
         }
-    plist = [one(m) for m in _monitors.values()]
+    plist = [one(m) for m in _runtime.monitors.values()]
     n_on = sum(1 for x in plist if x["connected"])
     return {
         "status": "ok",
@@ -1022,7 +1027,7 @@ def get_topology(chains: int = 20, ctx: Optional[Context] = None) -> dict:
                 "recent_hops": [], "recent_chains": []}
 
     chains_n = max(0, min(chains, 200))
-    eng = _topology_engine
+    eng = _runtime.topology_engine
     try:
         if eng is not None:
             roster, recent_hops, recent_chains = eng.roster_and_recent_hops(
@@ -1198,7 +1203,7 @@ def clear_log_buffer(port: str = "", ctx: Optional[Context] = None) -> dict:
         return {"status": "error", "message": busy["message"], "cleared": 0,
                 "ports": {}, "owner_session": busy.get("owner_session"),
                 "owner_url": busy.get("owner_url"), "viewer_url": None}
-    if not _monitors:
+    if not _runtime.monitors:
         return {"status": "error", "message": "모니터링 중인 포트 없음", "cleared": 0, "ports": {}}
     if (port or "").strip():
         mon, err = _resolve_port(port)
@@ -1210,7 +1215,7 @@ def clear_log_buffer(port: str = "", ctx: Optional[Context] = None) -> dict:
         n = mon.buffer.clear()
         return {"status": "ok", "message": f"{mon.label}: {n}개 항목 비움",
                 "cleared": n, "ports": {mon.port: n}}
-    detail = {m.port: m.buffer.clear() for m in _monitors.values()}
+    detail = {m.port: m.buffer.clear() for m in _runtime.monitors.values()}
     total = sum(detail.values())
     return {"status": "ok", "message": f"전체 {len(detail)}개 포트에서 {total}개 비움",
             "cleared": total, "ports": detail}
@@ -1239,7 +1244,7 @@ async def send_serial_command(
     [루프 단계] 능동 시험(쓰기).
     """
     _capture_session(ctx)
-    if not _config.get("write", True):
+    if not _runtime.config.get("write", True):
         return _write_disabled_result()
     allowed_eol = {"\n", "\r\n", "\r", ""}
     if eol not in allowed_eol:
@@ -1252,7 +1257,7 @@ async def send_serial_command(
     if command == "" and eol == "":
         return {"status": "error", "message": "빈 페이로드는 전송하지 않는다.", "count": 0, "lines": []}
     wait_ms = _clamp_wait_ms(wait_ms)
-    was_owner = _owner_active or bool(_monitors)
+    was_owner = _runtime.owner_active or bool(_runtime.monitors)
     busy = _ensure_owner(ctx)
     if busy:
         return {**busy, "count": 0, "lines": []}
@@ -1306,10 +1311,10 @@ async def reset_board(port: str = "", wait_ms: int = 2000, ctx: Optional[Context
     [루프 단계] 시험 시작(리셋).
     """
     _capture_session(ctx)
-    if not _config.get("write", True):
+    if not _runtime.config.get("write", True):
         return _write_disabled_result()
     wait_ms = _clamp_wait_ms(wait_ms)
-    was_owner = _owner_active or bool(_monitors)
+    was_owner = _runtime.owner_active or bool(_runtime.monitors)
     busy = _ensure_owner(ctx)
     if busy:
         return {**busy, "count": 0, "lines": []}
@@ -1348,18 +1353,18 @@ async def reset_board(port: str = "", wait_ms: int = 2000, ctx: Optional[Context
 
 def _viewer_ports_info() -> list[dict]:
     """웹 뷰어 /api/ports — 셀렉터 구성용 [{port, label}] 목록."""
-    return [{"port": m.port, "label": m.label} for m in _monitors.values()]
+    return [{"port": m.port, "label": m.label} for m in _runtime.monitors.values()]
 
 
 def _viewer_feed_for(port: str) -> Optional[RawFeed]:
     """웹 뷰어 /api/stream?port= — 해당 포트의 RawFeed(없으면 None→404)."""
-    m = _monitors.get((port or "").strip().upper())
+    m = _runtime.monitors.get((port or "").strip().upper())
     return m.feed if m else None
 
 
 def _viewer_buffer_info(port: str, since: Optional[int] = None) -> dict:
     """웹 뷰어 /api/buffer?port= — 해당 포트의 구조화 스냅샷 + 카운터."""
-    m = _monitors.get((port or "").strip().upper())
+    m = _runtime.monitors.get((port or "").strip().upper())
     if m is None:
         return {"status": "error", "entries": [], "capacity": 0}
     info = m.buffer.info()
@@ -1378,7 +1383,7 @@ def _viewer_buffer_info(port: str, since: Optional[int] = None) -> dict:
 def _viewer_status_info() -> dict:
     """웹 뷰어 /api/status — 전 포트 상태 배열(+버퍼 적재 현황, 탭 카운터용)."""
     plist = []
-    for m in _monitors.values():
+    for m in _runtime.monitors.values():
         r = m.reader
         binfo = m.buffer.info()
         hw, board = _hw_board_from_name(m.name)
@@ -1393,13 +1398,13 @@ def _viewer_status_info() -> dict:
             "hw": hw,
             "board": board,
         })
-    return {"session": _session_label, "ports": plist}
+    return {"session": _runtime.session_label, "ports": plist}
 
 
 def _topology_entries() -> list:
     """모니터별 로스터 분류 입력 entries 조립. 예외 격리는 호출부가 담당한다."""
     entries = []
-    for m in _monitors.values():
+    for m in _runtime.monitors.values():
         r = m.reader
         entries.append({
             "port": m.port,
@@ -1421,7 +1426,7 @@ def _viewer_topology_info() -> dict:
     """
     try:
         entries = _topology_entries()
-        eng = _topology_engine
+        eng = _runtime.topology_engine
         if eng is not None:
             roster, _hops, chains = eng.roster_and_recent_hops(
                 entries, now=time.monotonic(), n=0, chains_n=200)
@@ -1461,7 +1466,7 @@ def _make_monitor(
 
     버퍼·피드 생성, 별칭 해석(SERIAL_NAMES — 포트명/시리얼넘버 키), 무명 포트의
     autoname 훅 장착, tee 경로 산출까지. 리더 start()는 호출자가 등록을 끝낸 뒤
-    수행한다(등록 전 시작 금지 — _autoname_check의 _monitors 순회와 race 방지).
+    수행한다(등록 전 시작 금지 — _autoname_check의 _runtime.monitors 순회와 race 방지).
     """
     baud = baud_override or cfg["baud"]
     name = name_for(port, sn_map.get(port.upper()), cfg["names"])
@@ -1470,7 +1475,7 @@ def _make_monitor(
     feed = RawFeed()
     mon = PortMonitor(port=port, name=name, buffer=buf, feed=feed, reader=None)
     # on_line 훅 = 자동식별(별칭 없을 때만) + 토폴로지 관측(엔진 있으면). 둘 다 비차단·예외삼킴.
-    autoname_on = bool(_autoname_rules) and name is None
+    autoname_on = bool(_runtime.autoname_rules) and name is None
 
     def on_line(ts, text, m=mon, _an=autoname_on):
         if _an:
@@ -1485,9 +1490,6 @@ def _make_monitor(
     return mon
 
 
-_hotplug_pending: set[str] = set()   # 직전 스캔에서 처음 목격된 새 포트(정착 유예 대기)
-
-
 def _hotplug_scan_once(allow_add: bool = True) -> list[str]:
     """포트 감시 1회 스캔 — 좀비 핸들 해제 + (allow_add 시) 새 USB 포트 추가.
 
@@ -1499,17 +1501,16 @@ def _hotplug_scan_once(allow_add: bool = True) -> list[str]:
     추가 디바운스: 새 포트는 **연속 2회** 스캔에서 보여야 추가한다 — 막
     열거된 장치를 드라이버 초기화 중에 여는 것을 피한다(정착 유예).
 
-    _monitors 는 copy-on-write 로만 갱신한다(새 dict 생성 → 전역 참조 원자 교체).
+    _runtime.monitors 는 copy-on-write 로만 갱신한다(새 dict 생성 → 전역 참조 원자 교체).
     리더 스레드(_autoname_check)·도구 호출이 옛 dict 를 순회 중이어도 안전하다.
     사라진 포트의 모니터는 제거하지 않는다 — 버퍼·tee 를 보존하고, 재연결은
     SerialReader 의 재시도 루프가 담당한다.
     """
-    global _monitors, _hotplug_pending
     com = list(list_ports.comports())
 
     # 1) 좀비 해제 — 부재 카운터는 이 스레드만 갱신한다
     present = {p.device.upper() for p in com}
-    for mon in _monitors.values():
+    for mon in _runtime.monitors.values():
         if mon.reader.connected and mon.port.upper() not in present:
             mon.absent_scans += 1
             if mon.absent_scans >= 2:
@@ -1522,15 +1523,15 @@ def _hotplug_scan_once(allow_add: bool = True) -> list[str]:
     # 2) 새 포트 추가 (자동 스캔 모드 전용)
     if not allow_add:
         return []
-    fresh = [d for d in auto_usb_ports(com) if d.upper() not in _monitors]
-    confirmed = [d for d in fresh if d.upper() in _hotplug_pending]
-    _hotplug_pending = {d.upper() for d in fresh} - {d.upper() for d in confirmed}
+    fresh = [d for d in auto_usb_ports(com) if d.upper() not in _runtime.monitors]
+    confirmed = [d for d in fresh if d.upper() in _runtime.hotplug_pending]
+    _runtime.hotplug_pending = {d.upper() for d in fresh} - {d.upper() for d in confirmed}
     if not confirmed:
         return []
     sn_map = {p.device.upper(): getattr(p, "serial_number", None) for p in com}
-    added = [_make_monitor(d, None, sn_map, _config) for d in confirmed]
+    added = [_make_monitor(d, None, sn_map, _runtime.config) for d in confirmed]
     # 등록을 먼저 끝낸 뒤 리더 시작(main 의 1·2패스와 동일한 순서 보장)
-    _monitors = {**_monitors, **{m.port.upper(): m for m in added}}
+    _runtime.monitors = {**_runtime.monitors, **{m.port.upper(): m for m in added}}
     for m in added:
         m.reader.start()
         _log(f"핫플러그: 모니터 추가 {m.label} @ {m.reader.baud}")
@@ -1551,11 +1552,9 @@ def _hotplug_loop(interval: float, stop: threading.Event, allow_add: bool = True
 
 def main() -> None:
     """엔트리포인트. 기동 시엔 휴면, 첫 시리얼 도구 호출 때 owner를 획득한다."""
-    global _config, _autoname_rules
-
     cfg = _load_config(os.environ)
-    _config = cfg
-    _autoname_rules = compile_autoname(cfg["autoname"], log=_log)
+    _runtime.config = cfg
+    _runtime.autoname_rules = compile_autoname(cfg["autoname"], log=_log)
 
     if cfg["web_ui"]:
         _log(f"휴면 시작 — 첫 시리얼 도구 호출 때 {_owner_url(cfg['web'])} 소유권을 획득한다")

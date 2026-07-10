@@ -1,6 +1,6 @@
 """MCP 도구 계약 테스트(다중 포트, SPEC §5 개정).
 
-도구는 모듈 전역 _monitors(dict[str, PortMonitor])를 읽는다 → monkeypatch 주입.
+도구는 단일 ServerRuntime의 monitors(dict[str, PortMonitor])를 읽는다 → monkeypatch 주입.
 @mcp.tool()은 원본 함수를 반환하므로 직접 호출.
 """
 
@@ -37,9 +37,9 @@ def make_monitor(port="COM_T", name=None, connected=True, last_error=None, opene
 def single(monkeypatch):
     """포트 1개(COM_A) 주입 — 미지정 호환 경로 검증용."""
     mon = make_monitor("COM_A")
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
-    monkeypatch.setattr(srv, "_viewer", None)
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": mon})
+    monkeypatch.setattr(srv._runtime, "viewer", None)
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
     return mon
 
 
@@ -48,9 +48,9 @@ def dual(monkeypatch):
     """포트 2개(SSM=COM_A, COM_B) 주입 — 라우팅·별칭·미지정 에러 검증용."""
     a = make_monitor("COM_A", name="SSM")
     b = make_monitor("COM_B", connected=False, last_error="포트 열기 실패(COM_B): busy")
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": a, "COM_B": b})
-    monkeypatch.setattr(srv, "_viewer", None)
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": a, "COM_B": b})
+    monkeypatch.setattr(srv._runtime, "viewer", None)
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
     return a, b
 
 
@@ -87,8 +87,8 @@ def test_unknown_port_lists_available(dual):
 
 
 def test_no_monitors_reports_error(monkeypatch):
-    monkeypatch.setattr(srv, "_monitors", {})
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {})
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
     out = srv.get_recent_logs()
     assert out["status"] == "error"
     assert out["ports"] == []
@@ -115,14 +115,14 @@ def test_status_with_port_returns_single(dual):
 
 
 def test_status_includes_viewer_url(monkeypatch, single):
-    monkeypatch.setattr(srv, "_viewer", SimpleNamespace(url="http://127.0.0.1:8743"))
+    monkeypatch.setattr(srv._runtime, "viewer", SimpleNamespace(url="http://127.0.0.1:8743"))
     assert srv.get_serial_status()["viewer_url"] == "http://127.0.0.1:8743"
 
 
 def test_viewer_status_includes_session_hw_board_without_released(monkeypatch, dual):
     a, b = dual
     a.name = "SB-STM"
-    monkeypatch.setattr(srv, "_session_label", "claude-code", raising=False)
+    monkeypatch.setattr(srv._runtime, "session_label", "claude-code", raising=False)
 
     out = srv._viewer_status_info()
 
@@ -143,7 +143,7 @@ def test_session_label_captured_from_first_tool_context(monkeypatch, single):
             ),
         )
 
-    monkeypatch.setattr(srv, "_session_label", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "session_label", None, raising=False)
 
     srv.get_serial_status(ctx=ctx("claude-code"))
     srv.get_serial_status(ctx=ctx("codex"))
@@ -199,7 +199,7 @@ def test_get_topology_returns_roster_and_recent_hops(monkeypatch, dual):
             ]
 
     engine = FakeTopologyEngine()
-    monkeypatch.setattr(srv, "_topology_engine", engine, raising=False)
+    monkeypatch.setattr(srv._runtime, "topology_engine", engine, raising=False)
 
     out = srv.get_topology()
 
@@ -247,7 +247,7 @@ def test_get_topology_chains_param_passthrough(monkeypatch, dual):
             return {"groups": [], "unplaced": []}, [], []
 
     engine = FakeTopologyEngine()
-    monkeypatch.setattr(srv, "_topology_engine", engine, raising=False)
+    monkeypatch.setattr(srv._runtime, "topology_engine", engine, raising=False)
 
     srv.get_topology(chains=50)
     assert engine.chains_n == 50
@@ -260,7 +260,7 @@ def test_get_topology_chains_param_caps_at_200(monkeypatch, dual):
             return {"groups": [], "unplaced": []}, [], []
 
     engine = FakeTopologyEngine()
-    monkeypatch.setattr(srv, "_topology_engine", engine, raising=False)
+    monkeypatch.setattr(srv._runtime, "topology_engine", engine, raising=False)
 
     srv.get_topology(chains=999)
     assert engine.chains_n == 200
@@ -273,7 +273,7 @@ def test_get_topology_chains_param_floors_at_zero(monkeypatch, dual):
             return {"groups": [], "unplaced": []}, [], []
 
     engine = FakeTopologyEngine()
-    monkeypatch.setattr(srv, "_topology_engine", engine, raising=False)
+    monkeypatch.setattr(srv._runtime, "topology_engine", engine, raising=False)
 
     srv.get_topology(chains=-5)
     assert engine.chains_n == 0
@@ -291,7 +291,7 @@ def test_viewer_topology_info_includes_chain_seed(monkeypatch, dual):
             }, [], [chain]
 
     engine = FakeTopologyEngine()
-    monkeypatch.setattr(srv, "_topology_engine", engine, raising=False)
+    monkeypatch.setattr(srv._runtime, "topology_engine", engine, raising=False)
 
     out = srv._viewer_topology_info()
 
@@ -310,7 +310,7 @@ def test_topology_entries_skip_recent_logs_for_complete_aliases(monkeypatch):
     b = make_monitor("COM_B", name="SB5-ESP")
     a.buffer = NoReadBuffer()
     b.buffer = NoReadBuffer()
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": a, "COM_B": b})
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": a, "COM_B": b})
 
     entries = srv._topology_entries()
     assert [e["lines"] for e in entries] == [[], []]
@@ -331,7 +331,7 @@ def test_topology_entries_keep_recent_logs_for_incomplete_or_unknown_alias(monke
     b = make_monitor("COM_B", name=None)
     a.buffer = SpyBuffer("sb-info")
     b.buffer = SpyBuffer("unknown-info")
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": a, "COM_B": b})
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": a, "COM_B": b})
 
     entries = srv._topology_entries()
     assert [e["lines"] for e in entries] == [["sb-info"], ["unknown-info"]]
@@ -425,7 +425,7 @@ def test_list_serial_ports_marks_monitored(monkeypatch, dual):
 
 def test_autoname_assigns_on_first_match(monkeypatch, dual):
     a, b = dual            # a=SSM(이미 명명), b=COM_B(무명)
-    monkeypatch.setattr(srv, "_autoname_rules", srv.compile_autoname([("SB1", r"STM32")]))
+    monkeypatch.setattr(srv._runtime, "autoname_rules", srv.compile_autoname([("SB1", r"STM32")]))
     srv._autoname_check(b, "***Send to the STM32 to request the FWVer.")
     assert b.name == "SB1"
     assert b.label == "SB1 (COM_B)"
@@ -433,21 +433,21 @@ def test_autoname_assigns_on_first_match(monkeypatch, dual):
 
 def test_autoname_respects_existing_name(monkeypatch, dual):
     a, _ = dual
-    monkeypatch.setattr(srv, "_autoname_rules", srv.compile_autoname([("WRONG", r".")]))
+    monkeypatch.setattr(srv._runtime, "autoname_rules", srv.compile_autoname([("WRONG", r".")]))
     srv._autoname_check(a, "anything")
     assert a.name == "SSM"          # 명시 SERIAL_NAMES 우선 — 덮어쓰지 않음
 
 
 def test_autoname_skips_duplicate_name(monkeypatch, dual):
     a, b = dual
-    monkeypatch.setattr(srv, "_autoname_rules", srv.compile_autoname([("SSM", r".")]))
+    monkeypatch.setattr(srv._runtime, "autoname_rules", srv.compile_autoname([("SSM", r".")]))
     srv._autoname_check(b, "would match anything")
     assert b.name is None           # 'SSM'은 이미 a의 이름 — 오인 방지 위해 미부여
 
 
 def test_autoname_noop_without_rules(monkeypatch, dual):
     _, b = dual
-    monkeypatch.setattr(srv, "_autoname_rules", [])
+    monkeypatch.setattr(srv._runtime, "autoname_rules", [])
     srv._autoname_check(b, "***Send to the STM32")
     assert b.name is None
 
@@ -482,8 +482,8 @@ def test_status_reports_opening_when_first_open_unresolved(monkeypatch):
     """첫 open 미결판(Event 미set, connected=false) → opening=true, message '응답 없음'.
     '꺼짐'이 아니라 '여는 중'으로 읽혀야 한다."""
     mon = make_monitor("COM_O", connected=False, first_open_done=False)
-    monkeypatch.setattr(srv, "_monitors", {"COM_O": mon})
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_O": mon})
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
     monkeypatch.setattr(srv, "_STATUS_FIRST_OPEN_WAIT_S", 0)   # 대기 건너뜀(테스트 속도)
 
     out = srv.get_serial_status(port="COM_O")
@@ -497,8 +497,8 @@ def test_status_dead_port_reads_as_failed_not_opening(monkeypatch):
     message '안 됨: ...'. 사용자 합의 규칙: '연결 중'이 아니라 '안 됨'."""
     mon = make_monitor("COM_D", connected=False, last_error="포트 열기 실패(COM_D): busy",
                         first_open_done=True)
-    monkeypatch.setattr(srv, "_monitors", {"COM_D": mon})
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_D": mon})
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
 
     out = srv.get_serial_status(port="COM_D")
     assert out["connected"] is False
@@ -511,8 +511,8 @@ def test_status_waits_for_first_open_then_reports_connected(monkeypatch):
     """바운드 대기: 호출 시점엔 미결판이어도 대기 창 안에 첫 open 이 끝나면
     (Event set + connected=true) status 는 connected=true 를 본다(거짓 false 안 뱉음)."""
     mon = make_monitor("COM_W", connected=False, first_open_done=False)
-    monkeypatch.setattr(srv, "_monitors", {"COM_W": mon})
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_W": mon})
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
     monkeypatch.setattr(srv, "_STATUS_FIRST_OPEN_WAIT_S", 1.0)
 
     def finish_open():
@@ -531,8 +531,8 @@ def test_status_open_wait_returns_immediately_when_resolved(monkeypatch):
     import time as _time
     a = make_monitor("COM_A", name="SSM")                       # 기본 first_open_done=True
     b = make_monitor("COM_B", connected=False, last_error="x")  # 결판된 실패
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": a, "COM_B": b})
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": a, "COM_B": b})
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
     monkeypatch.setattr(srv, "_STATUS_FIRST_OPEN_WAIT_S", 5.0)  # 크게 잡아도 안 기다려야 함
 
     t0 = _time.monotonic()
@@ -544,8 +544,8 @@ def test_status_open_wait_returns_immediately_when_resolved(monkeypatch):
 def test_status_includes_opening_field_in_aggregate(monkeypatch):
     """집계 경로도 포트별 opening 필드를 싣는다."""
     a = make_monitor("COM_A", name="SSM")
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": a})
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": a})
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
     out = srv.get_serial_status()
     assert "opening" in out["ports"][0]
     assert out["ports"][0]["opening"] is False
@@ -567,7 +567,7 @@ def test_viewer_status_ports_carry_connected_and_buffer_entries(dual):
 def test_list_ports_hints_get_status_when_unmonitored(monkeypatch):
     """owner 미획득(0 monitored)인데 USB 포트가 보이면 get_serial_status 로 획득하라는
     hint 를 실어, AI가 '어느 포트 잡을지'를 사람에게 묻는 오작동을 막는다."""
-    monkeypatch.setattr(srv, "_monitors", {})
+    monkeypatch.setattr(srv._runtime, "monitors", {})
     fake = [SimpleNamespace(device="COM4", description="CH343", hwid="USB VID:PID=1A86:55D3",
                             vid=0x1A86, pid=0x55D3, manufacturer="wch.cn", serial_number="x")]
     monkeypatch.setattr(srv.list_ports, "comports", lambda: fake)
@@ -587,7 +587,7 @@ def test_list_ports_no_hint_when_monitoring(monkeypatch, dual):
 
 def test_list_ports_no_hint_when_only_bluetooth(monkeypatch):
     """USB가 없고 블루투스 가상 포트(vid=None)만 있으면 hint 없음(잘못된 유도 방지)."""
-    monkeypatch.setattr(srv, "_monitors", {})
+    monkeypatch.setattr(srv._runtime, "monitors", {})
     fake = [SimpleNamespace(device="COM5", description="Bluetooth", hwid="BTHENUM",
                             vid=None, pid=None, manufacturer="Microsoft", serial_number=None)]
     monkeypatch.setattr(srv.list_ports, "comports", lambda: fake)
@@ -641,7 +641,7 @@ def test_chain_jumpable_u_key_fragment_collision_not_trusted(monkeypatch):
 
     srv._decorate_chain_jumpable(chain, has_line)
     assert chain["nodes"][0]["jumpable"] is False
-    monkeypatch.setattr(srv, "_chain_gate", {})
+    monkeypatch.setattr(srv._runtime, "chain_gate", {})
     assert srv._chain_publishable(_chain(key=("u", 5, 98),
                                          needle='{"UnID":5,"REQRSSI":"REQ","Rng":[0,4],"Unique":98}'),
                                   has_line=has_line) is False
@@ -670,7 +670,7 @@ def test_chain_jumpable_mac_ident_needle_uses_console_comma_format():
 
 def test_chain_gate_suppresses_no_evidence_inferred_src(monkeypatch):
     # 추론 src + 프로브 실패(CHPLAN 류) → 발행 금지. 관측 src(ACK 상행)는 프로브와 무관하게 발행.
-    monkeypatch.setattr(srv, "_chain_gate", {})
+    monkeypatch.setattr(srv._runtime, "chain_gate", {})
     assert srv._chain_publishable(_chain(nodes=[
         {"role": "src", "port": "COM4", "inferred": True},
         {"role": "rx", "port": "COM12", "inferred": False},
@@ -683,13 +683,13 @@ def test_chain_gate_suppresses_no_evidence_inferred_src(monkeypatch):
 
 def test_chain_gate_keeps_inferred_src_with_console_evidence(monkeypatch):
     # 추론 src 라도 송신 콘솔에서 니들이 찾아지면(INFO REQ 류) 발행 유지.
-    monkeypatch.setattr(srv, "_chain_gate", {})
+    monkeypatch.setattr(srv._runtime, "chain_gate", {})
     assert srv._chain_publishable(_chain(), has_line=lambda p, ns: True) is True
 
 
 def test_chain_gate_keeps_portless_inferred_src(monkeypatch):
     # 송신자 포트 미상(미연결 장비) — 검사할 콘솔이 없으므로 유지(증거 '없음'이 아니라 '모름').
-    monkeypatch.setattr(srv, "_chain_gate", {})
+    monkeypatch.setattr(srv._runtime, "chain_gate", {})
     assert srv._chain_publishable(_chain(nodes=[
         {"role": "src", "port": None, "inferred": True},
         {"role": "rx", "port": "COM12", "inferred": False},
@@ -699,7 +699,7 @@ def test_chain_gate_keeps_portless_inferred_src(monkeypatch):
 def test_chain_gate_suppresses_empty_ack_noise_but_keeps_route_plan(monkeypatch):
     # nodes 없는 Cidx ACK 시체는 viewer/get_topology 에서 '발신 미상' 노이즈만 만든다.
     # CHPLAN intent(route_plan) 행은 의미가 있으므로 별도 UX 결정 전까지 유지한다.
-    monkeypatch.setattr(srv, "_chain_gate", {})
+    monkeypatch.setattr(srv._runtime, "chain_gate", {})
     empty_ack = _chain(id=31, nodes=[], needle='{"UnID":5,"Stat":"OK","Asn":22}')
     assert srv._chain_publishable(empty_ack, has_line=lambda p, ns: True) is False
 
@@ -709,7 +709,7 @@ def test_chain_gate_suppresses_empty_ack_noise_but_keeps_route_plan(monkeypatch)
 
 def test_chain_gate_decision_is_sticky_per_id(monkeypatch):
     # 판정은 체인 id당 1회 고정 — 이후 버퍼 밀림으로 프로브가 뒤집혀도 지위 불변.
-    monkeypatch.setattr(srv, "_chain_gate", {})
+    monkeypatch.setattr(srv._runtime, "chain_gate", {})
     first = srv._chain_publishable(_chain(id=9), has_line=lambda p, ns: True)
     second = srv._chain_publishable(_chain(id=9), has_line=lambda p, ns: False)   # 같은 id — 캐시 반환
     assert first is True and second is True
@@ -718,7 +718,7 @@ def test_chain_gate_decision_is_sticky_per_id(monkeypatch):
 def test_chain_gate_promotes_cached_false_when_src_becomes_observed(monkeypatch):
     # F-C7: 프로브 플립은 계속 무시하지만, routetx 같은 후행 송신 증거로 src 가
     # 추론→관측 승격되면 캐시 False 를 True 로 단조 갱신한다.
-    monkeypatch.setattr(srv, "_chain_gate", {})
+    monkeypatch.setattr(srv._runtime, "chain_gate", {})
 
     assert srv._chain_publishable(_chain(id=17), has_line=lambda p, ns: False) is False
     assert srv._chain_publishable(_chain(id=17), has_line=lambda p, ns: True) is False

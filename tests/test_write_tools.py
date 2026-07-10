@@ -86,14 +86,14 @@ def make_monitor(port="COM_A", name="SSM", reader=None) -> srv.PortMonitor:
 
 @pytest.fixture(autouse=True)
 def clean_globals(monkeypatch):
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": "all"})
-    monkeypatch.setattr(srv, "_viewer", None)
+    monkeypatch.setattr(srv._runtime, "config", {"write": True, "write_confirm": "all"})
+    monkeypatch.setattr(srv._runtime, "viewer", None)
 
 
 @pytest.fixture
 def single(monkeypatch):
     mon = make_monitor()
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": mon})
     return mon
 
 
@@ -101,7 +101,7 @@ def single(monkeypatch):
 def dual(monkeypatch):
     a = make_monitor("COM_A", "SSM")
     b = make_monitor("COM_B", "SB")
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": a, "COM_B": b})
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": a, "COM_B": b})
     return a, b
 
 
@@ -160,7 +160,7 @@ def test_send_elicit_mcperror_falls_back_to_error(single):
 
 
 def test_send_skips_elicit_when_confirm_off(monkeypatch, single):
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": "off"})
+    monkeypatch.setattr(srv._runtime, "config", {"write": True, "write_confirm": "off"})
     ctx = FakeContext(capability=False)
 
     out = run(srv.send_serial_command("AT", wait_ms=0, ctx=ctx))
@@ -171,7 +171,7 @@ def test_send_skips_elicit_when_confirm_off(monkeypatch, single):
 
 
 def test_send_blocked_when_write_off(monkeypatch, single):
-    monkeypatch.setattr(srv, "_config", {"write": False, "write_confirm": "all"})
+    monkeypatch.setattr(srv._runtime, "config", {"write": False, "write_confirm": "all"})
     ctx = FakeContext("accept")
 
     out = run(srv.send_serial_command("AT", wait_ms=0, ctx=ctx))
@@ -184,7 +184,7 @@ def test_send_blocked_when_write_off(monkeypatch, single):
 
 
 def test_send_eol_variants_and_empty_payload_rejected(monkeypatch, single):
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": "off"})
+    monkeypatch.setattr(srv._runtime, "config", {"write": True, "write_confirm": "off"})
 
     assert run(srv.send_serial_command("AT", eol="\r\n", wait_ms=0))["status"] == "ok"
     assert run(srv.send_serial_command("AT", eol="\r", wait_ms=0))["status"] == "ok"
@@ -201,7 +201,7 @@ def test_send_eol_variants_and_empty_payload_rejected(monkeypatch, single):
 
 
 def test_send_multibyte_utf8(monkeypatch, single):
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": "off"})
+    monkeypatch.setattr(srv._runtime, "config", {"write": True, "write_confirm": "off"})
 
     out = run(srv.send_serial_command("안녕", wait_ms=0))
 
@@ -210,7 +210,7 @@ def test_send_multibyte_utf8(monkeypatch, single):
 
 
 def test_send_routes_by_port_and_errors_on_ambiguous(monkeypatch, dual):
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": "off"})
+    monkeypatch.setattr(srv._runtime, "config", {"write": True, "write_confirm": "off"})
     a, b = dual
 
     ambiguous = run(srv.send_serial_command("AT", wait_ms=0))
@@ -278,17 +278,17 @@ def test_write_tools_decline_releases_owner_acquired_for_call(monkeypatch, tool)
 
     def fake_ensure_owner(ctx=None, *, for_status=False):
         ensure_calls.append((ctx, for_status))
-        srv._owner_active = True
-        srv._monitors = {"COM_A": mon}
+        srv._runtime.owner_active = True
+        srv._runtime.monitors = {"COM_A": mon}
         return None
 
     async def decline_spy(ctx, summary, is_risky=True):
         confirm_calls.append(summary)
         return {"status": "declined", "message": "거부"}
 
-    monkeypatch.setattr(srv, "_monitors", {})
-    monkeypatch.setattr(srv, "_owner_active", False, raising=False)
-    monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {})
+    monkeypatch.setattr(srv._runtime, "owner_active", False, raising=False)
+    monkeypatch.setattr(srv._runtime, "lock_socket", None, raising=False)
     monkeypatch.setattr(srv, "_ensure_owner", fake_ensure_owner)
     monkeypatch.setattr(srv, "_confirm_write", decline_spy)
 
@@ -300,8 +300,8 @@ def test_write_tools_decline_releases_owner_acquired_for_call(monkeypatch, tool)
     assert out["status"] == "declined"
     assert len(ensure_calls) == 1
     assert confirm_calls and "SSM (COM_A)" in confirm_calls[0]
-    assert srv._owner_active is False
-    assert srv._monitors == {}
+    assert srv._runtime.owner_active is False
+    assert srv._runtime.monitors == {}
     assert mon.reader.writes == []
     assert mon.reader.pulses == 0
 
@@ -314,7 +314,7 @@ def test_write_tools_decline_keeps_existing_owner(monkeypatch, single, tool):
         calls.append(summary)
         return {"status": "declined", "message": "거부"}
 
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
     monkeypatch.setattr(srv, "_confirm_write", decline_spy)
 
     if tool == "send":
@@ -324,17 +324,17 @@ def test_write_tools_decline_keeps_existing_owner(monkeypatch, single, tool):
 
     assert out["status"] == "declined"
     assert calls and "SSM (COM_A)" in calls[0]
-    assert srv._owner_active is True
-    assert srv._monitors == {"COM_A": single}
+    assert srv._runtime.owner_active is True
+    assert srv._runtime.monitors == {"COM_A": single}
     assert single.reader.writes == []
     assert single.reader.pulses == 0
 
 
 def test_send_write_exception_returns_error_dict(monkeypatch):
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": "off"})
+    monkeypatch.setattr(srv._runtime, "config", {"write": True, "write_confirm": "off"})
     reader = RecordingReader(write_exc=srv.serial.SerialException("boom"))
     mon = make_monitor(reader=reader)
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": mon})
 
     out = run(srv.send_serial_command("AT", wait_ms=0))
 
@@ -344,10 +344,10 @@ def test_send_write_exception_returns_error_dict(monkeypatch):
 
 
 def test_send_reports_payload_length_even_if_writer_returns_short_count(monkeypatch):
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": "off"})
+    monkeypatch.setattr(srv._runtime, "config", {"write": True, "write_confirm": "off"})
     reader = RecordingReader(write_return=3)
     mon = make_monitor(reader=reader)
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": mon})
 
     out = run(srv.send_serial_command("AT+GMR", wait_ms=0))
 
@@ -358,11 +358,11 @@ def test_send_reports_payload_length_even_if_writer_returns_short_count(monkeypa
 
 
 def test_send_harvests_only_lines_after_t0(monkeypatch):
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": "off"})
+    monkeypatch.setattr(srv._runtime, "config", {"write": True, "write_confirm": "off"})
     mon = make_monitor()
     mon.buffer.add("old", BASE)
     mon.reader.on_write = lambda: mon.buffer.add("after", datetime.now())
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": mon})
 
     out = run(srv.send_serial_command("AT", wait_ms=0))
 
@@ -382,7 +382,7 @@ def test_reset_calls_pulse_and_shares_approval_contract(single):
 
 
 def test_reset_zero_lines_message_hints_human_fallback(monkeypatch, single):
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": "off"})
+    monkeypatch.setattr(srv._runtime, "config", {"write": True, "write_confirm": "off"})
 
     out = run(srv.reset_board(wait_ms=0))
 
@@ -393,7 +393,7 @@ def test_reset_zero_lines_message_hints_human_fallback(monkeypatch, single):
 
 
 def test_wait_ms_clamped(monkeypatch, single):
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": "off"})
+    monkeypatch.setattr(srv._runtime, "config", {"write": True, "write_confirm": "off"})
     sleeps = []
 
     async def fake_sleep(seconds: float) -> None:
@@ -427,7 +427,7 @@ def test_is_r3_classifies_destructive_commands(cmd, expected):
 
 def test_r3_mode_skips_elicit_for_safe_command(monkeypatch, single):
     # "r3" 모드 + 비-R3(STWIFI) → 승인 없이 전송(capability 불필요).
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": "r3"})
+    monkeypatch.setattr(srv._runtime, "config", {"write": True, "write_confirm": "r3"})
     ctx = FakeContext(capability=False)
 
     out = run(srv.send_serial_command("STWIFI", wait_ms=0, ctx=ctx))
@@ -439,7 +439,7 @@ def test_r3_mode_skips_elicit_for_safe_command(monkeypatch, single):
 
 def test_r3_mode_elicits_for_risky_command(monkeypatch, single):
     # "r3" 모드 + R3(REFLASH) → 승인 팝업. 수락 시 전송, 거부 시 미전송.
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": "r3"})
+    monkeypatch.setattr(srv._runtime, "config", {"write": True, "write_confirm": "r3"})
 
     accepted = run(srv.send_serial_command("REFLASH", wait_ms=0, ctx=FakeContext("accept")))
     assert accepted["status"] == "ok"
@@ -452,7 +452,7 @@ def test_r3_mode_elicits_for_risky_command(monkeypatch, single):
 
 def test_r3_mode_reset_skips_elicit(monkeypatch, single):
     # reset_board는 R2 — "r3" 모드에선 승인 없이 펄스.
-    monkeypatch.setattr(srv, "_config", {"write": True, "write_confirm": "r3"})
+    monkeypatch.setattr(srv._runtime, "config", {"write": True, "write_confirm": "r3"})
     ctx = FakeContext(capability=False)
 
     out = run(srv.reset_board(port="SSM", wait_ms=0, ctx=ctx))

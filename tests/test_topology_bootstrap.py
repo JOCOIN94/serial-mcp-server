@@ -66,10 +66,10 @@ def _spy_mon(port="COM4", lines=None, connected=True, name=None):
 def _run_tick(monkeypatch, monitors, *, write=True, dtype="SSM",
               owner_ts=0.0, now=100.0, sent=None):
     """tick 을 격리 실행 — classify_device·monotonic·전역 상태를 stub."""
-    monkeypatch.setattr(srv, "_monitors", {m.port.upper(): m for m in monitors})
-    monkeypatch.setattr(srv, "_config", {"write": write})
-    monkeypatch.setattr(srv, "_topology_owner_ts", owner_ts)
-    monkeypatch.setattr(srv, "_topology_bootstrapped", set(sent or []))
+    monkeypatch.setattr(srv._runtime, "monitors", {m.port.upper(): m for m in monitors})
+    monkeypatch.setattr(srv._runtime, "config", {"write": write})
+    monkeypatch.setattr(srv._runtime, "topology_owner_ts", owner_ts)
+    monkeypatch.setattr(srv._runtime, "topology_bootstrapped", set(sent or []))
     monkeypatch.setattr(srv, "_TOPOLOGY_BOOT_WINDOW_S", 8.0)
     monkeypatch.setattr(srv.time, "monotonic", lambda: now)
     # classify_device 는 dtype(맵 또는 단일값)으로 stub — 실분류는 topology 테스트가 담당.
@@ -87,14 +87,14 @@ def test_tick_sends_info_to_ssm_and_latches(monkeypatch):
     mon = _spy_mon(port="COM4")
     _run_tick(monkeypatch, [mon], dtype="SSM", now=100.0)
     assert mon.reader.writes == [(b"INFO\r\n", mon.reader.writes[0][1])]   # INFO 1회
-    assert "COM4" in srv._topology_bootstrapped                            # 래치 등록
+    assert "COM4" in srv._runtime.topology_bootstrapped                            # 래치 등록
 
 
 def test_tick_no_send_to_non_ssm(monkeypatch):
     mon = _spy_mon(port="COM14")
     _run_tick(monkeypatch, [mon], dtype="SB", now=100.0)
     assert mon.reader.writes == []                                         # 비-SSM 송신 금지
-    assert "COM14" not in srv._topology_bootstrapped
+    assert "COM14" not in srv._runtime.topology_bootstrapped
 
 
 def test_tick_no_send_when_write_disabled(monkeypatch):

@@ -68,21 +68,53 @@ def cfg(**overrides):
     return {**base, **overrides}
 
 
+def test_server_runtime_is_the_single_owner_of_mutable_session_state():
+    assert isinstance(srv._runtime, srv.ServerRuntime)
+    assert {
+        "monitors", "viewer", "lock_socket", "hotplug_thread",
+        "topology_engine", "topology_thread", "topology_feed",
+        "session_label", "chain_gate",
+    } <= set(vars(srv._runtime))
+    assert not {
+        "_monitors", "_viewer", "_lock_socket", "_hotplug_thread",
+        "_topology_engine", "_topology_thread", "_topology_feed",
+        "_session_label", "_chain_gate",
+    } & set(vars(srv))
+
+
+def test_owner_compatibility_functions_delegate_to_runtime(monkeypatch):
+    calls = []
+
+    class Runtime:
+        def acquire_owner_locked(self):
+            calls.append("acquire")
+            return {"status": "busy"}
+
+        def release_owner_locked(self, reason):
+            calls.append(("release", reason))
+
+    monkeypatch.setattr(srv, "_runtime", Runtime())
+
+    assert srv._acquire_owner_locked() == {"status": "busy"}
+    srv._release_owner_locked("테스트")
+    assert calls == ["acquire", ("release", "테스트")]
+
+
 def test_status_lazily_acquires_owner_and_starts_readers(monkeypatch):
     monkeypatch.setattr(srv, "SerialReader", StubReader)
-    monkeypatch.setattr(srv, "_config", cfg())
-    monkeypatch.setattr(srv, "_monitors", {})
-    monkeypatch.setattr(srv, "_viewer", None)
-    monkeypatch.setattr(srv, "_owner_active", False, raising=False)
-    monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "config", cfg())
+    monkeypatch.setattr(srv._runtime, "monitors", {})
+    monkeypatch.setattr(srv._runtime, "viewer", None)
+    monkeypatch.setattr(srv._runtime, "owner_active", False, raising=False)
+    monkeypatch.setattr(srv._runtime, "lock_socket", None, raising=False)
 
     out = srv.get_serial_status()
 
     try:
         assert out["status"] == "ok"
         assert out["viewer_url"].startswith("http://127.0.0.1:")
-        assert list(srv._monitors) == ["COM_A"]
-        assert srv._monitors["COM_A"].reader.started is True
+        assert list(srv._runtime.monitors) == ["COM_A"]
+        assert srv._runtime.monitors["COM_A"].reader.started is True
     finally:
         srv._release_owner("test cleanup")
 
@@ -92,7 +124,7 @@ def test_owner_acquire_starts_topology_lifecycle_before_readers(monkeypatch):
 
     class TopologyAwareReader(StubReader):
         def start(self):
-            start_checks.append(srv._topology_engine is not None)
+            start_checks.append(srv._runtime.topology_engine is not None)
             super().start()
 
     class DummyLockSocket:
@@ -105,26 +137,26 @@ def test_owner_acquire_starts_topology_lifecycle_before_readers(monkeypatch):
     lock_socket = DummyLockSocket()
     monkeypatch.setattr(srv, "SerialReader", TopologyAwareReader)
     monkeypatch.setattr(srv, "_bind_lock_socket", lambda port: lock_socket)
-    monkeypatch.setattr(srv, "_config", cfg(web=0, web_ui=False))
-    monkeypatch.setattr(srv, "_monitors", {})
-    monkeypatch.setattr(srv, "_viewer", None)
-    monkeypatch.setattr(srv, "_owner_active", False, raising=False)
-    monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
-    monkeypatch.setattr(srv, "_hotplug_thread", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "config", cfg(web=0, web_ui=False))
+    monkeypatch.setattr(srv._runtime, "monitors", {})
+    monkeypatch.setattr(srv._runtime, "viewer", None)
+    monkeypatch.setattr(srv._runtime, "owner_active", False, raising=False)
+    monkeypatch.setattr(srv._runtime, "lock_socket", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "hotplug_thread", None, raising=False)
 
     err = srv._acquire_owner_locked()
 
     try:
         assert err is None
         assert start_checks == [True]
-        assert isinstance(srv._topology_engine, srv.TopologyEngine)
-        assert srv._topology_thread is not None
-        assert srv._topology_thread.name == "topology-sweep"
-        assert srv._topology_thread.is_alive()
-        assert srv._topology_stop.is_set() is False
-        assert isinstance(srv._topology_bootstrapped, set)
-        assert srv._topology_owner_ts is not None
-        assert srv._monitors["COM_A"].reader.started is True
+        assert isinstance(srv._runtime.topology_engine, srv.TopologyEngine)
+        assert srv._runtime.topology_thread is not None
+        assert srv._runtime.topology_thread.name == "topology-sweep"
+        assert srv._runtime.topology_thread.is_alive()
+        assert srv._runtime.topology_stop.is_set() is False
+        assert isinstance(srv._runtime.topology_bootstrapped, set)
+        assert srv._runtime.topology_owner_ts is not None
+        assert srv._runtime.monitors["COM_A"].reader.started is True
     finally:
         srv._release_owner("test cleanup")
 
@@ -142,8 +174,8 @@ def test_topology_observe_publishes_hops_to_topology_feed(monkeypatch):
             assert text == "[Proc-WiFiRx] {}"
             return [hop]
 
-    monkeypatch.setattr(srv, "_topology_engine", Engine(), raising=False)
-    monkeypatch.setattr(srv, "_topology_feed", feed, raising=False)
+    monkeypatch.setattr(srv._runtime, "topology_engine", Engine(), raising=False)
+    monkeypatch.setattr(srv._runtime, "topology_feed", feed, raising=False)
 
     srv._topology_observe("COM_A", "[Proc-WiFiRx] {}")
 
@@ -169,8 +201,8 @@ def test_topology_loop_publishes_swept_hops(monkeypatch):
             self.calls += 1
             return self.calls > 1
 
-    monkeypatch.setattr(srv, "_topology_engine", Engine(), raising=False)
-    monkeypatch.setattr(srv, "_topology_feed", feed, raising=False)
+    monkeypatch.setattr(srv._runtime, "topology_engine", Engine(), raising=False)
+    monkeypatch.setattr(srv._runtime, "topology_feed", feed, raising=False)
 
     srv._topology_loop(0.0, StopAfterOneTick(), bootstrap_enabled=False)
 
@@ -186,11 +218,11 @@ def test_occupied_lock_reports_busy_without_creating_monitors(monkeypatch):
     busy_port = blocker.getsockname()[1]
     try:
         monkeypatch.setattr(srv, "SerialReader", StubReader)
-        monkeypatch.setattr(srv, "_config", cfg(web=busy_port))
-        monkeypatch.setattr(srv, "_monitors", {})
-        monkeypatch.setattr(srv, "_viewer", None)
-        monkeypatch.setattr(srv, "_owner_active", False, raising=False)
-        monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
+        monkeypatch.setattr(srv._runtime, "config", cfg(web=busy_port))
+        monkeypatch.setattr(srv._runtime, "monitors", {})
+        monkeypatch.setattr(srv._runtime, "viewer", None)
+        monkeypatch.setattr(srv._runtime, "owner_active", False, raising=False)
+        monkeypatch.setattr(srv._runtime, "lock_socket", None, raising=False)
 
         out = srv.get_recent_logs()
 
@@ -202,7 +234,7 @@ def test_occupied_lock_reports_busy_without_creating_monitors(monkeypatch):
         )
         assert out["owner_url"] == f"http://127.0.0.1:{busy_port}"
         assert "http://" not in out["message"]
-        assert srv._monitors == {}
+        assert srv._runtime.monitors == {}
     finally:
         blocker.close()
 
@@ -213,11 +245,11 @@ def test_status_reports_occupied_lock_as_non_error(monkeypatch):
     blocker.listen(1)
     busy_port = blocker.getsockname()[1]
     try:
-        monkeypatch.setattr(srv, "_config", cfg(web=busy_port))
-        monkeypatch.setattr(srv, "_monitors", {})
-        monkeypatch.setattr(srv, "_viewer", None)
-        monkeypatch.setattr(srv, "_owner_active", False, raising=False)
-        monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
+        monkeypatch.setattr(srv._runtime, "config", cfg(web=busy_port))
+        monkeypatch.setattr(srv._runtime, "monitors", {})
+        monkeypatch.setattr(srv._runtime, "viewer", None)
+        monkeypatch.setattr(srv._runtime, "owner_active", False, raising=False)
+        monkeypatch.setattr(srv._runtime, "lock_socket", None, raising=False)
 
         out = srv.get_serial_status()
 
@@ -240,11 +272,11 @@ def test_web_disabled_lock_only_busy_reports_error(monkeypatch):
     busy_port = blocker.getsockname()[1]
     try:
         monkeypatch.setattr(srv, "SerialReader", StubReader)
-        monkeypatch.setattr(srv, "_config", cfg(web=busy_port, web_ui=False))
-        monkeypatch.setattr(srv, "_monitors", {})
-        monkeypatch.setattr(srv, "_viewer", None)
-        monkeypatch.setattr(srv, "_owner_active", False, raising=False)
-        monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
+        monkeypatch.setattr(srv._runtime, "config", cfg(web=busy_port, web_ui=False))
+        monkeypatch.setattr(srv._runtime, "monitors", {})
+        monkeypatch.setattr(srv._runtime, "viewer", None)
+        monkeypatch.setattr(srv._runtime, "owner_active", False, raising=False)
+        monkeypatch.setattr(srv._runtime, "lock_socket", None, raising=False)
 
         out = srv.get_recent_logs()
 
@@ -254,8 +286,8 @@ def test_web_disabled_lock_only_busy_reports_error(monkeypatch):
             "owner 세션을 종료하거나 그 세션 뷰어에서 해제하세요."
         )
         assert "http://" not in out["message"]
-        assert srv._monitors == {}
-        assert srv._viewer is None
+        assert srv._runtime.monitors == {}
+        assert srv._runtime.viewer is None
     finally:
         blocker.close()
 
@@ -282,7 +314,7 @@ def test_busy_message_includes_viewer_link_when_owner_status_reachable(monkeypat
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
-        monkeypatch.setattr(srv, "_config", cfg(web=port))
+        monkeypatch.setattr(srv._runtime, "config", cfg(web=port))
 
         out = srv._owner_busy_result()
 
@@ -305,18 +337,18 @@ def test_release_owner_stops_readers_viewer_and_clears_session(monkeypatch):
 
     viewer.stop = stop_viewer
     mon = SimpleNamespace(port="COM_A", reader=reader)
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
-    monkeypatch.setattr(srv, "_viewer", viewer)
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
-    monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": mon})
+    monkeypatch.setattr(srv._runtime, "viewer", viewer)
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "lock_socket", None, raising=False)
 
     srv._release_owner("test release")
 
     assert reader.stopped is True
     assert viewer.stopped is True
-    assert srv._monitors == {}
-    assert srv._viewer is None
-    assert srv._owner_active is False
+    assert srv._runtime.monitors == {}
+    assert srv._runtime.viewer is None
+    assert srv._runtime.owner_active is False
 
 
 def test_release_owner_joins_hotplug_thread_before_clearing(monkeypatch):
@@ -325,12 +357,12 @@ def test_release_owner_joins_hotplug_thread_before_clearing(monkeypatch):
     hotplug = JoinableThread()
     stop = threading.Event()
 
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
-    monkeypatch.setattr(srv, "_viewer", None)
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
-    monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
-    monkeypatch.setattr(srv, "_hotplug_thread", hotplug, raising=False)
-    monkeypatch.setattr(srv, "_hotplug_stop", stop, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": mon})
+    monkeypatch.setattr(srv._runtime, "viewer", None)
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "lock_socket", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "hotplug_thread", hotplug, raising=False)
+    monkeypatch.setattr(srv._runtime, "hotplug_stop", stop, raising=False)
 
     srv._release_owner("test release")
 
@@ -338,8 +370,8 @@ def test_release_owner_joins_hotplug_thread_before_clearing(monkeypatch):
     assert hotplug.join_called is True
     assert hotplug.timeout is not None
     assert hotplug.is_alive() is False
-    assert srv._hotplug_thread is None
-    assert srv._monitors == {}
+    assert srv._runtime.hotplug_thread is None
+    assert srv._runtime.monitors == {}
 
 
 def test_release_owner_stops_topology_thread_and_clears_engine(monkeypatch):
@@ -349,14 +381,14 @@ def test_release_owner_stops_topology_thread_and_clears_engine(monkeypatch):
     topology_stop = threading.Event()
     engine = object()
 
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
-    monkeypatch.setattr(srv, "_viewer", None)
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
-    monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
-    monkeypatch.setattr(srv, "_hotplug_thread", None, raising=False)
-    monkeypatch.setattr(srv, "_topology_thread", topology_thread, raising=False)
-    monkeypatch.setattr(srv, "_topology_stop", topology_stop, raising=False)
-    monkeypatch.setattr(srv, "_topology_engine", engine, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": mon})
+    monkeypatch.setattr(srv._runtime, "viewer", None)
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "lock_socket", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "hotplug_thread", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "topology_thread", topology_thread, raising=False)
+    monkeypatch.setattr(srv._runtime, "topology_stop", topology_stop, raising=False)
+    monkeypatch.setattr(srv._runtime, "topology_engine", engine, raising=False)
 
     srv._release_owner("test release")
 
@@ -364,21 +396,21 @@ def test_release_owner_stops_topology_thread_and_clears_engine(monkeypatch):
     assert topology_thread.join_called is True
     assert topology_thread.timeout is not None
     assert topology_thread.is_alive() is False
-    assert srv._topology_thread is None
-    assert srv._topology_engine is None
+    assert srv._runtime.topology_thread is None
+    assert srv._runtime.topology_engine is None
     assert reader.stopped is True
-    assert srv._monitors == {}
+    assert srv._runtime.monitors == {}
 
 
 def test_main_releases_owner_when_mcp_run_returns(monkeypatch):
     reader = StubReader("COM_A", 115200, buffer=None)
     mon = SimpleNamespace(port="COM_A", reader=reader)
 
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
-    monkeypatch.setattr(srv, "_viewer", None)
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
-    monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
-    monkeypatch.setattr(srv, "_hotplug_thread", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": mon})
+    monkeypatch.setattr(srv._runtime, "viewer", None)
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "lock_socket", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "hotplug_thread", None, raising=False)
     monkeypatch.setattr(srv, "_load_config", lambda env: cfg())
     monkeypatch.setattr(srv, "compile_autoname", lambda rules, log: [])
     monkeypatch.setattr(srv.mcp, "run", lambda: None)
@@ -386,9 +418,9 @@ def test_main_releases_owner_when_mcp_run_returns(monkeypatch):
     srv.main()
 
     assert reader.stopped is True
-    assert srv._monitors == {}
-    assert srv._viewer is None
-    assert srv._owner_active is False
+    assert srv._runtime.monitors == {}
+    assert srv._runtime.viewer is None
+    assert srv._runtime.owner_active is False
 
 
 def test_main_releases_owner_when_mcp_run_raises(monkeypatch):
@@ -398,11 +430,11 @@ def test_main_releases_owner_when_mcp_run_raises(monkeypatch):
     reader = StubReader("COM_A", 115200, buffer=None)
     mon = SimpleNamespace(port="COM_A", reader=reader)
 
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
-    monkeypatch.setattr(srv, "_viewer", None)
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
-    monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
-    monkeypatch.setattr(srv, "_hotplug_thread", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": mon})
+    monkeypatch.setattr(srv._runtime, "viewer", None)
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "lock_socket", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "hotplug_thread", None, raising=False)
     monkeypatch.setattr(srv, "_load_config", lambda env: cfg())
     monkeypatch.setattr(srv, "compile_autoname", lambda rules, log: [])
 
@@ -417,45 +449,45 @@ def test_main_releases_owner_when_mcp_run_raises(monkeypatch):
         pass
 
     assert reader.stopped is True
-    assert srv._monitors == {}
-    assert srv._viewer is None
-    assert srv._owner_active is False
+    assert srv._runtime.monitors == {}
+    assert srv._runtime.viewer is None
+    assert srv._runtime.owner_active is False
 
 
 def test_release_owner_is_idempotent(monkeypatch):
     reader = StubReader("COM_A", 115200, buffer=None)
     mon = SimpleNamespace(port="COM_A", reader=reader)
 
-    monkeypatch.setattr(srv, "_monitors", {"COM_A": mon})
-    monkeypatch.setattr(srv, "_viewer", None)
-    monkeypatch.setattr(srv, "_owner_active", True, raising=False)
-    monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
-    monkeypatch.setattr(srv, "_hotplug_thread", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {"COM_A": mon})
+    monkeypatch.setattr(srv._runtime, "viewer", None)
+    monkeypatch.setattr(srv._runtime, "owner_active", True, raising=False)
+    monkeypatch.setattr(srv._runtime, "lock_socket", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "hotplug_thread", None, raising=False)
 
     srv._release_owner("first")
     srv._release_owner("second")
 
     assert reader.stopped is True
-    assert srv._monitors == {}
-    assert srv._viewer is None
-    assert srv._owner_active is False
+    assert srv._runtime.monitors == {}
+    assert srv._runtime.viewer is None
+    assert srv._runtime.owner_active is False
 
 
 def test_main_eof_without_owner_is_noop(monkeypatch):
-    monkeypatch.setattr(srv, "_monitors", {})
-    monkeypatch.setattr(srv, "_viewer", None)
-    monkeypatch.setattr(srv, "_owner_active", False, raising=False)
-    monkeypatch.setattr(srv, "_lock_socket", None, raising=False)
-    monkeypatch.setattr(srv, "_hotplug_thread", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "monitors", {})
+    monkeypatch.setattr(srv._runtime, "viewer", None)
+    monkeypatch.setattr(srv._runtime, "owner_active", False, raising=False)
+    monkeypatch.setattr(srv._runtime, "lock_socket", None, raising=False)
+    monkeypatch.setattr(srv._runtime, "hotplug_thread", None, raising=False)
     monkeypatch.setattr(srv, "_load_config", lambda env: cfg())
     monkeypatch.setattr(srv, "compile_autoname", lambda rules, log: [])
     monkeypatch.setattr(srv.mcp, "run", lambda: None)
 
     srv.main()
 
-    assert srv._monitors == {}
-    assert srv._viewer is None
-    assert srv._owner_active is False
+    assert srv._runtime.monitors == {}
+    assert srv._runtime.viewer is None
+    assert srv._runtime.owner_active is False
 
 
 def test_viewer_release_port_ignores_port_for_whole_session(monkeypatch):
