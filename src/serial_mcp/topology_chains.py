@@ -237,22 +237,170 @@ def _skeleton_from_tokens(tokens, resolver) -> list[dict]:
     return out
 
 
+class _ChainStore:
+    """체인 항목의 ID·활성 윈도·히스토리 상한을 관리한다."""
+
+    def __init__(self, window_s: float, max_entries: int, max_active: int) -> None:
+        self.window_s = window_s
+        self.max_entries = max_entries
+        self.max_active = max_active
+        self.next_id = 1
+        self.active: "OrderedDict[tuple, dict]" = OrderedDict()
+        self.entries: deque = deque()
+
+    def get_active(self, key: tuple) -> Optional[dict]:
+        return self.active.get(key)
+
+    def touch(self, key: tuple) -> None:
+        self.active.move_to_end(key)
+
+    def new_entry(self, key: tuple, direction: str, group, ts: float) -> dict:
+        ent = {
+            "id": self.next_id,
+            "key": key,
+            "dir": direction,
+            "group": group,
+            "ordered": True,
+            "nodes": [],
+            "heard": [],
+            "ok": None,
+            "confidence": None,
+            "rtt_ms": None,
+            "route_plan": None,
+            "complete": False,
+            "_seen": set(),
+            "_needle": None,
+            "_first_ts": ts,
+            "_last_ts": ts,
+        }
+        self.next_id += 1
+        self.active[key] = ent
+        self.active.move_to_end(key)
+        self.entries.append(ent)
+        self._evict()
+        return ent
+
+    def expire(self, now: float, project) -> list:
+        changed = []
+        for key, ent in list(self.active.items()):
+            if ent.get("complete"):
+                self.active.pop(key, None)
+                continue
+            if now - ent.get("_last_ts", now) >= self.window_s:
+                self.complete(ent)
+                changed.append(project(ent))
+        return changed
+
+    def complete(self, ent: dict) -> None:
+        ent["complete"] = True
+        self.active.pop(ent["key"], None)
+
+    def recent(self, n: int, project) -> list:
+        if n <= 0:
+            return []
+        return [project(ent) for ent in list(self.entries)[-n:]]
+
+    def find_recent_by_key(self, key: tuple) -> Optional[dict]:
+        for ent in reversed(self.entries):
+            if ent.get("key") == key:
+                return ent
+        return None
+
+    def forget_port(self, port: str, mentions_port) -> None:
+        for ent in list(self.active.values()):
+            if mentions_port(ent, port):
+                self.complete(ent)
+
+    def _evict(self) -> None:
+        while len(self.active) > self.max_active:
+            _key, ent = self.active.popitem(last=False)
+            ent["complete"] = True
+        while len(self.entries) > self.max_entries:
+            old = self.entries.popleft()
+            if self.active.get(old.get("key")) is old:
+                self.active.pop(old.get("key"), None)
+
+
+class _RouteTxBuffer:
+    """bounded RouteTx 큐와 CHPLAN exact-one 매칭 규칙을 캡슐화한다."""
+
+    def __init__(self, window_s: float, maxlen: int = 32) -> None:
+        self.window_s = window_s
+        self.pending: deque = deque(maxlen=maxlen)
+
+    def observe(self, tx: dict, entries, resolver, entry_ident, attach) -> Optional[dict]:
+        self.pending.append(tx)
+        candidates = [
+            ent for ent in entries
+            if self._matches(ent, tx, resolver, entry_ident)
+        ]
+        if len(candidates) != 1:
+            return None
+        ent = candidates[0]
+        attach(ent, tx)
+        self._remove(tx)
+        return ent
+
+    def attach_buffered(self, ent: dict, resolver, entry_ident, attach) -> bool:
+        candidates = [
+            tx for tx in list(self.pending)
+            if self._matches(ent, tx, resolver, entry_ident)
+        ]
+        if len(candidates) != 1:
+            return False
+        tx = candidates[0]
+        attach(ent, tx)
+        self._remove(tx)
+        return True
+
+    def _matches(self, ent: dict, tx: dict, resolver, entry_ident) -> bool:
+        if ent.get("dir") != "down" or ent.get("complete"):
+            return False
+        if (tx.get("port"), "routetx") in ent.get("_seen", set()):
+            return False
+        rp = ent.get("route_plan")
+        if not rp or not rp.get("tokens") or rp.get("tokens") != tx.get("tokens"):
+            return False
+        if abs((ent.get("_last_ts") or 0.0) - (tx.get("ts") or 0.0)) > self.window_s:
+            return False
+        group = ent.get("group")
+        if group is not None and group != tx.get("port"):
+            return False
+        return self._ident_matches(ent, tx, resolver, entry_ident)
+
+    @staticmethod
+    def _ident_matches(ent: dict, tx: dict, resolver, entry_ident) -> bool:
+        ident = entry_ident(ent)
+        target = tx.get("target")
+        if ident is None or target is None:
+            return True
+        if isinstance(ident, str):
+            return _norm_mac(ident) == _norm_mac(target)
+        if isinstance(ident, int) and not isinstance(ident, bool):
+            hit = _resolve_token(resolver, f"{ident & 0xFF:02X}")
+            mac = hit.get("mac") if hit else None
+            if mac:
+                return _norm_mac(mac) == _norm_mac(target)
+        return True
+
+    def _remove(self, tx: dict) -> None:
+        try:
+            self.pending.remove(tx)
+        except ValueError:
+            pass
+
+
 class ChainLog:
     """메시지 키별 체인 로그를 유지하는 순수 stateful 엔진."""
 
     def __init__(self, window_s: float = 15.0, max_entries: int = 300,
                  max_active: int = 500, epoch_of=None) -> None:
-        self._window = window_s
-        self._max_entries = max_entries
-        self._max_active = max_active
         # 공개 ts 변환기(단조시각→epoch s). 서버가 observe ts 로 time.monotonic 을 주입하므로
         # 뷰어 점프 앵커(버퍼 wall-clock HH:MM:SS 와 30s 근접 비교) 계약을 지키려면 변환이 필요.
         # None 이면 무변환(테스트·epoch 주입 호출자). 내부 윈도 클럭(_first_ts/_last_ts)은 원본 유지.
         self._epoch_of = epoch_of
-        self._next_id = 1
-        self._active: "OrderedDict[tuple, dict]" = OrderedDict()
-        self._entries: deque = deque()
-        self._route_tx: deque = deque(maxlen=32)
+        self._store = _ChainStore(window_s, max_entries, max_active)
+        self._route_tx_buffer = _RouteTxBuffer(window_s)
 
     def observe(self, ev: dict, scope: Optional[dict] = None,
                 resolver=None, port_names: Optional[dict] = None,
@@ -269,13 +417,13 @@ class ChainLog:
         if key is None or not port:
             return []
         ts = ev.get("ts") or 0.0
-        changed = self._expire(ts)
+        changed = self._store.expire(ts, self._public)
 
-        ent = self._active.get(key)
+        ent = self._store.get_active(key)
         if ent is None or ent.get("complete"):
-            ent = self._new_entry(key, direction, (scope or {}).get(port), ts)
+            ent = self._store.new_entry(key, direction, (scope or {}).get(port), ts)
         else:
-            self._active.move_to_end(key)
+            self._store.touch(key)
             group = (scope or {}).get(port)
             if ent.get("group") is not None and group is not None and ent.get("group") != group:
                 return changed
@@ -328,7 +476,7 @@ class ChainLog:
         if not raw_key or len(raw_key) < 2:
             return None
         key = ("u", raw_key[0], raw_key[1])
-        ent = self._active.get(key) or self._find_recent_by_key(key)
+        ent = self._store.get_active(key) or self._store.find_recent_by_key(key)
         if ent is None:
             return None
 
@@ -351,50 +499,20 @@ class ChainLog:
 
         self._attach_src_port(ent, port_idents)
         if hop.get("confidence") in ("timeout", "unconfirmed"):
-            self._complete(ent)
+            self._store.complete(ent)
         return self._public(ent)
 
     def sweep(self, now: float) -> list:
         """윈도 만료 활성 항목을 complete 로 전환하고 변경 사본을 반환한다."""
-        return self._expire(now)
+        return self._store.expire(now, self._public)
 
     def recent(self, n: int = 30) -> list:
         """id 오름차순 tail. n<=0 이면 빈 리스트."""
-        if n <= 0:
-            return []
-        return [self._public(ent) for ent in list(self._entries)[-n:]]
+        return self._store.recent(n, self._public)
 
     def forget_port(self, port: str) -> None:
         """포트가 낀 활성 항목을 완료 처리한다. 히스토리는 보존한다."""
-        for ent in list(self._active.values()):
-            if self._entry_mentions_port(ent, port):
-                self._complete(ent)
-
-    def _new_entry(self, key: tuple, direction: str, group, ts: float) -> dict:
-        ent = {
-            "id": self._next_id,
-            "key": key,
-            "dir": direction,
-            "group": group,
-            "ordered": True,
-            "nodes": [],
-            "heard": [],
-            "ok": None,
-            "confidence": None,
-            "rtt_ms": None,
-            "route_plan": None,
-            "complete": False,
-            "_seen": set(),
-            "_needle": None,
-            "_first_ts": ts,
-            "_last_ts": ts,
-        }
-        self._next_id += 1
-        self._active[key] = ent
-        self._active.move_to_end(key)
-        self._entries.append(ent)
-        self._evict()
-        return ent
+        self._store.forget_port(port, self._entry_mentions_port)
 
     def _observe_tx(self, ent: dict, ev: dict, port_names: Optional[dict]) -> None:
         port = ev.get("port")
@@ -403,7 +521,7 @@ class ChainLog:
 
     def _observe_route_tx(self, ev: dict, resolver, port_names: Optional[dict]) -> list:
         ts = ev.get("ts") or 0.0
-        changed = self._expire(ts)
+        changed = self._store.expire(ts, self._public)
         info = ev.get("route_plan_tx") or {}
         tokens = [(_norm_token(tok) or str(tok)) for tok in info.get("tokens") or []]
         port = ev.get("port")
@@ -417,63 +535,24 @@ class ChainLog:
             "tokens": tokens,
             "raw": raw,
         }
-        self._route_tx.append(tx)
-        ent = self._attach_route_tx_to_one_entry(tx, resolver, port_names)
+        ent = self._route_tx_buffer.observe(
+            tx,
+            self._store.active.values(),
+            resolver,
+            self._entry_ident,
+            lambda entry, item: self._attach_route_tx(entry, item, port_names),
+        )
         if ent is not None:
-            self._remove_route_tx(tx)
             changed.append(self._public(ent))
         return changed
 
-    def _attach_route_tx_to_one_entry(self, tx: dict, resolver, port_names: Optional[dict]) -> Optional[dict]:
-        candidates = [
-            ent for ent in self._active.values()
-            if self._route_tx_matches(ent, tx, resolver)
-        ]
-        if len(candidates) != 1:
-            return None
-        self._attach_route_tx(candidates[0], tx, port_names)
-        return candidates[0]
-
     def _attach_buffered_route_tx(self, ent: dict, resolver, port_names: Optional[dict]) -> bool:
-        candidates = [
-            tx for tx in list(self._route_tx)
-            if self._route_tx_matches(ent, tx, resolver)
-        ]
-        if len(candidates) != 1:
-            return False
-        tx = candidates[0]
-        self._attach_route_tx(ent, tx, port_names)
-        self._remove_route_tx(tx)
-        return True
-
-    def _route_tx_matches(self, ent: dict, tx: dict, resolver) -> bool:
-        if ent.get("dir") != "down" or ent.get("complete"):
-            return False
-        if (tx.get("port"), "routetx") in ent.get("_seen", set()):
-            return False
-        rp = ent.get("route_plan")
-        if not rp or not rp.get("tokens") or rp.get("tokens") != tx.get("tokens"):
-            return False
-        if abs((ent.get("_last_ts") or 0.0) - (tx.get("ts") or 0.0)) > self._window:
-            return False
-        group = ent.get("group")
-        if group is not None and group != tx.get("port"):
-            return False
-        return self._route_tx_ident_matches(ent, tx, resolver)
-
-    def _route_tx_ident_matches(self, ent: dict, tx: dict, resolver) -> bool:
-        ident = self._entry_ident(ent)
-        target = tx.get("target")
-        if ident is None or target is None:
-            return True
-        if isinstance(ident, str):
-            return _norm_mac(ident) == _norm_mac(target)
-        if isinstance(ident, int) and not isinstance(ident, bool):
-            hit = _resolve_token(resolver, f"{ident & 0xFF:02X}")
-            mac = hit.get("mac") if hit else None
-            if mac:
-                return _norm_mac(mac) == _norm_mac(target)
-        return True
+        return self._route_tx_buffer.attach_buffered(
+            ent,
+            resolver,
+            self._entry_ident,
+            lambda entry, item: self._attach_route_tx(entry, item, port_names),
+        )
 
     def _attach_route_tx(self, ent: dict, tx: dict, port_names: Optional[dict]) -> None:
         src = self._ensure_src(ent, tx.get("port"), _name_for_port(tx.get("port"), port_names), None)
@@ -485,12 +564,6 @@ class ChainLog:
         # 송신측에 실제 존재하는 원문 라인으로 needle 계약을 복구하는 명시 예외다.
         ent["_needle"] = tx.get("raw")
         ent["_seen"].add((tx.get("port"), "routetx"))
-
-    def _remove_route_tx(self, tx: dict) -> None:
-        try:
-            self._route_tx.remove(tx)
-        except ValueError:
-            pass
 
     def _observe_rx(self, ent: dict, ev: dict, resolver, port_names: Optional[dict]) -> None:
         port = ev.get("port")
@@ -873,27 +946,6 @@ class ChainLog:
                 return
         ent["nodes"].append(node)
 
-    def _expire(self, now: float) -> list:
-        changed = []
-        for key, ent in list(self._active.items()):
-            if ent.get("complete"):
-                self._active.pop(key, None)
-                continue
-            if now - ent.get("_last_ts", now) >= self._window:
-                self._complete(ent)
-                changed.append(self._public(ent))
-        return changed
-
-    def _complete(self, ent: dict) -> None:
-        ent["complete"] = True
-        self._active.pop(ent["key"], None)
-
-    def _find_recent_by_key(self, key: tuple) -> Optional[dict]:
-        for ent in reversed(self._entries):
-            if ent.get("key") == key:
-                return ent
-        return None
-
     @staticmethod
     def _entry_mentions_port(ent: dict, port: str) -> bool:
         if port in ent.get("heard", []):
@@ -901,15 +953,6 @@ class ChainLog:
         if any(p == port for p, _kind in ent.get("_seen", set())):
             return True
         return any(n.get("port") == port for n in ent.get("nodes", []))
-
-    def _evict(self) -> None:
-        while len(self._active) > self._max_active:
-            _key, ent = self._active.popitem(last=False)
-            ent["complete"] = True
-        while len(self._entries) > self._max_entries:
-            old = self._entries.popleft()
-            if self._active.get(old.get("key")) is old:
-                self._active.pop(old.get("key"), None)
 
     def _public(self, ent: dict) -> dict:
         nodes = [dict(n) for n in ent.get("nodes", [])]

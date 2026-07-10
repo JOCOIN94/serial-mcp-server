@@ -2,7 +2,22 @@
 
 import pytest
 
-from serial_mcp.topology_chains import ChainLog, annotate_chain_groups
+from serial_mcp.topology_chains import (
+    ChainLog,
+    _ChainStore,
+    _RouteTxBuffer,
+    annotate_chain_groups,
+)
+
+
+def test_chain_log_composes_store_and_route_tx_buffer():
+    log = ChainLog(window_s=10, max_entries=20, max_active=30)
+
+    assert isinstance(log._store, _ChainStore)
+    assert isinstance(log._route_tx_buffer, _RouteTxBuffer)
+    assert not hasattr(log, "_active")
+    assert not hasattr(log, "_entries")
+    assert not hasattr(log, "_route_tx")
 
 
 def ev(kind, port="COM1", ts=1.0, unid=5, unique=9, cidx=None,
@@ -500,7 +515,7 @@ def test_downlink_inferred_src_is_public_only_and_handles_unknown_group():
     )[0]
 
     assert labels(entry) == ["COM4", "SB5"]
-    assert log._entries[-1]["nodes"][0]["port"] == "COM12"  # inferred src is not stored internally
+    assert log._store.entries[-1]["nodes"][0]["port"] == "COM12"  # inferred src is not stored internally
     assert labels(log.recent(1)[0]) == ["COM4", "SB5"]
 
     unknown = ChainLog(window_s=10).observe(
